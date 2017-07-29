@@ -4,9 +4,15 @@ This is a single C++ Model.h file that reads in 3D models in .obj/.mtl format. I
 
 The implementation uses a hand-optimized parser that can read in a 10M polygon model of San Miguel in less than 4 seconds on a 4GHz i7-6600K with one CPU core utilized.  That's fast enough to not bother saving to a binary format.  
 
-The implementation allocates contiguous arrays (positions, normals, texcoords, vertexes, polygons, materials, textures, texels, strings) that contain no pointers, only indices into other arrays.  This means that the arrays can be copied to a GPU without editing.  They can also be stored directly to a binary file.   
+The implementation allocates contiguous arrays (positions, normals, texcoords, vertexes, polygons, materials, textures, texels, strings) that contain no pointers, only indices into other arrays.  This means that the arrays can be copied to a GPU without editing.  They can also be stored directly to a binary file.  A hdr structure holds the lengths of the arrays.
 
-Refer to the comments at the top of Model.h for usage instructions.
+There are also a couple std::map's (name_to_obj, name_to_tex) that take a string and look up the object/texture.
+
+Aside from the constructor and destructor, there are no other public methods.  All arrays and maps are public.   This is a bare-bones operation here.
+
+If the constructor encounters an error, it does not raise an exception.  Instead, it sets is_good to false and sets error_msg to a useful message.  So the caller should check is_good in the newly created Model before proceeding.
+
+Refer to Model.h for further instructions.
 
 There are some limitations:
 

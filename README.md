@@ -4,13 +4,15 @@ This is a single C++ Model.h file that reads in 3D models in .obj/.mtl format. I
 
 The implementation uses a hand-optimized parser that can read in a 10M polygon model of San Miguel in less than 4 seconds on a 4GHz i7-6600K with one CPU core utilized.  That's fast enough to not bother saving to a binary format.  
 
-The implementation allocates contiguous arrays (positions, normals, texcoords, vertexes, polygons, materials, textures, texels, strings) that contain no pointers, only indices into other arrays.  This means that the arrays can be copied to a GPU without editing.  They can also be stored directly to a binary file.  A hdr structure holds the lengths of the arrays.  hdr.byte_cnt will is set to the total number of bytes in the header and arrays.
+The implementation allocates contiguous arrays (objects, polygons, vertexes, positions, normals, texcoords, materials, textures, texels, strings) that contain no pointers, only indices into other arrays.  This means that the arrays can be copied to a GPU without editing.  They can also be stored directly to a binary file.  A hdr structure holds the lengths of the arrays.  hdr.byte_cnt is set to the total number of bytes in the header and arrays.
 
-There are also a couple std::map's (name_to_obj, name_to_tex) that take a string and look up the object/texture.
+There are a couple std::map's (name_to_obj, name_to_tex) that take a string and return a pointer to the Object/Texture structure in the objects/textures array.
 
 Textures are not mipmapped - only the highest resolution is available in memory. As in the .bmp file, each row of texels is padded to a 4B boundary.  The texels are in RGB8 format.
 
-Aside from the constructor and destructor, there are no other public methods.  Errors do not raise exceptions.  Instead the constructor sets is_good to false and sets error_msg to a useful message.  So the caller should check is_good in the newly created Model before proceeding.
+Aside from the constructor and destructor, there are no other public methods.  All arrays and other structures are public.
+
+Errors do not raise exceptions.  Instead the constructor sets is_good to false and sets error_msg to a useful string.  So the caller should check is_good in the newly created Model before proceeding to use the object.
 
 Refer to Model.h for further instructions.
 

@@ -32,7 +32,7 @@
 //
 //     2) #include "Model.h"
 //
-//        Model * model = new Model<float>( "~/models/sanmiguel", "sanmiguel.obj" );   // model dir, .obj file
+//        Model * model = new Model( "~/models/sanmiguel", "sanmiguel.obj" );   // model dir, .obj file
 //        if ( !model->is_good ) {
 //            std::cout << "Model load failed with error: " << model->error_msg << "\n";
 //            exit( 1 );

@@ -2,7 +2,7 @@
 
 This is a single C++ Model.h file that reads in 3D models in .obj/.mtl format. It also reads in any textures that are listed in the .mtl files.
 
-The implementation uses a hand-optimized parser that can read in a 10M polygon model of San Miguel in less than 4 seconds on a 4GHz i7-6600K with one CPU core utilized.  That's fast enough to not bother saving to a binary format.  
+The implementation uses a hand-optimized parser that can read in a 10M polygon model of San Miguel in less than 4 seconds on a 4GHz i7-6700K with one CPU core active.  That's fast enough to not bother saving to a binary format.  
 
 The implementation allocates contiguous arrays (objects, polygons, vertexes, positions, normals, texcoords, materials, textures, texels, strings) that contain no pointers, only indices into other arrays.  This means that the arrays can be copied to a GPU without editing.  They can also be stored directly to a binary file.  A hdr structure holds the lengths of the arrays.  hdr.byte_cnt is set to the total number of bytes in the header and arrays.
 

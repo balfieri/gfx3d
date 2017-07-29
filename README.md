@@ -1,10 +1,10 @@
 # ModelReader
 
-This is a single C++ Model.h file that reads in 3D models in .obj/.mtl format. It also reads in an textures that are listed in the .mtl files.
+This is a single C++ Model.h file that reads in 3D models in .obj/.mtl format. It also reads in any textures that are listed in the .mtl files.
 
-This implementation is very fast.  It can read in a 10M polygon model of San Miguel in less than 4 seconds on a 4GHz i7.
+The implementation is very fast.  It can read in a 10M polygon model of San Miguel in less than 4 seconds on a 4GHz i7-6600K.  That's fast enough to not bother with saving a to binary format.
 
-Refer to the comments in Model.h for usage instructions.
+Refer to the comments at the top of Model.h for usage instructions.
 
 There are some limitations:
 1) It does not implement all .obj features.  In particular, it does not implement curves.

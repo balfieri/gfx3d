@@ -160,7 +160,7 @@ public:
     //
     static const uint VERSION = 0xB0BA1f01; // current version is 1
 
-    bool                is_good;            // set to true if constructor succeseds
+    bool                is_good;            // set to true if constructor succeeds
     std::string         error_msg;          // if !is_good
 
     // structs

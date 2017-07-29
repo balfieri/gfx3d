@@ -70,13 +70,6 @@
 class Model
 {
 public:
-    #define dprint( msg )
-    //#define dprint( msg ) std::cout << (msg) << "\n"
-
-    // these are done as macros to avoid evaluating msg (it makes a big difference)
-    #define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; return false; }
-    #define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; goto error;   }
-
     typedef uint32_t uint;
     typedef float    real;
 
@@ -92,19 +85,45 @@ public:
         real            c[2];
     };
 
-    class color3
+    class Header                            // header (of future binary file)
     {
     public:
-        uint8_t         c[3];
+        uint        version;                // version
+        uint64_t    byte_cnt;               // total in-memory bytes including this header
+        uint        obj_cnt;                // in objects array  
+        uint        poly_cnt;               // in polygons array 
+        uint        vtx_cnt;                // in vertexes array
+        uint        pos_cnt;                // in positions array
+        uint        norm_cnt;               // in normals array
+        uint        texcoord_cnt;           // in texcoords array
+        uint        mtl_cnt;                // in materials array
+        uint        tex_cnt;                // in textures array
+        uint        texel_cnt;              // in texels array  (last in file)
+        uint        char_cnt;               // in strings array
     };
 
-    class Texture
+    class Object
     {
     public:
-        uint        name_i;                 // index in strings array (null-terminated strings)
-        uint        width;
-        uint        height;
-        uint        texel_i;                // index into texels array of first texel
+        uint        name_i;                 // index of object name in strings array
+        uint        poly_cnt;               // number of polygons in this object
+        uint        poly_i;                 // index of first polygon in polygons array
+    };
+
+    class Polygon
+    {
+    public:
+        uint        mtl_i;                  // index into materials array
+        uint        vtx_cnt;                // number of vertices
+        uint        vtx_i;                  // index into vertexes array of first vertex
+    };
+
+    class Vertex
+    {
+    public:
+        uint        v_i;                    // index into positions array
+        uint        vn_i;                   // index into normals array
+        uint        vt_i;                   // index into texcoords array
     };
 
     class Material
@@ -128,85 +147,27 @@ public:
         uint            map_Bump_i;
     };
 
-    class Vertex
+    class Texture
     {
     public:
-        uint        v_i;                    // index into positions array
-        uint        vn_i;                   // index into normals array
-        uint        vt_i;                   // index into texcoords array
+        uint        name_i;                 // index in strings array (null-terminated strings)
+        uint        width;
+        uint        height;
+        uint        texel_i;                // index into texels array of first texel
     };
 
-    class Polygon
-    {
-    public:
-        uint        mtl_i;                  // index into materials array
-        uint        vtx_cnt;                // number of vertices
-        uint        vtx_i;                  // index into vertexes array of first vertex
-    };
-
-    class Object
-    {
-    public:
-        uint        name_i;                 // index of object name in strings array
-        uint        poly_cnt;               // number of polygons in this object
-        uint        poly_i;                 // index of first polygon in polygons array
-    };
-
+    // public fields
+    //
     static const uint VERSION = 0xB0BA1f01; // current version is 1
 
-    class Header                            // header (of future file)
-    {
-    public:
-        uint        version;                // version
-        uint64_t    byte_cnt;               // total in-memory bytes including this header
-        uint        obj_cnt;                // in objects array  
-        uint        poly_cnt;               // in polygons array 
-        uint        vtx_cnt;                // in vertexes array
-        uint        pos_cnt;                // in positions array
-        uint        norm_cnt;               // in normals array
-        uint        texcoord_cnt;           // in texcoords array
-        uint        mtl_cnt;                // in materials array
-        uint        tex_cnt;                // in textures array
-        uint        texel_cnt;              // in texels array  (last in file)
-        uint        char_cnt;               // in strings array
-    };
+    bool                is_good;            // set to true if constructor succeseds
+    std::string         error_msg;          // if !is_good
 
-    typedef enum 
-    {
-        CMD_O,
-        CMD_G,
-        CMD_V,
-        CMD_VN,
-        CMD_VT,
-        CMD_F,
-        CMD_MTLLIB,
-        CMD_USEMTL,
-    } obj_cmd_t;
-            
-    typedef enum 
-    {
-        CMD_NEWMTL,
-        CMD_KA,
-        CMD_KD,
-        CMD_KE,
-        CMD_KS,
-        CMD_TF,
-        CMD_TR,
-        CMD_NS,
-        CMD_NI,
-        CMD_D,
-        CMD_ILLUM,
-        CMD_MAP_KA,
-        CMD_MAP_KD,
-        CMD_MAP_KE,
-        CMD_MAP_KS,
-        CMD_MAP_BUMP,
-    } mtl_cmd_t;
-            
+    // structs
+    Header              hdr;
+    Header              max;                // holds max lengths of currently allocated arrays 
+
     // arrays
-    //
-    bool                is_good;
-    std::string         error_msg;
     Object *            objects;
     Polygon *           polygons;
     Vertex *            vertexes;
@@ -218,16 +179,22 @@ public:
     char *              texels;
     char *              strings;
 
-    Header              hdr;
-    Header              max;                    // holds max lengths of currently allocated arrays 
-
-    char *              obj;
-    char *              obj_start;
-    char *              obj_end;
-    uint                line_num;
-
+    // maps
     std::map<std::string, Material *> name_to_mtl;
     std::map<std::string, Texture  *> name_to_tex;
+
+
+
+    //------------------------------------------------------------------------------
+    // IMPLEMENTATION
+    //------------------------------------------------------------------------------
+
+    #define dprint( msg )
+    //#define dprint( msg ) std::cout << (msg) << "\n"
+
+    // these are done as macros to avoid evaluating msg (it makes a big difference)
+    #define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; return false; }
+    #define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; goto error;   }
 
     Model( std::string dir_path, std::string obj_file )
     {
@@ -409,6 +376,43 @@ public:
     ~Model() {}
 
 private:
+    typedef enum 
+    {
+        CMD_O,
+        CMD_G,
+        CMD_V,
+        CMD_VN,
+        CMD_VT,
+        CMD_F,
+        CMD_MTLLIB,
+        CMD_USEMTL,
+    } obj_cmd_t;
+            
+    typedef enum 
+    {
+        CMD_NEWMTL,
+        CMD_KA,
+        CMD_KD,
+        CMD_KE,
+        CMD_KS,
+        CMD_TF,
+        CMD_TR,
+        CMD_NS,
+        CMD_NI,
+        CMD_D,
+        CMD_ILLUM,
+        CMD_MAP_KA,
+        CMD_MAP_KD,
+        CMD_MAP_KE,
+        CMD_MAP_KS,
+        CMD_MAP_BUMP,
+    } mtl_cmd_t;
+            
+    char *              obj;
+    char *              obj_start;
+    char *              obj_end;
+    uint                line_num;
+
     bool mtllib_load( std::string dir_path, std::string mtl_file )
     {
         //------------------------------------------------------------

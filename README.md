@@ -2,7 +2,7 @@
 
 This is a single C++ Model.h file that reads in 3D models in .obj/.mtl format. It also reads in any textures that are listed in the .mtl files.
 
-The implementation uses a hand-optimized parser that can read in a 10M polygon model of San Miguel in less than 4 seconds on a 4GHz i7-6600K.  That's fast enough to not bother with saving a to binary format.
+The implementation uses a hand-optimized parser that can read in a 10M polygon model of San Miguel in less than 4 seconds on a 4GHz i7-6600K with one CPU core utilized.  That's fast enough to not bother with saving a to binary format.  However, I might add multi-threading at some point.
 
 Refer to the comments at the top of Model.h for usage instructions.
 

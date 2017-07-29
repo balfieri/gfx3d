@@ -25,5 +25,5 @@ There are some limitations:
 3) Integers are stored as uint32_t.  Floating-point is stored as float.  However, you can change this by editing the typedefs for uint and real near the top of Model.h. 
 4) .fbx is not yet supported and will be the next format to add.
 
-Bob Alfieri
+Bob Alfieri<br>
 Chapel Hill, NC

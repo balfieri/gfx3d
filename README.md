@@ -18,6 +18,8 @@ This has been tested on macOS and Linux.  It should work in any UNIX-like enviro
 
 Refer to Model.h for further instructions.
 
+This is all open-source.  Refer to the LICENSE.md for licensing details.
+
 There are some limitations:
 
 1) It does not implement all .obj features.  In particular, it does not implement curves or ad hoc vertex attributes.

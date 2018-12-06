@@ -345,7 +345,7 @@ public:
                         vertex->vn_i = (vn_i >= 0) ? vn_i : (hdr.norm_cnt + vn_i);
 
                     }
-                    object->poly_cnt++;
+                    if ( object != nullptr ) object->poly_cnt++;
                     obj_assert( polygon->vtx_cnt != 0, ".obj f command has no vertices" );
                     break;
 

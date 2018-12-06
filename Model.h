@@ -249,6 +249,8 @@ public:
         char *      obj_name = nullptr;
         char *      name;
         std::string mtl_name;
+        Material *  material;
+        uint        mtl_i = uint(-1);
         Object *    object;
         Polygon *   polygon;
         Vertex *    vertex;
@@ -311,6 +313,7 @@ public:
                 case CMD_F:
                     obj_assert( hdr.poly_cnt < max.poly_cnt, "polygons[] is full" );
                     polygon = &polygons[ hdr.poly_cnt++ ];
+                    polygon->mtl_i = mtl_i;
                     polygon->vtx_cnt = 0;
                     polygon->vtx_i = hdr.vtx_cnt;
                     while( !eol( obj, obj_end ) ) 
@@ -342,14 +345,13 @@ public:
                         vertex->vn_i = (vn_i >= 0) ? vn_i : (hdr.norm_cnt + vn_i);
 
                     }
+                    object->poly_cnt++;
                     obj_assert( polygon->vtx_cnt != 0, ".obj f command has no vertices" );
                     break;
 
                 case CMD_MTLLIB:
                     if ( !parse_name( mtllib, obj, obj_end ) ) goto error;
-                    if ( name_to_mtl.find( mtllib ) == name_to_mtl.end() ) {
-                        if ( !mtllib_load( dir_path, mtllib ) ) goto error;
-                    }
+                    if ( !mtllib_load( dir_path, mtllib ) ) goto error;
                     break;
                     
                 case CMD_USEMTL:
@@ -357,6 +359,8 @@ public:
                     if ( !parse_name( name, obj, obj_end ) ) goto error;
                     mtl_name = std::string( name );
                     obj_assert( name_to_mtl.find( mtl_name ) != name_to_mtl.end(), "unknown material: " + std::string( mtl_name ) );
+                    material = name_to_mtl[mtl_name];
+                    mtl_i = material - materials;
                     break;
 
                 default:
@@ -385,7 +389,7 @@ private:
         CMD_VT,
         CMD_F,
         CMD_MTLLIB,
-        CMD_USEMTL,
+        CMD_USEMTL
     } obj_cmd_t;
             
     typedef enum 
@@ -405,7 +409,7 @@ private:
         CMD_MAP_KD,
         CMD_MAP_KE,
         CMD_MAP_KS,
-        CMD_MAP_BUMP,
+        CMD_MAP_BUMP
     } mtl_cmd_t;
             
     char *              obj;
@@ -453,6 +457,11 @@ private:
                         material = &materials[ hdr.mtl_cnt++ ];
                         memset( material, 0, sizeof( Material ) );
                         material->name_i = mtl_name - strings;
+                        material->map_Ka_i = uint(-1);
+                        material->map_Kd_i = uint(-1);
+                        material->map_Ke_i = uint(-1);
+                        material->map_Ks_i = uint(-1);
+                        material->map_Bump_i = uint(-1);
                         name_to_mtl[ mtl_name ] = material;
                         dprint( "  added " + std::string( mtl_name ) );
                     }

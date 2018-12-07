@@ -603,7 +603,7 @@ private:
         texture->height = height;
 
         uint byte_width = width * 3;
-        uint actual_byte_width = (byte_width + 3) & ~0x3;
+        uint actual_byte_width = byte_width;  // hmm, causing problems: (byte_width + 3) & ~0x3;
         uint actual_byte_cnt   = actual_byte_width * height;
         uint pad_byte_width    = actual_byte_width - byte_width;
 
@@ -618,9 +618,15 @@ private:
         {
             for( uint j = 0; j < byte_width; j += 3, bgr += 3, rgb += 3 )
             {
-                rgb[0] = bgr[2];
-                rgb[1] = bgr[1];
-                rgb[2] = bgr[0];
+                if ( bgr < data_end ) {
+                    rgb[0] = bgr[2];
+                    rgb[1] = bgr[1];
+                    rgb[2] = bgr[0];
+                } else {
+                    rgb[0] = 0;
+                    rgb[1] = 0;
+                    rgb[2] = 0;
+                }
             }    
             for( uint j = 0; j < pad_byte_width; j++, bgr++, rgb++ )
             {
@@ -628,6 +634,7 @@ private:
             }
         }
 
+        delete data;
         return true;
     }
 

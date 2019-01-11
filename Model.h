@@ -49,8 +49,10 @@
 //
 //     1) Support rest of .obj and .mtl commands and options.
 //     2) Support the .fbx binary format.
-//     3) This code is set up to write out everything to one binary file, but I don't think we need to do that
-//        yet given how fast this is.
+//     3) This code is set up to write out everything to one binary file.
+//        There are no pointers in the data, only indexes.
+//        The best way to do it is to put everything in one mmap() region that is backed by a file.
+//        Then later mmap() in the same file to get back the same data without even touching it.
 //
 #ifndef _Model_h
 #define _Model_h

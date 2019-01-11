@@ -38,7 +38,7 @@
 //            exit( 1 );
 //        }
 //
-//     3) If you want Model to generate mipmap textures, add Model::MIPMAP::BOX as a third argument 
+//     3) If you want Model to generate mipmap textures, add Model::MIPMAP_FILTER::BOX as a third argument 
 //        to the Model() constructor to get a box filter.  Other filters may be added later.
 //        The texture for mip level 0 is the original texture.  The texels for the other mip levels
 //        follow immediately with no padding in between.  The original width and height need not
@@ -101,6 +101,12 @@ public:
         real            c[2];
     };
 
+    enum class MIPMAP_FILTER
+    {
+        NONE,                               // do not generate mipmap levels
+        BOX,                                // generate mipmap levels using simple box filter (average)
+    };
+
     class Header                            // header (of future binary file)
     {
     public:
@@ -112,6 +118,7 @@ public:
         uint        pos_cnt;                // in positions array
         uint        norm_cnt;               // in normals array
         uint        texcoord_cnt;           // in texcoords array
+        MIPMAP_FILTER mipmap_filter;        // if NONE, there are no mip levels beyond level 0
         uint        mtl_cnt;                // in materials array
         uint        tex_cnt;                // in textures array
         uint        texel_cnt;              // in texels array  (last in file)
@@ -168,16 +175,10 @@ public:
     class Texture
     {
     public:
-        uint        name_i;                 // index in strings array (null-terminated strings)
-        uint        width;
-        uint        height;
-        uint        texel_i;                // index into texels array of first texel
-    };
-
-    enum class MIPMAP
-    {
-        NONE,                               // do not generate mipmap levels
-        BOX,                                // generate mipmap levels using simple box filter (average)
+        uint            name_i;             // index in strings array (null-terminated strings)
+        uint            width;              // level 0 width
+        uint            height;             // level 0 height
+        uint            texel_i;            // index into texels array of first texel
     };
 
     // public fields
@@ -220,7 +221,7 @@ public:
     #define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; return false; }
     #define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; goto error;   }
 
-    Model( std::string dir_path, std::string obj_file, MIPMAP mipmap=MIPMAP::NONE )
+    Model( std::string dir_path, std::string obj_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE )
     {
         is_good = false;
 
@@ -229,6 +230,7 @@ public:
         hdr.pos_cnt = 1;
         hdr.norm_cnt = 1;
         hdr.texcoord_cnt = 1;
+        hdr.mipmap_filter = mipmap_filter;
 
         //------------------------------------------------------------
         // Initial lengths of arrays are large in virtual memory
@@ -241,6 +243,7 @@ public:
         max.pos_cnt     = max.poly_cnt;
         max.norm_cnt    = max.poly_cnt;
         max.texcoord_cnt= max.poly_cnt;
+        max.mipmap_filter= mipmap_filter;
         max.tex_cnt     = max.mtl_cnt;
         max.texel_cnt   = max.mtl_cnt * 1000000;
         max.char_cnt    = (max.obj_cnt + max.mtl_cnt) * 128;
@@ -639,17 +642,16 @@ private:
         texture->height = height;
 
         uint byte_width = width * 3;
-        uint actual_byte_width = byte_width;  // hmm, causing problems: (byte_width + 3) & ~0x3;
-        uint actual_byte_cnt   = actual_byte_width * height;
-        uint pad_byte_width    = actual_byte_width - byte_width;
+        uint byte_cnt   = byte_width * height;
 
         char * bgr = data+54;  // first BGR texel
-        char * rgb = texels + hdr.texel_cnt;
-        hdr.texel_cnt += actual_byte_cnt;
+        texture->texel_i = hdr.texel_cnt;
+        hdr.texel_cnt += byte_cnt;
         rtn_assert( hdr.texel_cnt <= max.texel_cnt, "ran out of texel space" );
 
         // Copy texels and convert BGR to RGB byte order.
         //
+        char * rgb = texels + texture->texel_i;
         for( uint i = 0; i < height; i++ )
         {
             for( uint j = 0; j < byte_width; j += 3, bgr += 3, rgb += 3 )
@@ -664,13 +666,57 @@ private:
                     rgb[2] = 0;
                 }
             }    
-            for( uint j = 0; j < pad_byte_width; j++, bgr++, rgb++ )
+        }
+        delete data;
+        bgr = nullptr;
+
+        // if requested, generate mipmap levels down to 1x1
+        //
+        rgb = texels + texture->texel_i;
+        while( hdr.mipmap_filter != MIPMAP_FILTER::NONE && !(width == 1 && height == 1) )
+        {
+            uint to_width  = width  >> 1;
+            uint to_height = height >> 1;
+            if ( to_width  == 0 ) to_width  = 1;
+            if ( to_height == 0 ) to_height = 1;
+
+            char * to_rgb        = rgb + byte_cnt;
+            char * to_rgb_saved  = to_rgb;
+            uint   to_byte_width = to_width * 3;
+            uint   to_byte_cnt   = to_byte_width * to_height;
+            hdr.texel_cnt += to_byte_cnt;
+            rtn_assert( hdr.texel_cnt <= max.texel_cnt, "ran out of texel space" );
+
+            for( uint i = 0; i < to_height; i++ )
             {
-                *rgb = *bgr;  // should be zeros, but copy anyway
+                for( uint j = 0; j < to_byte_width; j += 3, to_rgb += 3 )
+                {
+                    uint sum[3] = { 0, 0, 0 };
+                    uint cnt = 0;
+                    for( uint fi = 2*i; fi < (2*i+1) && fi < height; fi++ )
+                    {
+                        char * frgb = rgb + fi*byte_width + 2*j;
+                        for( uint fj = 2*j; fj < (2*j+1) && fj < byte_width; fj += 3, frgb += 3 )
+                        {
+                            sum[0] += frgb[0];
+                            sum[1] += frgb[1];
+                            sum[2] += frgb[2];
+                            cnt++;
+                        }
+                    }
+
+                    to_rgb[0] = (sum[0] + 0.5) / cnt;
+                    to_rgb[1] = (sum[1] + 0.5) / cnt;
+                    to_rgb[2] = (sum[2] + 0.5) / cnt;
+                }
             }
+
+            rgb        = to_rgb_saved;
+            height     = to_height;
+            width      = to_width;
+            byte_width = to_byte_width;
         }
 
-        delete data;
         return true;
     }
 

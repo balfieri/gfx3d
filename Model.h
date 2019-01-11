@@ -38,6 +38,16 @@
 //            exit( 1 );
 //        }
 //
+//     3) If you want Model to generate mipmap textures, add Model::MIPMAP::BOX as a third argument 
+//        to the Model() constructor to get a box filter.  Other filters may be added later.
+//        The texture for mip level 0 is the original texture.  The texels for the other mip levels
+//        follow immediately with no padding in between.  The original width and height need not
+//        be powers-of-2 or equal to each other.  Each mip level has 
+//        width=min(1, prev_width>>1) x height=min(1, prev_height>>1) texels.
+//        The last mip level will always contain 1x1 texels.  Model does not currently store
+//        the number of texels in each level, so you'll need to compute those on the fly as you
+//        try to obtain the starting offset for a given level.
+//
 // How it works:
 //
 //     1) Preallocate large virtual memory 1D arrays for materials, texels, positions, normals, vertexes, polygons
@@ -164,9 +174,15 @@ public:
         uint        texel_i;                // index into texels array of first texel
     };
 
+    enum class MIPMAP
+    {
+        NONE,                               // do not generate mipmap levels
+        BOX,                                // generate mipmap levels using simple box filter (average)
+    };
+
     // public fields
     //
-    static const uint VERSION = 0xB0BA1f01; // current version is 1
+    static const uint VERSION = 0xB0BA1f02; // current version is 2
 
     bool                is_good;            // set to true if constructor succeeds
     std::string         error_msg;          // if !is_good
@@ -204,7 +220,7 @@ public:
     #define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; return false; }
     #define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; goto error;   }
 
-    Model( std::string dir_path, std::string obj_file )
+    Model( std::string dir_path, std::string obj_file, MIPMAP mipmap=MIPMAP::NONE )
     {
         is_good = false;
 

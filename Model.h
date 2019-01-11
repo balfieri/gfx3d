@@ -57,6 +57,7 @@
 
 #include <cstdint>
 #include <string>
+#include <cmath>
 #include <map>
 #include <iostream>
 
@@ -76,6 +77,9 @@ public:
     class real3
     {
     public:
+        real3( void ) {}
+        real3( real c0, real c1, real c2 ) { c[0] = c0; c[1] = c1; c[2] = c2; }
+
         real            c[3];
     };
 
@@ -116,6 +120,8 @@ public:
         uint        mtl_i;                  // index into materials array
         uint        vtx_cnt;                // number of vertices
         uint        vtx_i;                  // index into vertexes array of first vertex
+        real3       normal;                 // surface normal
+        real        area;                   // surface area
     };
 
     class Vertex
@@ -311,6 +317,7 @@ public:
                     break;
                     
                 case CMD_F:
+                {
                     obj_assert( hdr.poly_cnt < max.poly_cnt, "polygons[] is full" );
                     polygon = &polygons[ hdr.poly_cnt++ ];
                     polygon->mtl_i = mtl_i;
@@ -345,9 +352,20 @@ public:
                         vertex->vn_i = (vn_i >= 0) ? vn_i : (hdr.norm_cnt + vn_i);
 
                     }
-                    if ( object != nullptr ) object->poly_cnt++;
                     obj_assert( polygon->vtx_cnt != 0, ".obj f command has no vertices" );
+                    if ( object != nullptr ) object->poly_cnt++;
+
+                    // precompute surface normal and area (works for triangle only)
+                    Vertex * pvertexes = &vertexes[polygon->vtx_i];
+                    real3 p0( positions[pvertexes[0].v_i].c[0], positions[pvertexes[0].v_i].c[1], positions[pvertexes[0].v_i].c[2] );
+                    real3 p1( positions[pvertexes[1].v_i].c[0], positions[pvertexes[1].v_i].c[1], positions[pvertexes[1].v_i].c[2] );
+                    real3 p2( positions[pvertexes[2].v_i].c[0], positions[pvertexes[2].v_i].c[1], positions[pvertexes[2].v_i].c[2] );
+                    polygon->normal = cross( sub( p1, p0 ), sub( p2, p0 ) );
+                    real len = length( polygon->normal );
+                    polygon->area = len / 2;
+                    div( polygon->normal, len );
                     break;
+                }
 
                 case CMD_MTLLIB:
                     if ( !parse_name( mtllib, obj, obj_end ) ) goto error;
@@ -1109,6 +1127,48 @@ private:
         if ( is_neg ) i = -i;
         rtn_assert( vld, "unable to parse int" );
         return true;
+    }
+
+    inline real dot( const real3 &v1, const real3 &v2 ) 
+    {
+        return v1.c[0] *v2.c[0] + v1.c[1] *v2.c[1]  + v1.c[2] *v2.c[2];
+    }
+
+    inline real3 cross( const real3 &v1, const real3 &v2 ) 
+    {
+        return real3( (v1.c[1]*v2.c[2] - v1.c[2]*v2.c[1]),
+                      (-(v1.c[0]*v2.c[2] - v1.c[2]*v2.c[0])),
+                      (v1.c[0]*v2.c[1] - v1.c[1]*v2.c[0]) );
+    }
+
+    inline real length( const real3& v ) const 
+    { 
+        return std::sqrt( v.c[0]*v.c[0] + v.c[1]*v.c[1] + v.c[2]*v.c[2] ); 
+    }
+
+    inline real3 add( const real3& v1, const real3& v2 )
+    {
+        real3 r;
+        r.c[0] = v1.c[0] + v2.c[0];
+        r.c[1] = v1.c[1] + v2.c[1];
+        r.c[2] = v1.c[2] + v2.c[2];
+        return r;
+    }
+
+    inline real3 sub( const real3& v1, const real3& v2 )
+    {
+        real3 r;
+        r.c[0] = v1.c[0] - v2.c[0];
+        r.c[1] = v1.c[1] - v2.c[1];
+        r.c[2] = v1.c[2] - v2.c[2];
+        return r;
+    }
+
+    inline void div( real3& v, real denom ) 
+    {
+        v.c[0] /= denom;
+        v.c[1] /= denom;
+        v.c[2] /= denom;
     }
 };
 

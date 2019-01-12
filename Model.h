@@ -37,9 +37,18 @@
 //            std::cout << "Model load failed with error: " << model->error_msg << "\n";
 //            exit( 1 );
 //        }
+//        model->write( "~models/sanmiguel/sanmiguel.model.gz" );   // will write out the self-contained compressed model
+//        
+//     3) After that, you can quickly read in the single compressed model file using:
 //
-//     3) If you want Model to generate mipmap textures, add Model::MIPMAP_FILTER::BOX as a third argument 
-//        to the Model() constructor to get a box filter.  Other filters may be added later.
+//        Model * model = new Model( "~models/sanmiguel/sanmiguel.model.gz" );
+//        if ( !model->is_good ) {
+//            std::cout << "Model load failed with error: " << model->error_msg << "\n";
+//            exit( 1 );
+//        }
+//
+//     4) If you want Model to generate mipmap textures, add Model::MIPMAP_FILTER::BOX as a third argument 
+//        to the Model() constructor in (2) to get a box filter.  Other filters may be added later.
 //        The texture for mip level 0 is the original texture.  The texels for the other mip levels
 //        follow immediately with no padding in between.  The original width and height need not
 //        be powers-of-2 or equal to each other.  Each mip level has 
@@ -79,6 +88,7 @@
 #include <unistd.h>
 #include <math.h>
 #include <string.h>
+#include <zlib.h>
 
 class Model
 {
@@ -416,7 +426,102 @@ public:
         error_msg += " (at line " + std::to_string( line_num ) + " of " + obj_file + ")";
     }
 
-    ~Model() {}
+    ~Model() 
+    {
+        delete objects;
+        delete polygons;
+        delete vertexes;
+        delete positions;
+        delete normals;
+        delete texcoords;
+        delete materials;
+        delete textures;
+        delete texels;
+        delete strings;
+    }
+
+    bool write( std::string gz_file_path ) 
+    {
+        gzFile fd = gzopen( gz_file_path.c_str(), "w" );
+        rtn_assert( fd != Z_NULL, "could not gzopen() file " + gz_file_path + " for writing - gzopen() error: " + strerror( errno ) );
+
+        //------------------------------------------------------------
+        // Write out header than individual arrays.
+        //------------------------------------------------------------
+        #define _write( addr, byte_cnt ) \
+            if ( gzwrite( fd, addr, byte_cnt ) <= 0 ) { \
+                gzclose( fd ); \
+                error_msg = "could not gzwrite() file " + gz_file_path + " - gzwrite() error: " + strerror( errno ); \
+                return false; \
+            } \
+
+        _write( &hdr,        sizeof(hdr) );
+        _write( objects,     hdr.obj_cnt      * sizeof(objects[0]) );
+        _write( polygons,    hdr.poly_cnt     * sizeof(polygons[0]) );
+        _write( vertexes,    hdr.vtx_cnt      * sizeof(vertexes[0]) );
+        _write( positions,   hdr.pos_cnt      * sizeof(positions[0]) );
+        _write( normals,     hdr.norm_cnt     * sizeof(normals[0]) );
+        _write( texcoords,   hdr.texcoord_cnt * sizeof(texcoords[0]) );
+        _write( materials,   hdr.mtl_cnt      * sizeof(materials[0]) );
+        _write( textures,    hdr.tex_cnt      * sizeof(textures[0]) );
+        _write( texels,      hdr.texel_cnt    * sizeof(texels[0]) );
+        _write( strings,     hdr.char_cnt     * sizeof(strings[0]) );
+
+        gzclose( fd );
+        return true;
+    }
+
+    Model( std::string gz_file_path )
+    {
+        is_good = false;
+        gzFile fd = gzopen( gz_file_path.c_str(), "r" );
+        if ( fd == Z_NULL ) {
+            "Could not gzopen() file " + gz_file_path + " for reading - gzopen() error: " + strerror( errno );
+            return;
+        }
+
+        //------------------------------------------------------------
+        // Write out header than individual arrays.
+        //------------------------------------------------------------
+        #define _read( array, type, cnt ) \
+            array = new type[cnt]; \
+            if ( array == nullptr ) { \
+                gzclose( fd ); \
+                error_msg = "could not allocate " #array " array"; \
+                return; \
+            } \
+            if ( gzread( fd, array, (cnt)*sizeof(type) ) <= 0 ) { \
+                gzclose( fd ); \
+                error_msg = "could not gzread() file " + gz_file_path + " - gzread() error: " + strerror( errno ); \
+                return; \
+            } \
+
+        if ( gzread( fd, &hdr, sizeof(hdr) ) <= 0 ) { 
+            gzclose( fd );
+            error_msg = "could not gzread() file " + gz_file_path + " - gzread() error: " + strerror( errno );
+            return;
+        }
+        if ( hdr.version != VERSION ) {
+            gzclose( fd );
+            error_msg = "hdr.version does not match VERSION";
+            return;
+        }
+
+        _read( objects,     Object,   hdr.obj_cnt );
+        _read( polygons,    Polygon,  hdr.poly_cnt );
+        _read( vertexes,    Vertex,   hdr.vtx_cnt );
+        _read( positions,   real3,    hdr.pos_cnt );
+        _read( normals,     real3,    hdr.norm_cnt );
+        _read( texcoords,   real2,    hdr.texcoord_cnt );
+        _read( materials,   Material, hdr.mtl_cnt );
+        _read( textures,    Texture,  hdr.tex_cnt );
+        _read( texels,      char,     hdr.texel_cnt );
+        _read( strings,     char,     hdr.char_cnt );
+
+        gzclose( fd );
+
+        is_good = true;
+    }
 
 private:
     typedef enum 

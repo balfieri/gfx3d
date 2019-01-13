@@ -200,8 +200,8 @@ public:
     std::string         error_msg;          // if !is_good
 
     // structs
-    Header              hdr;
-    Header              max;                // holds max lengths of currently allocated arrays 
+    Header *            hdr;
+    Header *            max;                // holds max lengths of currently allocated arrays 
 
     // arrays
     Object *            objects;
@@ -245,42 +245,44 @@ public:
     {
         is_good = false;
 
-        memset( &hdr, 0, sizeof( Header ) );
-        hdr.version = VERSION;
-        hdr.pos_cnt = 1;
-        hdr.norm_cnt = 1;
-        hdr.texcoord_cnt = 1;
-        hdr.mipmap_filter = mipmap_filter;
+        hdr = aligned_alloc<Header>( 1 );
+        memset( hdr, 0, sizeof( Header ) );
+        hdr->version = VERSION;
+        hdr->pos_cnt = 1;
+        hdr->norm_cnt = 1;
+        hdr->texcoord_cnt = 1;
+        hdr->mipmap_filter = mipmap_filter;
 
         //------------------------------------------------------------
         // Initial lengths of arrays are large in virtual memory
         //------------------------------------------------------------
-        max.obj_cnt     =  1000000;
-        max.poly_cnt    = 40000000;
-        max.mtl_cnt     =     1000;
+        max = aligned_alloc<Header>( 1 );
+        max->obj_cnt     =  1000000;
+        max->poly_cnt    = 40000000;
+        max->mtl_cnt     =     1000;
 
-        max.vtx_cnt     = 3*max.poly_cnt;
-        max.pos_cnt     = max.poly_cnt;
-        max.norm_cnt    = max.poly_cnt;
-        max.texcoord_cnt= max.poly_cnt;
-        max.mipmap_filter= mipmap_filter;
-        max.tex_cnt     = max.mtl_cnt;
-        max.texel_cnt   = max.mtl_cnt * 1000000;
-        max.char_cnt    = (max.obj_cnt + max.mtl_cnt) * 128;
+        max->vtx_cnt     = 3*max->poly_cnt;
+        max->pos_cnt     = max->poly_cnt;
+        max->norm_cnt    = max->poly_cnt;
+        max->texcoord_cnt= max->poly_cnt;
+        max->mipmap_filter= mipmap_filter;
+        max->tex_cnt     = max->mtl_cnt;
+        max->texel_cnt   = max->mtl_cnt * 1000000;
+        max->char_cnt    = (max->obj_cnt + max->mtl_cnt) * 128;
 
         //------------------------------------------------------------
         // Allocate arrays
         //------------------------------------------------------------
-        objects         = aligned_alloc<Object>(   max.obj_cnt );
-        polygons        = aligned_alloc<Polygon>(  max.poly_cnt );
-        vertexes        = aligned_alloc<Vertex>(   max.vtx_cnt );
-        positions       = aligned_alloc<real3>(    max.pos_cnt );
-        normals         = aligned_alloc<real3>(    max.norm_cnt );
-        texcoords       = aligned_alloc<real2>(    max.texcoord_cnt );
-        materials       = aligned_alloc<Material>( max.mtl_cnt );
-        textures        = aligned_alloc<Texture>(  max.tex_cnt );
-        texels          = aligned_alloc<char>(     max.texel_cnt );
-        strings         = aligned_alloc<char>(     max.char_cnt );
+        objects         = aligned_alloc<Object>(   max->obj_cnt );
+        polygons        = aligned_alloc<Polygon>(  max->poly_cnt );
+        vertexes        = aligned_alloc<Vertex>(   max->vtx_cnt );
+        positions       = aligned_alloc<real3>(    max->pos_cnt );
+        normals         = aligned_alloc<real3>(    max->norm_cnt );
+        texcoords       = aligned_alloc<real2>(    max->texcoord_cnt );
+        materials       = aligned_alloc<Material>( max->mtl_cnt );
+        textures        = aligned_alloc<Texture>(  max->tex_cnt );
+        texels          = aligned_alloc<char>(     max->texel_cnt );
+        strings         = aligned_alloc<char>(     max->char_cnt );
 
         //------------------------------------------------------------
         // Map in .obj file
@@ -307,17 +309,17 @@ public:
             skip_whitespace( obj, obj_end );
             if ( obj == obj_end ) {
                 // done, no errors
-                hdr.byte_cnt = uint64_t( 1                ) * sizeof( hdr ) +
-                               uint64_t( hdr.obj_cnt      ) * sizeof( objects[0] ) +
-                               uint64_t( hdr.poly_cnt     ) * sizeof( polygons[0] ) +
-                               uint64_t( hdr.vtx_cnt      ) * sizeof( vertexes[0] ) +
-                               uint64_t( hdr.pos_cnt      ) * sizeof( positions[0] ) +
-                               uint64_t( hdr.norm_cnt     ) * sizeof( normals[0] ) +
-                               uint64_t( hdr.texcoord_cnt ) * sizeof( texcoords[0] ) +
-                               uint64_t( hdr.mtl_cnt      ) * sizeof( materials[0] ) +
-                               uint64_t( hdr.tex_cnt      ) * sizeof( textures[0] ) +
-                               uint64_t( hdr.texel_cnt    ) * sizeof( texels[0] ) +
-                               uint64_t( hdr.char_cnt     ) * sizeof( strings[0] );
+                hdr->byte_cnt = uint64_t( 1                ) * sizeof( hdr ) +
+                               uint64_t( hdr->obj_cnt      ) * sizeof( objects[0] ) +
+                               uint64_t( hdr->poly_cnt     ) * sizeof( polygons[0] ) +
+                               uint64_t( hdr->vtx_cnt      ) * sizeof( vertexes[0] ) +
+                               uint64_t( hdr->pos_cnt      ) * sizeof( positions[0] ) +
+                               uint64_t( hdr->norm_cnt     ) * sizeof( normals[0] ) +
+                               uint64_t( hdr->texcoord_cnt ) * sizeof( texcoords[0] ) +
+                               uint64_t( hdr->mtl_cnt      ) * sizeof( materials[0] ) +
+                               uint64_t( hdr->tex_cnt      ) * sizeof( textures[0] ) +
+                               uint64_t( hdr->texel_cnt    ) * sizeof( texels[0] ) +
+                               uint64_t( hdr->char_cnt     ) * sizeof( strings[0] );
                 is_good = true;
                 return;
             }
@@ -329,13 +331,13 @@ public:
             switch( cmd )
             {
                 case CMD_O:
-                    obj_assert( hdr.obj_cnt < max.obj_cnt, "objects[] is full" );
-                    object = &objects[ hdr.obj_cnt++ ];
+                    obj_assert( hdr->obj_cnt < max->obj_cnt, "objects[] is full" );
+                    object = &objects[ hdr->obj_cnt++ ];
 
                     if ( !parse_name( obj_name, obj, obj_end ) ) goto error;
                     object->name_i = obj_name - strings;
                     object->poly_cnt = 0;
-                    object->poly_i = hdr.poly_cnt;
+                    object->poly_i = hdr->poly_cnt;
                     break;
                     
                 case CMD_G:
@@ -343,37 +345,37 @@ public:
                     break;
                     
                 case CMD_V:
-                    obj_assert( hdr.pos_cnt < max.pos_cnt, "positions[] is full" );
-                    if ( !parse_real3( positions[ hdr.pos_cnt++ ], obj, obj_end ) ) goto error;
+                    obj_assert( hdr->pos_cnt < max->pos_cnt, "positions[] is full" );
+                    if ( !parse_real3( positions[ hdr->pos_cnt++ ], obj, obj_end ) ) goto error;
                     break;
                     
                 case CMD_VN:
-                    obj_assert( hdr.norm_cnt < max.norm_cnt, "normals[] is full" );
-                    if ( !parse_real3( normals[ hdr.norm_cnt++ ], obj, obj_end ) ) goto error;
+                    obj_assert( hdr->norm_cnt < max->norm_cnt, "normals[] is full" );
+                    if ( !parse_real3( normals[ hdr->norm_cnt++ ], obj, obj_end ) ) goto error;
                     break;
                     
                 case CMD_VT:
-                    obj_assert( hdr.texcoord_cnt < max.texcoord_cnt, "texcoords[] is full" );
-                    if ( !parse_real2( texcoords[ hdr.texcoord_cnt++ ], obj, obj_end ) ) goto error;
+                    obj_assert( hdr->texcoord_cnt < max->texcoord_cnt, "texcoords[] is full" );
+                    if ( !parse_real2( texcoords[ hdr->texcoord_cnt++ ], obj, obj_end ) ) goto error;
                     break;
                     
                 case CMD_F:
                 {
-                    obj_assert( hdr.poly_cnt < max.poly_cnt, "polygons[] is full" );
-                    polygon = &polygons[ hdr.poly_cnt++ ];
+                    obj_assert( hdr->poly_cnt < max->poly_cnt, "polygons[] is full" );
+                    polygon = &polygons[ hdr->poly_cnt++ ];
                     polygon->mtl_i = mtl_i;
                     polygon->vtx_cnt = 0;
-                    polygon->vtx_i = hdr.vtx_cnt;
+                    polygon->vtx_i = hdr->vtx_cnt;
                     while( !eol( obj, obj_end ) ) 
                     {
                         polygon->vtx_cnt++;
-                        obj_assert( hdr.vtx_cnt < max.vtx_cnt, "vertexes[] is full" );
-                        vertex = &vertexes[ hdr.vtx_cnt++ ];
+                        obj_assert( hdr->vtx_cnt < max->vtx_cnt, "vertexes[] is full" );
+                        vertex = &vertexes[ hdr->vtx_cnt++ ];
 
                         int v_i;
                         if ( !parse_int( v_i, obj, obj_end ) )   goto error;
                         dprint( "v_i=" + std::to_string( v_i ) );
-                        vertex->v_i = (v_i >= 0)  ? v_i : (hdr.pos_cnt + v_i);
+                        vertex->v_i = (v_i >= 0)  ? v_i : (hdr->pos_cnt + v_i);
 
                         if ( !expect_char( '/', obj, obj_end ) ) goto error;
 
@@ -384,13 +386,13 @@ public:
                             if ( !parse_int( vt_i, obj, obj_end ) ) goto error;
                         }
                         dprint( "vt_i=" + std::to_string( vt_i ) );
-                        vertex->vt_i = (vt_i >= 0) ? vt_i : ((int)hdr.texcoord_cnt + vt_i);
+                        vertex->vt_i = (vt_i >= 0) ? vt_i : ((int)hdr->texcoord_cnt + vt_i);
 
                         int vn_i;
                         if ( !expect_char( '/', obj, obj_end ) ) goto error;
                         if ( !parse_int( vn_i, obj, obj_end ) )  goto error ;
                         dprint( "vn_i=" + std::to_string( vn_i ) );
-                        vertex->vn_i = (vn_i >= 0) ? vn_i : (hdr.norm_cnt + vn_i);
+                        vertex->vn_i = (vn_i >= 0) ? vn_i : (hdr->norm_cnt + vn_i);
 
                     }
                     obj_assert( polygon->vtx_cnt != 0, ".obj f command has no vertices" );
@@ -450,8 +452,86 @@ public:
         delete strings;
     }
 
-    bool write( std::string file_path, bool is_compressed=false ) 
+    bool write_uncompressed( std::string file_path )
     {
+        int fd = open( file_path.c_str(), O_WRONLY );
+        rtn_assert( fd >= 0, "could not open() file " + file_path + " for writing - open() error: " + strerror( errno ) );
+
+        //------------------------------------------------------------
+        // Write out header than individual arrays.
+        // Each is padded out to a page boundary in the file.
+        //------------------------------------------------------------
+        size_t page_size = getpagesize();
+
+        #define _uwrite( addr, byte_cnt ) \
+        { \
+            size_t _byte_cnt = byte_cnt; \
+            _byte_cnt += _byte_cnt % page_size; \
+            if ( byte_cnt != 0 && ::write( fd, addr, byte_cnt ) <= 0 ) { \
+                close( fd ); \
+                error_msg = "could not write() file " + file_path + " - write() error: " + strerror( errno ); \
+                return false; \
+            } \
+        } \
+
+        _uwrite( hdr,         1                 * sizeof(hdr[0]) );
+        _uwrite( objects,     hdr->obj_cnt      * sizeof(objects[0]) );
+        _uwrite( polygons,    hdr->poly_cnt     * sizeof(polygons[0]) );
+        _uwrite( vertexes,    hdr->vtx_cnt      * sizeof(vertexes[0]) );
+        _uwrite( positions,   hdr->pos_cnt      * sizeof(positions[0]) );
+        _uwrite( normals,     hdr->norm_cnt     * sizeof(normals[0]) );
+        _uwrite( texcoords,   hdr->texcoord_cnt * sizeof(texcoords[0]) );
+        _uwrite( materials,   hdr->mtl_cnt      * sizeof(materials[0]) );
+        _uwrite( textures,    hdr->tex_cnt      * sizeof(textures[0]) );
+        _uwrite( texels,      hdr->texel_cnt    * sizeof(texels[0]) );
+        _uwrite( strings,     hdr->char_cnt     * sizeof(strings[0]) );
+
+        close( fd );
+        return true;
+    }
+
+    bool read_uncompressed( std::string file_path )
+    {
+        int fd = open( file_path.c_str(), O_WRONLY );
+        rtn_assert( fd >= 0, "could not open() file " + file_path + " for writing - open() error: " + strerror( errno ) );
+
+        //------------------------------------------------------------
+        // Write out header than individual arrays.
+        // Each is padded out to a page boundary in the file.
+        //------------------------------------------------------------
+        size_t page_size = getpagesize();
+
+        #define _uread( addr, byte_cnt ) \
+        { \
+            size_t _byte_cnt = byte_cnt; \
+            _byte_cnt += _byte_cnt % page_size; \
+            if ( byte_cnt != 0 && read( fd, addr, byte_cnt ) <= 0 ) { \
+                close( fd ); \
+                error_msg = "could not read() file " + file_path + " - read() error: " + strerror( errno ); \
+                return false; \
+            } \
+        } \
+
+        _uread( hdr,         1                 * sizeof(hdr[0]) );
+        _uread( objects,     hdr->obj_cnt      * sizeof(objects[0]) );
+        _uread( polygons,    hdr->poly_cnt     * sizeof(polygons[0]) );
+        _uread( vertexes,    hdr->vtx_cnt      * sizeof(vertexes[0]) );
+        _uread( positions,   hdr->pos_cnt      * sizeof(positions[0]) );
+        _uread( normals,     hdr->norm_cnt     * sizeof(normals[0]) );
+        _uread( texcoords,   hdr->texcoord_cnt * sizeof(texcoords[0]) );
+        _uread( materials,   hdr->mtl_cnt      * sizeof(materials[0]) );
+        _uread( textures,    hdr->tex_cnt      * sizeof(textures[0]) );
+        _uread( texels,      hdr->texel_cnt    * sizeof(texels[0]) );
+        _uread( strings,     hdr->char_cnt     * sizeof(strings[0]) );
+
+        close( fd );
+        return true;
+    }
+
+    bool write( std::string file_path, bool is_compressed=true ) 
+    {
+        if ( !is_compressed ) return write_uncompressed( file_path );
+
         gzFile fd = gzopen( file_path.c_str(), "w" );
         rtn_assert( fd != Z_NULL, "could not gzopen() file " + file_path + " for writing - gzopen() error: " + strerror( errno ) );
 
@@ -465,25 +545,30 @@ public:
                 return false; \
             } \
 
-        _write( &hdr,        sizeof(hdr) );
-        _write( objects,     hdr.obj_cnt      * sizeof(objects[0]) );
-        _write( polygons,    hdr.poly_cnt     * sizeof(polygons[0]) );
-        _write( vertexes,    hdr.vtx_cnt      * sizeof(vertexes[0]) );
-        _write( positions,   hdr.pos_cnt      * sizeof(positions[0]) );
-        _write( normals,     hdr.norm_cnt     * sizeof(normals[0]) );
-        _write( texcoords,   hdr.texcoord_cnt * sizeof(texcoords[0]) );
-        _write( materials,   hdr.mtl_cnt      * sizeof(materials[0]) );
-        _write( textures,    hdr.tex_cnt      * sizeof(textures[0]) );
-        _write( texels,      hdr.texel_cnt    * sizeof(texels[0]) );
-        _write( strings,     hdr.char_cnt     * sizeof(strings[0]) );
+        _write( hdr,         1                 * sizeof(hdr[0]) );
+        _write( objects,     hdr->obj_cnt      * sizeof(objects[0]) );
+        _write( polygons,    hdr->poly_cnt     * sizeof(polygons[0]) );
+        _write( vertexes,    hdr->vtx_cnt      * sizeof(vertexes[0]) );
+        _write( positions,   hdr->pos_cnt      * sizeof(positions[0]) );
+        _write( normals,     hdr->norm_cnt     * sizeof(normals[0]) );
+        _write( texcoords,   hdr->texcoord_cnt * sizeof(texcoords[0]) );
+        _write( materials,   hdr->mtl_cnt      * sizeof(materials[0]) );
+        _write( textures,    hdr->tex_cnt      * sizeof(textures[0]) );
+        _write( texels,      hdr->texel_cnt    * sizeof(texels[0]) );
+        _write( strings,     hdr->char_cnt     * sizeof(strings[0]) );
 
         gzclose( fd );
         return true;
     }
 
-    Model( std::string file_path, bool is_compressed=false )
+    Model( std::string file_path, bool is_compressed=true )
     {
         is_good = false;
+        if ( !is_compressed ) {
+            read_uncompressed( file_path );
+            return;
+        }
+
         gzFile fd = gzopen( file_path.c_str(), "r" );
         if ( fd == Z_NULL ) {
             "Could not gzopen() file " + file_path + " for reading - gzopen() error: " + strerror( errno );
@@ -510,27 +595,24 @@ public:
                 } \
             } \
 
-        if ( gzread( fd, &hdr, sizeof(hdr) ) <= 0 ) { 
+        _read( hdr,         Header,   1 );
+        if ( hdr->version != VERSION ) {
             gzclose( fd );
-            error_msg = "could not gzread() file " + file_path + " - gzread() error: " + strerror( errno );
+            error_msg = "hdr->version does not match VERSION";
             return;
         }
-        if ( hdr.version != VERSION ) {
-            gzclose( fd );
-            error_msg = "hdr.version does not match VERSION";
-            return;
-        }
-
-        _read( objects,     Object,   hdr.obj_cnt );
-        _read( polygons,    Polygon,  hdr.poly_cnt );
-        _read( vertexes,    Vertex,   hdr.vtx_cnt );
-        _read( positions,   real3,    hdr.pos_cnt );
-        _read( normals,     real3,    hdr.norm_cnt );
-        _read( texcoords,   real2,    hdr.texcoord_cnt );
-        _read( materials,   Material, hdr.mtl_cnt );
-        _read( textures,    Texture,  hdr.tex_cnt );
-        _read( texels,      char,     hdr.texel_cnt );
-        _read( strings,     char,     hdr.char_cnt );
+        max = aligned_alloc<Header>( 1 );
+        memcpy( max, hdr, sizeof( Header ) );
+        _read( objects,     Object,   hdr->obj_cnt );
+        _read( polygons,    Polygon,  hdr->poly_cnt );
+        _read( vertexes,    Vertex,   hdr->vtx_cnt );
+        _read( positions,   real3,    hdr->pos_cnt );
+        _read( normals,     real3,    hdr->norm_cnt );
+        _read( texcoords,   real2,    hdr->texcoord_cnt );
+        _read( materials,   Material, hdr->mtl_cnt );
+        _read( textures,    Texture,  hdr->tex_cnt );
+        _read( texels,      char,     hdr->texel_cnt );
+        _read( strings,     char,     hdr->char_cnt );
 
         gzclose( fd );
 
@@ -611,8 +693,8 @@ private:
                         material = name_to_mtl[ mtl_name ];         
                         dprint( "  found " + std::string( mtl_name ) );
                     } else {
-                        rtn_assert( hdr.mtl_cnt < max.mtl_cnt, "materials[] is full" );
-                        material = &materials[ hdr.mtl_cnt++ ];
+                        rtn_assert( hdr->mtl_cnt < max->mtl_cnt, "materials[] is full" );
+                        material = &materials[ hdr->mtl_cnt++ ];
                         memset( material, 0, sizeof( Material ) );
                         material->name_i = mtl_name - strings;
                         material->map_Ka_i = uint(-1);
@@ -723,8 +805,8 @@ private:
     {
         // allocate Texture structure
         //
-        rtn_assert( hdr.tex_cnt < max.tex_cnt, "textures[] is full" );
-        texture = &textures[ hdr.tex_cnt++ ];
+        rtn_assert( hdr->tex_cnt < max->tex_cnt, "textures[] is full" );
+        texture = &textures[ hdr->tex_cnt++ ];
         memset( texture, 0, sizeof( Texture ) );
         texture->name_i = tex_name - strings;
         name_to_tex[ tex_name ] = texture;
@@ -764,9 +846,9 @@ private:
         uint byte_cnt   = byte_width * height;
 
         char * bgr = data+54;  // first BGR texel
-        texture->texel_i = hdr.texel_cnt;
-        hdr.texel_cnt += byte_cnt;
-        rtn_assert( hdr.texel_cnt <= max.texel_cnt, "ran out of texel space" );
+        texture->texel_i = hdr->texel_cnt;
+        hdr->texel_cnt += byte_cnt;
+        rtn_assert( hdr->texel_cnt <= max->texel_cnt, "ran out of texel space" );
 
         // Copy texels and convert BGR to RGB byte order.
         //
@@ -792,7 +874,7 @@ private:
         // if requested, generate mipmap levels down to 1x1
         //
         rgb = texels + texture->texel_i;
-        while( hdr.mipmap_filter != MIPMAP_FILTER::NONE && !(width == 1 && height == 1) )
+        while( hdr->mipmap_filter != MIPMAP_FILTER::NONE && !(width == 1 && height == 1) )
         {
             uint to_width  = width  >> 1;
             uint to_height = height >> 1;
@@ -803,8 +885,8 @@ private:
             char * to_rgb_saved  = to_rgb;
             uint   to_byte_width = to_width * 3;
             uint   to_byte_cnt   = to_byte_width * to_height;
-            hdr.texel_cnt += to_byte_cnt;
-            rtn_assert( hdr.texel_cnt <= max.texel_cnt, "ran out of texel space" );
+            hdr->texel_cnt += to_byte_cnt;
+            rtn_assert( hdr->texel_cnt <= max->texel_cnt, "ran out of texel space" );
 
             for( uint i = 0; i < to_height; i++ )
             {
@@ -949,7 +1031,7 @@ private:
     inline bool parse_name( char *& name, char *& xxx, char *& xxx_end )
     {
         bool vld = false;
-        name = &strings[hdr.char_cnt];
+        name = &strings[hdr->char_cnt];
 
         while( xxx != xxx_end && (*xxx == ' ' || *xxx == '\t') ) xxx++;  // skip leading spaces
 
@@ -966,7 +1048,7 @@ private:
 
         if ( vld ) {
             name[len] = '\0';
-            hdr.char_cnt += len+1;
+            hdr->char_cnt += len+1;
             char * ptr;
             for( ptr = &name[len-1]; ptr != name; ptr-- )
             {

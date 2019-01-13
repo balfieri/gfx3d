@@ -246,7 +246,7 @@ public:
         // Initial lengths of arrays are large in virtual memory
         //------------------------------------------------------------
         max.obj_cnt     =  1000000;
-        max.poly_cnt    = 20000000;
+        max.poly_cnt    = 40000000;
         max.mtl_cnt     =     1000;
 
         max.vtx_cnt     = 3*max.poly_cnt;
@@ -286,11 +286,11 @@ public:
         char *      obj_name = nullptr;
         char *      name;
         std::string mtl_name;
-        Material *  material;
+        Material *  material = nullptr;
         uint        mtl_i = uint(-1);
-        Object *    object;
-        Polygon *   polygon;
-        Vertex *    vertex;
+        Object *    object = nullptr;
+        Polygon *   polygon = nullptr;
+        Vertex *    vertex = nullptr;
 
         for( ;; ) 
         {
@@ -449,7 +449,7 @@ public:
         // Write out header than individual arrays.
         //------------------------------------------------------------
         #define _write( addr, byte_cnt ) \
-            if ( gzwrite( fd, addr, byte_cnt ) <= 0 ) { \
+            if ( byte_cnt != 0 && gzwrite( fd, addr, byte_cnt ) <= 0 ) { \
                 gzclose( fd ); \
                 error_msg = "could not gzwrite() file " + gz_file_path + " - gzwrite() error: " + strerror( errno ); \
                 return false; \
@@ -484,16 +484,20 @@ public:
         // Write out header than individual arrays.
         //------------------------------------------------------------
         #define _read( array, type, cnt ) \
-            array = new type[cnt]; \
-            if ( array == nullptr ) { \
-                gzclose( fd ); \
-                error_msg = "could not allocate " #array " array"; \
-                return; \
-            } \
-            if ( gzread( fd, array, (cnt)*sizeof(type) ) <= 0 ) { \
-                gzclose( fd ); \
-                error_msg = "could not gzread() file " + gz_file_path + " - gzread() error: " + strerror( errno ); \
-                return; \
+            if ( cnt == 0 ) { \
+                array = nullptr; \
+            } else { \
+                array = new type[cnt]; \
+                if ( array == nullptr ) { \
+                    gzclose( fd ); \
+                    error_msg = "could not allocate " #array " array"; \
+                    return; \
+                } \
+                if ( gzread( fd, array, (cnt)*sizeof(type) ) <= 0 ) { \
+                    gzclose( fd ); \
+                    error_msg = "could not gzread() file " + gz_file_path + " - gzread() error: " + strerror( errno ); \
+                    return; \
+                } \
             } \
 
         if ( gzread( fd, &hdr, sizeof(hdr) ) <= 0 ) { 

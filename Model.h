@@ -83,6 +83,7 @@
 #include <iostream>
 
 #include <errno.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -231,6 +232,15 @@ public:
     #define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; return false; }
     #define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; goto error;   }
 
+    // returns array of T on a page boundary
+    template<typename T>
+    T * aligned_alloc( uint cnt )
+    {
+        void * mem = nullptr;
+        posix_memalign( &mem, getpagesize(), cnt*sizeof(T) );
+        return reinterpret_cast<T *>( mem );
+    }
+
     Model( std::string dir_path, std::string obj_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE )
     {
         is_good = false;
@@ -261,16 +271,16 @@ public:
         //------------------------------------------------------------
         // Allocate arrays
         //------------------------------------------------------------
-        objects         = new Object[   max.obj_cnt ];
-        polygons        = new Polygon[  max.poly_cnt ];
-        vertexes        = new Vertex[   max.vtx_cnt ];
-        positions       = new real3[    max.pos_cnt ];
-        normals         = new real3[    max.norm_cnt ];
-        texcoords       = new real2[    max.texcoord_cnt ];
-        materials       = new Material[ max.mtl_cnt ];
-        textures        = new Texture[  max.tex_cnt ];
-        texels          = new char[     max.texel_cnt ];
-        strings         = new char[     max.char_cnt ];
+        objects         = aligned_alloc<Object>(   max.obj_cnt );
+        polygons        = aligned_alloc<Polygon>(  max.poly_cnt );
+        vertexes        = aligned_alloc<Vertex>(   max.vtx_cnt );
+        positions       = aligned_alloc<real3>(    max.pos_cnt );
+        normals         = aligned_alloc<real3>(    max.norm_cnt );
+        texcoords       = aligned_alloc<real2>(    max.texcoord_cnt );
+        materials       = aligned_alloc<Material>( max.mtl_cnt );
+        textures        = aligned_alloc<Texture>(  max.tex_cnt );
+        texels          = aligned_alloc<char>(     max.texel_cnt );
+        strings         = aligned_alloc<char>(     max.char_cnt );
 
         //------------------------------------------------------------
         // Map in .obj file
@@ -487,7 +497,7 @@ public:
             if ( cnt == 0 ) { \
                 array = nullptr; \
             } else { \
-                array = new type[cnt]; \
+                array = aligned_alloc<type>( cnt ); \
                 if ( array == nullptr ) { \
                     gzclose( fd ); \
                     error_msg = "could not allocate " #array " array"; \
@@ -846,7 +856,7 @@ private:
         size_t size = file_stat.st_size;
 
         // this large read should behave like an mmap() inside the o/s kernel and be as fast
-        start = new char[ size ];
+        start = aligned_alloc<char>( size );
         if ( start == nullptr ) {
             close( fd );
             error_msg = "could not read file " + std::string(fname) + " - malloc() error: " + strerror( errno );

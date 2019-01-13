@@ -265,9 +265,9 @@ public:
         max->mtl_cnt     =     1000;
 
         max->vtx_cnt     = 3*max->poly_cnt;
-        max->pos_cnt     = max->poly_cnt;
-        max->norm_cnt    = max->poly_cnt;
-        max->texcoord_cnt= max->poly_cnt;
+        max->pos_cnt     = max->vtx_cnt;
+        max->norm_cnt    = max->vtx_cnt;
+        max->texcoord_cnt= max->vtx_cnt;
         max->mipmap_filter= mipmap_filter;
         max->tex_cnt     = max->mtl_cnt;
         max->texel_cnt   = max->mtl_cnt * 1000000;
@@ -312,17 +312,17 @@ public:
             skip_whitespace( obj, obj_end );
             if ( obj == obj_end ) {
                 // done, no errors
-                hdr->byte_cnt = uint64_t( 1                ) * sizeof( hdr ) +
-                               uint64_t( hdr->obj_cnt      ) * sizeof( objects[0] ) +
-                               uint64_t( hdr->poly_cnt     ) * sizeof( polygons[0] ) +
-                               uint64_t( hdr->vtx_cnt      ) * sizeof( vertexes[0] ) +
-                               uint64_t( hdr->pos_cnt      ) * sizeof( positions[0] ) +
-                               uint64_t( hdr->norm_cnt     ) * sizeof( normals[0] ) +
-                               uint64_t( hdr->texcoord_cnt ) * sizeof( texcoords[0] ) +
-                               uint64_t( hdr->mtl_cnt      ) * sizeof( materials[0] ) +
-                               uint64_t( hdr->tex_cnt      ) * sizeof( textures[0] ) +
-                               uint64_t( hdr->texel_cnt    ) * sizeof( texels[0] ) +
-                               uint64_t( hdr->char_cnt     ) * sizeof( strings[0] );
+                hdr->byte_cnt = uint64_t( 1                 ) * sizeof( hdr ) +
+                                uint64_t( hdr->obj_cnt      ) * sizeof( objects[0] ) +
+                                uint64_t( hdr->poly_cnt     ) * sizeof( polygons[0] ) +
+                                uint64_t( hdr->vtx_cnt      ) * sizeof( vertexes[0] ) +
+                                uint64_t( hdr->pos_cnt      ) * sizeof( positions[0] ) +
+                                uint64_t( hdr->norm_cnt     ) * sizeof( normals[0] ) +
+                                uint64_t( hdr->texcoord_cnt ) * sizeof( texcoords[0] ) +
+                                uint64_t( hdr->mtl_cnt      ) * sizeof( materials[0] ) +
+                                uint64_t( hdr->tex_cnt      ) * sizeof( textures[0] ) +
+                                uint64_t( hdr->texel_cnt    ) * sizeof( texels[0] ) +
+                                uint64_t( hdr->char_cnt     ) * sizeof( strings[0] );
                 is_good = true;
                 return;
             }

@@ -37,11 +37,11 @@
 //            std::cout << "Model load failed with error: " << model->error_msg << "\n";
 //            exit( 1 );
 //        }
-//        model->write( "~models/sanmiguel/sanmiguel.model.gz" );   // will write out the self-contained compressed model
+//        model->write( "~models/sanmiguel/sanmiguel.model" );   // will write out the self-contained binary model
 //        
-//     3) After that, you can quickly read in the single compressed model file using:
+//     3) After that, you can quickly read in the single binary model file using:
 //
-//        Model * model = new Model( "~models/sanmiguel/sanmiguel.model.gz" );
+//        Model * model = new Model( "~models/sanmiguel/sanmiguel.model" );
 //        if ( !model->is_good ) {
 //            std::cout << "Model load failed with error: " << model->error_msg << "\n";
 //            exit( 1 );
@@ -450,10 +450,10 @@ public:
         delete strings;
     }
 
-    bool write( std::string gz_file_path ) 
+    bool write( std::string file_path, bool is_compressed=false ) 
     {
-        gzFile fd = gzopen( gz_file_path.c_str(), "w" );
-        rtn_assert( fd != Z_NULL, "could not gzopen() file " + gz_file_path + " for writing - gzopen() error: " + strerror( errno ) );
+        gzFile fd = gzopen( file_path.c_str(), "w" );
+        rtn_assert( fd != Z_NULL, "could not gzopen() file " + file_path + " for writing - gzopen() error: " + strerror( errno ) );
 
         //------------------------------------------------------------
         // Write out header than individual arrays.
@@ -461,7 +461,7 @@ public:
         #define _write( addr, byte_cnt ) \
             if ( byte_cnt != 0 && gzwrite( fd, addr, byte_cnt ) <= 0 ) { \
                 gzclose( fd ); \
-                error_msg = "could not gzwrite() file " + gz_file_path + " - gzwrite() error: " + strerror( errno ); \
+                error_msg = "could not gzwrite() file " + file_path + " - gzwrite() error: " + strerror( errno ); \
                 return false; \
             } \
 
@@ -481,12 +481,12 @@ public:
         return true;
     }
 
-    Model( std::string gz_file_path )
+    Model( std::string file_path, bool is_compressed=false )
     {
         is_good = false;
-        gzFile fd = gzopen( gz_file_path.c_str(), "r" );
+        gzFile fd = gzopen( file_path.c_str(), "r" );
         if ( fd == Z_NULL ) {
-            "Could not gzopen() file " + gz_file_path + " for reading - gzopen() error: " + strerror( errno );
+            "Could not gzopen() file " + file_path + " for reading - gzopen() error: " + strerror( errno );
             return;
         }
 
@@ -505,14 +505,14 @@ public:
                 } \
                 if ( gzread( fd, array, (cnt)*sizeof(type) ) <= 0 ) { \
                     gzclose( fd ); \
-                    error_msg = "could not gzread() file " + gz_file_path + " - gzread() error: " + strerror( errno ); \
+                    error_msg = "could not gzread() file " + file_path + " - gzread() error: " + strerror( errno ); \
                     return; \
                 } \
             } \
 
         if ( gzread( fd, &hdr, sizeof(hdr) ) <= 0 ) { 
             gzclose( fd );
-            error_msg = "could not gzread() file " + gz_file_path + " - gzread() error: " + strerror( errno );
+            error_msg = "could not gzread() file " + file_path + " - gzread() error: " + strerror( errno );
             return;
         }
         if ( hdr.version != VERSION ) {

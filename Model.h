@@ -508,7 +508,7 @@ public:
         { \
             size_t _byte_cnt = byte_cnt; \
             _byte_cnt += _byte_cnt % page_size; \
-            if ( byte_cnt != 0 && ::write( fd, addr, byte_cnt ) <= 0 ) { \
+            if ( byte_cnt != 0 && ::write( fd, addr, _byte_cnt ) <= 0 ) { \
                 close( fd ); \
                 error_msg = "could not write() file " + file_path + " - write() error: " + strerror( errno ); \
                 return false; \

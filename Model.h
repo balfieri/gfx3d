@@ -38,10 +38,11 @@
 //            exit( 1 );
 //        }
 //        model->write( "~models/sanmiguel/sanmiguel.model" );   // will write out the self-contained binary model
-//        
+//                                                               // default is compressed, add "false" as 2nd arg for uncompressed
+//
 //     3) After that, you can quickly read in the single binary model file using:
 //
-//        Model * model = new Model( "~models/sanmiguel/sanmiguel.model" );
+//        Model * model = new Model( "~models/sanmiguel/sanmiguel.model" );  // add "false" as 2nd arg for uncompressed
 //        if ( !model->is_good ) {
 //            std::cout << "Model load failed with error: " << model->error_msg << "\n";
 //            exit( 1 );
@@ -200,6 +201,7 @@ public:
     std::string         error_msg;          // if !is_good
 
     // structs
+    char *              mapped_region;      // != nullptr means the whole file was sucked in by read_uncompressed()
     Header *            hdr;
     Header *            max;                // holds max lengths of currently allocated arrays 
 
@@ -244,6 +246,7 @@ public:
     Model( std::string dir_path, std::string obj_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE )
     {
         is_good = false;
+        mapped_region = nullptr;
 
         hdr = aligned_alloc<Header>( 1 );
         memset( hdr, 0, sizeof( Header ) );
@@ -440,16 +443,54 @@ public:
 
     ~Model() 
     {
-        delete objects;
-        delete polygons;
-        delete vertexes;
-        delete positions;
-        delete normals;
-        delete texcoords;
-        delete materials;
-        delete textures;
-        delete texels;
-        delete strings;
+        if ( mapped_region != nullptr ) {
+            delete mapped_region;
+            mapped_region = nullptr;
+        } else {
+            delete objects;
+            delete polygons;
+            delete vertexes;
+            delete positions;
+            delete normals;
+            delete texcoords;
+            delete materials;
+            delete textures;
+            delete texels;
+            delete strings;
+        }
+    }
+
+    bool write( std::string file_path, bool is_compressed=true ) 
+    {
+        if ( !is_compressed ) return write_uncompressed( file_path );
+
+        gzFile fd = gzopen( file_path.c_str(), "w" );
+        rtn_assert( fd != Z_NULL, "could not gzopen() file " + file_path + " for writing - gzopen() error: " + strerror( errno ) );
+
+        //------------------------------------------------------------
+        // Write out header than individual arrays.
+        //------------------------------------------------------------
+        #define _write( addr, byte_cnt ) \
+            if ( byte_cnt != 0 && gzwrite( fd, addr, byte_cnt ) <= 0 ) { \
+                gzclose( fd ); \
+                error_msg = "could not gzwrite() file " + file_path + " - gzwrite() error: " + strerror( errno ); \
+                return false; \
+            } \
+
+        _write( hdr,         1                 * sizeof(hdr[0]) );
+        _write( objects,     hdr->obj_cnt      * sizeof(objects[0]) );
+        _write( polygons,    hdr->poly_cnt     * sizeof(polygons[0]) );
+        _write( vertexes,    hdr->vtx_cnt      * sizeof(vertexes[0]) );
+        _write( positions,   hdr->pos_cnt      * sizeof(positions[0]) );
+        _write( normals,     hdr->norm_cnt     * sizeof(normals[0]) );
+        _write( texcoords,   hdr->texcoord_cnt * sizeof(texcoords[0]) );
+        _write( materials,   hdr->mtl_cnt      * sizeof(materials[0]) );
+        _write( textures,    hdr->tex_cnt      * sizeof(textures[0]) );
+        _write( texels,      hdr->texel_cnt    * sizeof(texels[0]) );
+        _write( strings,     hdr->char_cnt     * sizeof(strings[0]) );
+
+        gzclose( fd );
+        return true;
     }
 
     bool write_uncompressed( std::string file_path )
@@ -490,80 +531,10 @@ public:
         return true;
     }
 
-    bool read_uncompressed( std::string file_path )
-    {
-        int fd = open( file_path.c_str(), O_WRONLY );
-        rtn_assert( fd >= 0, "could not open() file " + file_path + " for writing - open() error: " + strerror( errno ) );
-
-        //------------------------------------------------------------
-        // Write out header than individual arrays.
-        // Each is padded out to a page boundary in the file.
-        //------------------------------------------------------------
-        size_t page_size = getpagesize();
-
-        #define _uread( addr, byte_cnt ) \
-        { \
-            size_t _byte_cnt = byte_cnt; \
-            _byte_cnt += _byte_cnt % page_size; \
-            if ( byte_cnt != 0 && read( fd, addr, byte_cnt ) <= 0 ) { \
-                close( fd ); \
-                error_msg = "could not read() file " + file_path + " - read() error: " + strerror( errno ); \
-                return false; \
-            } \
-        } \
-
-        _uread( hdr,         1                 * sizeof(hdr[0]) );
-        _uread( objects,     hdr->obj_cnt      * sizeof(objects[0]) );
-        _uread( polygons,    hdr->poly_cnt     * sizeof(polygons[0]) );
-        _uread( vertexes,    hdr->vtx_cnt      * sizeof(vertexes[0]) );
-        _uread( positions,   hdr->pos_cnt      * sizeof(positions[0]) );
-        _uread( normals,     hdr->norm_cnt     * sizeof(normals[0]) );
-        _uread( texcoords,   hdr->texcoord_cnt * sizeof(texcoords[0]) );
-        _uread( materials,   hdr->mtl_cnt      * sizeof(materials[0]) );
-        _uread( textures,    hdr->tex_cnt      * sizeof(textures[0]) );
-        _uread( texels,      hdr->texel_cnt    * sizeof(texels[0]) );
-        _uread( strings,     hdr->char_cnt     * sizeof(strings[0]) );
-
-        close( fd );
-        return true;
-    }
-
-    bool write( std::string file_path, bool is_compressed=true ) 
-    {
-        if ( !is_compressed ) return write_uncompressed( file_path );
-
-        gzFile fd = gzopen( file_path.c_str(), "w" );
-        rtn_assert( fd != Z_NULL, "could not gzopen() file " + file_path + " for writing - gzopen() error: " + strerror( errno ) );
-
-        //------------------------------------------------------------
-        // Write out header than individual arrays.
-        //------------------------------------------------------------
-        #define _write( addr, byte_cnt ) \
-            if ( byte_cnt != 0 && gzwrite( fd, addr, byte_cnt ) <= 0 ) { \
-                gzclose( fd ); \
-                error_msg = "could not gzwrite() file " + file_path + " - gzwrite() error: " + strerror( errno ); \
-                return false; \
-            } \
-
-        _write( hdr,         1                 * sizeof(hdr[0]) );
-        _write( objects,     hdr->obj_cnt      * sizeof(objects[0]) );
-        _write( polygons,    hdr->poly_cnt     * sizeof(polygons[0]) );
-        _write( vertexes,    hdr->vtx_cnt      * sizeof(vertexes[0]) );
-        _write( positions,   hdr->pos_cnt      * sizeof(positions[0]) );
-        _write( normals,     hdr->norm_cnt     * sizeof(normals[0]) );
-        _write( texcoords,   hdr->texcoord_cnt * sizeof(texcoords[0]) );
-        _write( materials,   hdr->mtl_cnt      * sizeof(materials[0]) );
-        _write( textures,    hdr->tex_cnt      * sizeof(textures[0]) );
-        _write( texels,      hdr->texel_cnt    * sizeof(texels[0]) );
-        _write( strings,     hdr->char_cnt     * sizeof(strings[0]) );
-
-        gzclose( fd );
-        return true;
-    }
-
     Model( std::string file_path, bool is_compressed=true )
     {
         is_good = false;
+        mapped_region = nullptr;
         if ( !is_compressed ) {
             read_uncompressed( file_path );
             return;
@@ -617,6 +588,53 @@ public:
         gzclose( fd );
 
         is_good = true;
+    }
+
+    bool read_uncompressed( std::string file_path )
+    {
+        char * start;
+        char * end;
+        if ( !open_and_read( "", file_path, start, end ) ) return false;
+        mapped_region = start;
+
+        //------------------------------------------------------------
+        // Write out header than individual arrays.
+        // Each is padded out to a page boundary in the file.
+        //------------------------------------------------------------
+        char * ptr = start;
+        size_t page_size = getpagesize();
+
+        #define _uread( array, type, cnt ) \
+            if ( (cnt) == 0 ) { \
+                array = nullptr; \
+            } else { \
+                array = reinterpret_cast<type *>( ptr ); \
+                size_t _byte_cnt = (cnt)*sizeof(type); \
+                _byte_cnt += _byte_cnt % page_size; \
+                ptr += _byte_cnt; \
+            } \
+
+        _uread( hdr,         Header,   1 );
+        if ( hdr->version != VERSION ) {
+            error_msg = "hdr->version does not match VERSION";
+            return false;
+        }
+        max = aligned_alloc<Header>( 1 );
+        memcpy( max, hdr, sizeof( Header ) );
+        _uread( objects,     Object,   hdr->obj_cnt );
+        _uread( polygons,    Polygon,  hdr->poly_cnt );
+        _uread( vertexes,    Vertex,   hdr->vtx_cnt );
+        _uread( positions,   real3,    hdr->pos_cnt );
+        _uread( normals,     real3,    hdr->norm_cnt );
+        _uread( texcoords,   real2,    hdr->texcoord_cnt );
+        _uread( materials,   Material, hdr->mtl_cnt );
+        _uread( textures,    Texture,  hdr->tex_cnt );
+        _uread( texels,      char,     hdr->texel_cnt );
+        _uread( strings,     char,     hdr->char_cnt );
+
+        is_good = true;
+
+        return true;
     }
 
 private:
@@ -923,7 +941,7 @@ private:
 
     bool open_and_read( std::string dir_path, std::string file_name, char *& start, char *& end )
     {
-        std::string file_path = dir_path + "/" + file_name;
+        std::string file_path = (dir_path != "") ? (dir_path + "/" + file_name) : file_name;
         const char * fname = file_path.c_str();
         int fd = open( fname, O_RDONLY );
         rtn_assert( fd >= 0, "could not open file " + file_path + " - open() error: " + strerror( errno ) );

@@ -488,15 +488,17 @@ public:
         //------------------------------------------------------------
         #define _write( addr, byte_cnt ) \
         { \
+            char * _addr = reinterpret_cast<char *>( addr ); \
             for( uint _byte_cnt = byte_cnt; _byte_cnt != 0;  ) \
             { \
                 uint _this_byte_cnt = 1024*1024*1024; \
                 if ( _byte_cnt < _this_byte_cnt ) _this_byte_cnt = _byte_cnt; \
-                if ( gzwrite( fd, addr, _this_byte_cnt ) <= 0 ) { \
+                if ( gzwrite( fd, _addr, _this_byte_cnt ) <= 0 ) { \
                     gzclose( fd ); \
                     rtn_assert( 0, "could not gzwrite() file " + file_path + " - gzwrite() error: " + strerror( errno ) ); \
                 } \
                 _byte_cnt -= _this_byte_cnt; \
+                _addr     += _this_byte_cnt; \
             } \
         } \
 
@@ -582,11 +584,19 @@ public:
                     assert( 0 ); \
                     return; \
                 } \
-                if ( gzread( fd, array, (cnt)*sizeof(type) ) <= 0 ) { \
-                    gzclose( fd ); \
-                    error_msg = "could not gzread() file " + file_path + " - gzread() error: " + strerror( errno ); \
-                    assert( 0 ); \
-                    return; \
+                char * _addr = reinterpret_cast<char *>( array ); \
+                for( uint _byte_cnt = (cnt)*sizeof(type); _byte_cnt != 0;  ) \
+                { \
+                    uint _this_byte_cnt = 1024*1024*1024; \
+                    if ( _byte_cnt < _this_byte_cnt ) _this_byte_cnt = _byte_cnt; \
+                    if ( gzread( fd, _addr, _this_byte_cnt ) <= 0 ) { \
+                        gzclose( fd ); \
+                        error_msg = "could not gzread() file " + file_path + " - gzread() error: " + strerror( errno ); \
+                        assert( 0 ); \
+                        return; \
+                    } \
+                    _byte_cnt -= _this_byte_cnt; \
+                    _addr     += _this_byte_cnt; \
                 } \
             } \
 

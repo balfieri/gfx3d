@@ -487,10 +487,18 @@ public:
         // Write out header than individual arrays.
         //------------------------------------------------------------
         #define _write( addr, byte_cnt ) \
-            if ( byte_cnt != 0 && gzwrite( fd, addr, byte_cnt ) <= 0 ) { \
-                gzclose( fd ); \
-                rtn_assert( 0, "could not gzwrite() file " + file_path + " - gzwrite() error: " + strerror( errno ) ); \
+        { \
+            for( uint _byte_cnt = byte_cnt; _byte_cnt != 0;  ) \
+            { \
+                uint _this_byte_cnt = 1024*1024*1024; \
+                if ( _byte_cnt < _this_byte_cnt ) _this_byte_cnt = _byte_cnt; \
+                if ( gzwrite( fd, addr, _this_byte_cnt ) <= 0 ) { \
+                    gzclose( fd ); \
+                    rtn_assert( 0, "could not gzwrite() file " + file_path + " - gzwrite() error: " + strerror( errno ) ); \
+                } \
+                _byte_cnt -= _this_byte_cnt; \
             } \
+        } \
 
         _write( hdr,         1                 * sizeof(hdr[0]) );
         _write( objects,     hdr->obj_cnt      * sizeof(objects[0]) );

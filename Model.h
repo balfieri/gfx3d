@@ -270,7 +270,7 @@ public:
         max->texcoord_cnt= max->vtx_cnt;
         max->mipmap_filter= mipmap_filter;
         max->tex_cnt     = max->mtl_cnt;
-        max->texel_cnt   = max->mtl_cnt * 1000000;
+        max->texel_cnt   = max->mtl_cnt * 10000000;
         max->char_cnt    = (max->obj_cnt + max->mtl_cnt) * 128;
 
         //------------------------------------------------------------

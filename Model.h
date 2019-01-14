@@ -231,8 +231,8 @@ public:
     //#define dprint( msg ) std::cout << (msg) << "\n"
 
     // these are done as macros to avoid evaluating msg (it makes a big difference)
-    #define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; return false; }
-    #define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; goto error;   }
+    #define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; assert( false ); return false; }
+    #define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; assert( false ); goto error;   }
 
     // returns array of T on a page boundary
     template<typename T>
@@ -260,6 +260,7 @@ public:
     Model( std::string dir_path, std::string obj_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE )
     {
         is_good = false;
+        error_msg = "<unknown error>";
         mapped_region = nullptr;
 
         hdr = aligned_alloc<Header>( 1 );
@@ -444,15 +445,11 @@ public:
                 default:
                     break;
             }
-
-            if ( !eol( obj, obj_end ) ) {
-                error_msg += " in .mtl file";
-                goto error;
-            }
         }
 
     error:
         error_msg += " (at line " + std::to_string( line_num ) + " of " + obj_file + ")";
+        assert( 0 );
     }
 
     ~Model() 
@@ -487,8 +484,7 @@ public:
         #define _write( addr, byte_cnt ) \
             if ( byte_cnt != 0 && gzwrite( fd, addr, byte_cnt ) <= 0 ) { \
                 gzclose( fd ); \
-                error_msg = "could not gzwrite() file " + file_path + " - gzwrite() error: " + strerror( errno ); \
-                return false; \
+                rtn_assert( 0, "could not gzwrite() file " + file_path + " - gzwrite() error: " + strerror( errno ) ); \
             } \
 
         _write( hdr,         1                 * sizeof(hdr[0]) );
@@ -524,8 +520,7 @@ public:
             _byte_cnt += _byte_cnt % page_size; \
             if ( byte_cnt != 0 && ::write( fd, addr, _byte_cnt ) <= 0 ) { \
                 close( fd ); \
-                error_msg = "could not write() file " + file_path + " - write() error: " + strerror( errno ); \
-                return false; \
+                rtn_assert( 0, "could not write() file " + file_path + " - write() error: " + strerror( errno ) ); \
             } \
         } \
 
@@ -571,11 +566,13 @@ public:
                 if ( array == nullptr ) { \
                     gzclose( fd ); \
                     error_msg = "could not allocate " #array " array"; \
+                    assert( 0 ); \
                     return; \
                 } \
                 if ( gzread( fd, array, (cnt)*sizeof(type) ) <= 0 ) { \
                     gzclose( fd ); \
                     error_msg = "could not gzread() file " + file_path + " - gzread() error: " + strerror( errno ); \
+                    assert( 0 ); \
                     return; \
                 } \
             } \
@@ -584,6 +581,7 @@ public:
         if ( hdr->version != VERSION ) {
             gzclose( fd );
             error_msg = "hdr->version does not match VERSION";
+            assert( 0 ); \
             return;
         }
         max = aligned_alloc<Header>( 1 );
@@ -630,8 +628,7 @@ public:
 
         _uread( hdr,         Header,   1 );
         if ( hdr->version != VERSION ) {
-            error_msg = "hdr->version does not match VERSION";
-            return false;
+            rtn_assert( 0, "hdr->version does not match VERSION" );
         }
         max = aligned_alloc<Header>( 1 );
         memcpy( max, hdr, sizeof( Header ) );
@@ -821,13 +818,10 @@ private:
                     break;
 
                 default:
-                    return false;
+                    rtn_assert( 0, "unknown .mtl command" );
             }
 
-            if ( !eol( mtl, mtl_end ) ) {
-                error_msg += " in .mtl file";
-                return false;
-            }
+            rtn_assert( eol( mtl, mtl_end ), "not at eol in .mtl file" );
         }
 
         return true;
@@ -966,8 +960,7 @@ private:
         int status = fstat( fd, &file_stat );
         if ( status < 0 ) {
             close( fd );
-            error_msg = "could not stat file " + std::string(fname) + " - stat() error: " + strerror( errno );
-            return false;
+            rtn_assert( 0, "could not stat file " + std::string(fname) + " - stat() error: " + strerror( errno ) );
         }
         size_t size = file_stat.st_size;
 
@@ -975,13 +968,11 @@ private:
         start = aligned_alloc<char>( size );
         if ( start == nullptr ) {
             close( fd );
-            error_msg = "could not read file " + std::string(fname) + " - malloc() error: " + strerror( errno );
-            return false;
+            rtn_assert( 0, "could not read file " + std::string(fname) + " - malloc() error: " + strerror( errno ) );
         }
         if ( read( fd, start, size ) <= 0 ) {
             close( fd );
-            error_msg = "could not read() file " + std::string(fname) + " - read error: " + std::string( strerror( errno ) );
-            return false;
+            rtn_assert( 0, "could not read() file " + std::string(fname) + " - read error: " + std::string( strerror( errno ) ) );
         }
         close( fd );
         end = start + size;
@@ -1018,10 +1009,11 @@ private:
                 if ( *xxx == '\n' && xxx == obj ) line_num++;
                 xxx++;
             }
+            dprint( "at eol" );
             return true;
         } else {
-            error_msg = "end-of-line is not next, found character: " + std::string( 1, *xxx );
-            return false; 
+            dprint( "not at eol, char='" + std::string( 1, *xxx ) + "'" );
+            return false;
         }
     }
 
@@ -1096,8 +1088,7 @@ private:
             return *ptr != '\0';
         }
 
-        error_msg = "could not parse name";
-        return false;
+        rtn_assert( 0, "could not parse name" );
     }
 
     inline bool parse_obj_cmd( obj_cmd_t& cmd )
@@ -1151,8 +1142,7 @@ private:
                     return true;
                 }
 
-                error_msg = "bad .obj V command";
-                return false;
+                rtn_assert( 0, "bad .obj V command" );
 
             case 'm':
                 cmd = CMD_MTLLIB;
@@ -1163,8 +1153,7 @@ private:
                 return expect_cmd( "semtl", obj, obj_end ); 
                 
             default:
-                error_msg = "bad .obj command character: " + std::string( 1, ch );
-                return false;
+                rtn_assert( 0, "bad .obj command character: " + std::string( 1, ch ) );
         }
     }
 
@@ -1199,8 +1188,7 @@ private:
                     return expect_cmd( "wmtl", mtl, mtl_end );
                 }
 
-                error_msg = "bad .mtl N command";
-                return false;
+                rtn_assert( 0, "bad .mtl N command" );
 
             case 'i':
             case 'I':
@@ -1248,8 +1236,7 @@ private:
                     return true;
                 }
 
-                error_msg = "truncated .mtl K command";
-                return false;
+                rtn_assert( 0, "truncated .mtl K command" );
 
             case 't':
             case 'T':
@@ -1271,8 +1258,7 @@ private:
                     return true;
                 }
 
-                error_msg = "truncated .mtl T command";
-                return false;
+                rtn_assert( 0, "truncated .mtl T command" );
 
             case 'm':
             case 'M':
@@ -1297,14 +1283,12 @@ private:
                     } else if ( ch == 's' || ch == 'S' ) { 
                         cmd = CMD_MAP_KS;
                     } else {
-                        error_msg = "bad .mtl map_k command"; 
-                        return false;
+                        rtn_assert( 0, "bad .mtl map_k command" );
                     }
 
                     mtl++;
                     if ( !expect_char( ' ', mtl, mtl_end ) ) {
-                        error_msg = "bad .mtl map_k command (no space after Ka/Kd/Ke/Ks)";
-                        return false;
+                        rtn_assert( 0, "bad .mtl map_k command (no space after Ka/Kd/Ke/Ks)" );
                     }
                     return true;
 
@@ -1313,20 +1297,17 @@ private:
                          !expect_char( 'm', mtl, mtl_end ) || 
                          !expect_char( 'p', mtl, mtl_end ) ||
                          !expect_char( ' ', mtl, mtl_end ) ) {
-                        error_msg = "unexpected .mtl map_b command";
-                        return false;
+                        rtn_assert( 0, "unexpected .mtl map_b command" );
                     }
 
                     cmd = CMD_MAP_BUMP;
                     return true;
                 }
 
-                error_msg = "truncated .mtl m command";
-                return false;
+                rtn_assert( 0, "truncated .mtl m command" );
 
             default:
-                error_msg = "bad .mtl command character";
-                return false;
+                rtn_assert( 0, "bad .mtl command character" );
         }
     }
 
@@ -1397,7 +1378,7 @@ private:
         if ( is_neg ) r = -r;
         if ( e10 != 0 ) r *= pow( 10.0, e10 );
         dprint( "real=" + std::to_string( r ) );
-        if ( !vld ) error_msg = "unable to parse real in " + std::string( ((xxx == obj) ? ".obj" : ".mtl") ) + " file";
+        rtn_assert( vld, "unable to parse real in " + std::string( ((xxx == obj) ? ".obj" : ".mtl") ) + " file" );
         return vld;
     }
 

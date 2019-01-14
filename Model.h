@@ -249,7 +249,12 @@ public:
     {
         while( (hdr_cnt + add_cnt) > max_cnt ) {
             void * mem = nullptr;
+            uint old_max_cnt = max_cnt;
             max_cnt *= 2;
+            if ( max_cnt < old_max_cnt ) {
+                assert( old_max_cnt != uint(-1) );
+                max_cnt = uint(-1);
+            }
             posix_memalign( &mem, getpagesize(), max_cnt*sizeof(T) );
             memcpy( mem, array, hdr_cnt*sizeof(T) );
             delete array;

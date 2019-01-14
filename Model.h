@@ -243,6 +243,20 @@ public:
         return reinterpret_cast<T *>( mem );
     }
 
+    // reallocate array if we are about to exceed its current size
+    template<typename T>
+    inline void perhaps_realloc( T *& array, uint& hdr_cnt, uint& max_cnt, uint add_cnt )
+    {
+        while( (hdr_cnt + add_cnt) > max_cnt ) {
+            void * mem = nullptr;
+            max_cnt *= 2;
+            posix_memalign( &mem, getpagesize(), max_cnt*sizeof(T) );
+            memcpy( mem, array, hdr_cnt*sizeof(T) );
+            delete array;
+            array = reinterpret_cast<T *>( mem );
+        }
+    }
+
     Model( std::string dir_path, std::string obj_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE )
     {
         is_good = false;
@@ -260,18 +274,18 @@ public:
         // Initial lengths of arrays are large in virtual memory
         //------------------------------------------------------------
         max = aligned_alloc<Header>( 1 );
-        max->obj_cnt     =  1000000;
-        max->poly_cnt    = 40000000;
-        max->mtl_cnt     =     1000;
+        max->obj_cnt     =   128*1024;
+        max->poly_cnt    =  1024*1024;
+        max->mtl_cnt     =       1024;
 
-        max->vtx_cnt     = 3*max->poly_cnt;
+        max->vtx_cnt     = 4*max->poly_cnt;
         max->pos_cnt     = max->vtx_cnt;
         max->norm_cnt    = max->vtx_cnt;
         max->texcoord_cnt= max->vtx_cnt;
         max->mipmap_filter= mipmap_filter;
         max->tex_cnt     = max->mtl_cnt;
-        max->texel_cnt   = max->mtl_cnt * 10000000;
-        max->char_cnt    = (max->obj_cnt + max->mtl_cnt) * 128;
+        max->texel_cnt   = max->mtl_cnt * 128*1024;
+        max->char_cnt    = max->obj_cnt * 128;
 
         //------------------------------------------------------------
         // Allocate arrays
@@ -334,7 +348,7 @@ public:
             switch( cmd )
             {
                 case CMD_O:
-                    obj_assert( hdr->obj_cnt < max->obj_cnt, "objects[] is full" );
+                    perhaps_realloc<Object>( objects, hdr->obj_cnt, max->obj_cnt, 1 );
                     object = &objects[ hdr->obj_cnt++ ];
 
                     if ( !parse_name( obj_name, obj, obj_end ) ) goto error;
@@ -348,23 +362,23 @@ public:
                     break;
                     
                 case CMD_V:
-                    obj_assert( hdr->pos_cnt < max->pos_cnt, "positions[] is full" );
+                    perhaps_realloc<real3>( positions, hdr->pos_cnt, max->pos_cnt, 1 );
                     if ( !parse_real3( positions[ hdr->pos_cnt++ ], obj, obj_end ) ) goto error;
                     break;
                     
                 case CMD_VN:
-                    obj_assert( hdr->norm_cnt < max->norm_cnt, "normals[] is full" );
+                    perhaps_realloc<real3>( normals, hdr->norm_cnt, max->norm_cnt, 1 );
                     if ( !parse_real3( normals[ hdr->norm_cnt++ ], obj, obj_end ) ) goto error;
                     break;
                     
                 case CMD_VT:
-                    obj_assert( hdr->texcoord_cnt < max->texcoord_cnt, "texcoords[] is full" );
+                    perhaps_realloc<real2>( texcoords, hdr->texcoord_cnt, max->texcoord_cnt, 1 );
                     if ( !parse_real2( texcoords[ hdr->texcoord_cnt++ ], obj, obj_end ) ) goto error;
                     break;
                     
                 case CMD_F:
                 {
-                    obj_assert( hdr->poly_cnt < max->poly_cnt, "polygons[] is full" );
+                    perhaps_realloc<Polygon>( polygons, hdr->poly_cnt, max->poly_cnt, 1 );
                     polygon = &polygons[ hdr->poly_cnt++ ];
                     polygon->mtl_i = mtl_i;
                     polygon->vtx_cnt = 0;
@@ -372,7 +386,7 @@ public:
                     while( !eol( obj, obj_end ) ) 
                     {
                         polygon->vtx_cnt++;
-                        obj_assert( hdr->vtx_cnt < max->vtx_cnt, "vertexes[] is full" );
+                        perhaps_realloc<Vertex>( vertexes, hdr->vtx_cnt, max->vtx_cnt, 1 );
                         vertex = &vertexes[ hdr->vtx_cnt++ ];
 
                         int v_i;
@@ -711,7 +725,7 @@ private:
                         material = name_to_mtl[ mtl_name ];         
                         dprint( "  found " + std::string( mtl_name ) );
                     } else {
-                        rtn_assert( hdr->mtl_cnt < max->mtl_cnt, "materials[] is full" );
+                        perhaps_realloc<Material>( materials, hdr->mtl_cnt, max->mtl_cnt, 1 );
                         material = &materials[ hdr->mtl_cnt++ ];
                         memset( material, 0, sizeof( Material ) );
                         material->name_i = mtl_name - strings;
@@ -823,7 +837,7 @@ private:
     {
         // allocate Texture structure
         //
-        rtn_assert( hdr->tex_cnt < max->tex_cnt, "textures[] is full" );
+        perhaps_realloc<Texture>( textures, hdr->tex_cnt, max->tex_cnt, 1 );
         texture = &textures[ hdr->tex_cnt++ ];
         memset( texture, 0, sizeof( Texture ) );
         texture->name_i = tex_name - strings;
@@ -865,8 +879,9 @@ private:
 
         char * bgr = data+54;  // first BGR texel
         texture->texel_i = hdr->texel_cnt;
+
+        perhaps_realloc<char>( texels, hdr->texel_cnt, max->texel_cnt, byte_cnt );
         hdr->texel_cnt += byte_cnt;
-        rtn_assert( hdr->texel_cnt <= max->texel_cnt, "ran out of texel space" );
 
         // Copy texels and convert BGR to RGB byte order.
         //
@@ -891,7 +906,6 @@ private:
 
         // if requested, generate mipmap levels down to 1x1
         //
-        rgb = texels + texture->texel_i;
         while( hdr->mipmap_filter != MIPMAP_FILTER::NONE && !(width == 1 && height == 1) )
         {
             uint to_width  = width  >> 1;
@@ -899,12 +913,14 @@ private:
             if ( to_width  == 0 ) to_width  = 1;
             if ( to_height == 0 ) to_height = 1;
 
-            char * to_rgb        = rgb + byte_cnt;
-            char * to_rgb_saved  = to_rgb;
             uint   to_byte_width = to_width * 3;
             uint   to_byte_cnt   = to_byte_width * to_height;
+            perhaps_realloc<char>( texels, hdr->texel_cnt, max->texel_cnt, to_byte_cnt );
             hdr->texel_cnt += to_byte_cnt;
-            rtn_assert( hdr->texel_cnt <= max->texel_cnt, "ran out of texel space" );
+
+            rgb = texels + texture->texel_i;
+            char * to_rgb        = rgb + byte_cnt;
+            char * to_rgb_saved  = to_rgb;
 
             for( uint i = 0; i < to_height; i++ )
             {
@@ -1049,6 +1065,7 @@ private:
     inline bool parse_name( char *& name, char *& xxx, char *& xxx_end )
     {
         bool vld = false;
+        perhaps_realloc( strings, hdr->char_cnt, max->char_cnt, 1024 );
         name = &strings[hdr->char_cnt];
 
         while( xxx != xxx_end && (*xxx == ' ' || *xxx == '\t') ) xxx++;  // skip leading spaces
@@ -1059,6 +1076,7 @@ private:
             char ch = *xxx;
             if ( ch == '\n' || ch == '\r' ) break;
 
+            rtn_assert( len < 1024, "string is larger than 1024 characters" );
             name[len++] = ch;
             vld = true;
             xxx++;

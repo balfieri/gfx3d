@@ -1589,12 +1589,15 @@ private:
            }
         }
 
-        if ( m == poly_i || m == (poly_i+n) ) m = poly_i + n/2;
+        if ( m <= poly_i || m >= (poly_i+n) ) m = poly_i + n/2;
         return m;
     }
 
     uint bvh_node( uint poly_i, uint n, uint axis ) 
     {
+        assert( n != 0 );
+        assert( poly_i < hdr->poly_cnt );
+        assert( (poly_i+n) <= hdr->poly_cnt );
         perhaps_realloc( bvh_nodes, hdr->bvh_node_cnt, max->bvh_node_cnt, 1 );
         uint bvh_i = hdr->bvh_node_cnt++;
         BVH_Node * node = &bvh_nodes[bvh_i];
@@ -1616,9 +1619,12 @@ private:
             node->right_is_leaf = false;
             real pivot = (node->box.min.c[axis] + node->box.max.c[axis]) * 0.5;
             uint m = bvh_qsplit( poly_i, n, pivot, axis );
-            uint nm = m - poly_i + 1;
-            node->left_i  = bvh_node( poly_i, nm,   (axis + 1) % 3 );
-            node->right_i = bvh_node(      m, n-nm, (axis + 1) % 3 );
+            uint nm = m - poly_i;
+            uint left_i  = bvh_node( poly_i, nm,   (axis + 1) % 3 );
+            uint right_i = bvh_node(      m, n-nm, (axis + 1) % 3 );
+            node = &bvh_nodes[bvh_i];  // could change after previous calls
+            node->left_i  = left_i;
+            node->right_i = right_i;
 
             node->box = bvh_nodes[node->left_i].box;
             node->box.expand( bvh_nodes[node->right_i].box );

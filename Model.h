@@ -58,6 +58,10 @@
 //        the number of texels in each level, so you'll need to compute those on the fly as you
 //        try to obtain the starting offset for a given level.
 //
+//     5) If you want Model to generate a BVH tree for you, add Model::BVH_TREE::BINARY as the fourth argument
+//        to the Model() constructor in (2) to get a binary BVH tree.  QUAD and OCT trees are not
+//        currently supported
+//
 // How it works:
 //
 //     1) Preallocate large virtual memory 1D arrays for materials, texels, positions, normals, vertexes, polygons
@@ -119,6 +123,12 @@ public:
         BOX,                                // generate mipmap levels using simple box filter (average)
     };
 
+    enum class BVH_TREE
+    {
+        NONE,                               // do not generate BVH tree
+        BINARY,                             // generate binary BVH tree
+    };
+
     class Header                            // header (of future binary file)
     {
     public:
@@ -135,6 +145,8 @@ public:
         uint        tex_cnt;                // in textures array
         uint        texel_cnt;              // in texels array  (last in file)
         uint        char_cnt;               // in strings array
+        uint        bvh_node_cnt;           // in bvh_nodes array
+        uint        bvh_root_i;             // index of root bvh_node in bvh_nodes array
     };
 
     class Object
@@ -193,9 +205,35 @@ public:
         uint            texel_i;            // index into texels array of first texel
     };
 
+    class AABB                              // axis aligned bounding box
+    {
+    public:
+        real3           min;                // bounding box min
+        real3           max;                // bounding box max
+
+        void expand( const AABB& other )
+        {
+            for( uint i = 0; i < 3; i++ )
+            {
+                if ( other.min.c[i] < min.c[i] ) min.c[i] = other.min.c[i];
+                if ( other.max.c[i] > max.c[i] ) max.c[i] = other.max.c[i];
+            }
+        }
+    };
+
+    class BVH_Node
+    {
+    public:
+        AABB            box;                // bounding box
+        bool            left_is_leaf;       // if true, left is a polygon
+        bool            right_is_leaf;      // if true, right is a polygon
+        uint            left_i;             // index into bvh_nodes or polygons array of left subtree 
+        uint            right_i;            // index into bvh_nodes or polygons array of right subtree 
+    };
+
     // public fields
     //
-    static const uint VERSION = 0xB0BA1f02; // current version is 2
+    static const uint VERSION = 0xB0BA1f03; // current version is 3
 
     bool                is_good;            // set to true if constructor succeeds
     std::string         error_msg;          // if !is_good
@@ -214,6 +252,7 @@ public:
     real2 *             texcoords;
     Material *          materials;
     Texture *           textures;
+    BVH_Node *          bvh_nodes;
     char *              texels;
     char *              strings;
 
@@ -262,7 +301,7 @@ public:
         }
     }
 
-    Model( std::string dir_path, std::string obj_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE )
+    Model( std::string dir_path, std::string obj_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE, BVH_TREE bvh_tree=BVH_TREE::NONE )
     {
         is_good = false;
         error_msg = "<unknown error>";
@@ -275,6 +314,8 @@ public:
         hdr->norm_cnt = 1;
         hdr->texcoord_cnt = 1;
         hdr->mipmap_filter = mipmap_filter;
+        hdr->bvh_node_cnt = 0;
+        hdr->bvh_root_i = 0;
 
         //------------------------------------------------------------
         // Initial lengths of arrays are large in virtual memory
@@ -292,6 +333,7 @@ public:
         max->tex_cnt     = max->mtl_cnt;
         max->texel_cnt   = max->mtl_cnt * 128*1024;
         max->char_cnt    = max->obj_cnt * 128;
+        max->bvh_node_cnt= max->poly_cnt / 2;
 
         //------------------------------------------------------------
         // Allocate arrays
@@ -306,6 +348,7 @@ public:
         textures        = aligned_alloc<Texture>(  max->tex_cnt );
         texels          = aligned_alloc<char>(     max->texel_cnt );
         strings         = aligned_alloc<char>(     max->char_cnt );
+        bvh_nodes       = aligned_alloc<BVH_Node>( max->bvh_node_cnt );
 
         //------------------------------------------------------------
         // Map in .obj file
@@ -342,7 +385,8 @@ public:
                                 uint64_t( hdr->mtl_cnt      ) * sizeof( materials[0] ) +
                                 uint64_t( hdr->tex_cnt      ) * sizeof( textures[0] ) +
                                 uint64_t( hdr->texel_cnt    ) * sizeof( texels[0] ) +
-                                uint64_t( hdr->char_cnt     ) * sizeof( strings[0] );
+                                uint64_t( hdr->char_cnt     ) * sizeof( strings[0] ) + 
+                                uint64_t( hdr->bvh_node_cnt ) * sizeof( bvh_nodes[0] );
                 is_good = true;
                 return;
             }
@@ -452,6 +496,8 @@ public:
             }
         }
 
+        if ( bvh_tree != BVH_TREE::NONE ) hdr->bvh_root_i = build_bvh( bvh_tree );
+
     error:
         error_msg += " (at line " + std::to_string( line_num ) + " of " + obj_file + ")";
         assert( 0 );
@@ -473,6 +519,7 @@ public:
             delete textures;
             delete texels;
             delete strings;
+            delete bvh_nodes;
         }
     }
 
@@ -513,6 +560,7 @@ public:
         _write( textures,    hdr->tex_cnt      * sizeof(textures[0]) );
         _write( texels,      hdr->texel_cnt    * sizeof(texels[0]) );
         _write( strings,     hdr->char_cnt     * sizeof(strings[0]) );
+        _write( bvh_nodes,   hdr->bvh_node_cnt * sizeof(bvh_nodes[0]) );
 
         gzclose( fd );
         return true;
@@ -558,6 +606,7 @@ public:
         _uwrite( textures,    hdr->tex_cnt      * sizeof(textures[0]) );
         _uwrite( texels,      hdr->texel_cnt    * sizeof(texels[0]) );
         _uwrite( strings,     hdr->char_cnt     * sizeof(strings[0]) );
+        _uwrite( bvh_nodes,   hdr->bvh_node_cnt * sizeof(bvh_nodes[0]) );
 
         close( fd );
         return true;
@@ -627,6 +676,7 @@ public:
         _read( textures,    Texture,  hdr->tex_cnt );
         _read( texels,      char,     hdr->texel_cnt );
         _read( strings,     char,     hdr->char_cnt );
+        _read( bvh_nodes,   BVH_Node, hdr->bvh_node_cnt );
 
         gzclose( fd );
 
@@ -673,6 +723,7 @@ public:
         _uread( textures,    Texture,  hdr->tex_cnt );
         _uread( texels,      char,     hdr->texel_cnt );
         _uread( strings,     char,     hdr->char_cnt );
+        _uread( bvh_nodes,   BVH_Node, hdr->bvh_node_cnt );
 
         is_good = true;
 
@@ -1491,6 +1542,86 @@ private:
         v.c[0] /= denom;
         v.c[1] /= denom;
         v.c[2] /= denom;
+    }
+
+    uint build_bvh( BVH_TREE bvh_tree )
+    {
+        (void)bvh_tree;
+        return bvh_node( 0, hdr->poly_cnt, 1 );
+    }
+
+    void poly_bounding_box( uint poly_i, AABB& box )
+    {
+        const Polygon& poly = polygons[poly_i];
+        for( uint i = 0; i < poly.vtx_cnt; i++ )
+        {
+            const Vertex& vtx = vertexes[poly.vtx_i+i];
+            const real3&  pos = positions[vtx.v_i];
+            if ( i == 0 ) {
+                box.min = pos;
+                box.max = pos;
+            } else {
+                for( uint j = 0; j < 3; j++ )
+                {
+                    if ( pos.c[j] < box.min.c[j] ) box.min.c[j] = pos.c[j];
+                    if ( pos.c[j] > box.max.c[j] ) box.max.c[j] = pos.c[j];
+                }
+            }
+        }
+    }
+
+    inline uint bvh_qsplit( uint poly_i, uint n, real pivot, uint axis )
+    {
+       uint m = poly_i;
+
+       for( uint i = poly_i; i < (poly_i+n); i++ )
+       {
+           AABB box;
+           poly_bounding_box( i, box );
+           real centroid = (box.min.c[axis] + box.max.c[axis]) * 0.5;
+           if ( centroid < pivot ) {
+               Polygon temp = polygons[i];
+               polygons[i]  = polygons[m];
+               polygons[m]  = temp;
+               m++;
+           }
+        }
+
+        if ( m == poly_i || m == (poly_i+n) ) m = poly_i + n/2;
+        return m;
+    }
+
+    uint bvh_node( uint poly_i, uint n, uint axis ) 
+    {
+        perhaps_realloc( bvh_nodes, hdr->bvh_node_cnt, max->bvh_node_cnt, 1 );
+        uint bvh_i = hdr->bvh_node_cnt++;
+        BVH_Node * node = &bvh_nodes[bvh_i];
+
+        if ( n == 1 || n == 2 ) {
+            node->left_is_leaf = true;
+            node->right_is_leaf = true;
+            node->left_i  = poly_i;
+            node->right_i = poly_i + n-1;
+            poly_bounding_box( poly_i, node->box );
+            if ( n == 2 ) {
+                AABB new_box;
+                poly_bounding_box( poly_i+1, new_box );
+                node->box.expand( new_box );
+            }
+
+        } else {
+            real pivot = (node->box.min.c[axis] + node->box.max.c[axis]) * 0.5;
+            uint m = bvh_qsplit( poly_i, n, pivot, axis );
+            node->left_is_leaf = false;
+            node->right_is_leaf = false;
+            node->left_i  = bvh_node( poly_i, m,   (axis + 1) % 3 );
+            node->right_i = bvh_node(      m, n-m, (axis + 1) % 3 );
+
+            node->box = bvh_nodes[node->left_i].box;
+            node->box.expand( bvh_nodes[node->right_i].box );
+        }
+
+        return bvh_i;
     }
 };
 

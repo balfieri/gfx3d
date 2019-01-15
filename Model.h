@@ -25,7 +25,7 @@
 //     1) Please first convert .jpg/.png/etc. textures to .bmp format: 
 //
 //              cd textures
-//              mogrify *.{jpg,png} -format bmp
+//              mogrify -format bmp *.{jpg,png,TGA} 
 //
 //        This way, we don't create a dependency on other code.
 //        Model will convert .jpg/.png/etc. suffixes to .bmp automatically, so no need to change .mtl files.

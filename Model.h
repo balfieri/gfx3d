@@ -388,6 +388,7 @@ public:
                                 uint64_t( hdr->char_cnt     ) * sizeof( strings[0] ) + 
                                 uint64_t( hdr->bvh_node_cnt ) * sizeof( bvh_nodes[0] );
                 is_good = true;
+                if ( bvh_tree != BVH_TREE::NONE ) bvh_build( bvh_tree );
                 return;
             }
 
@@ -495,8 +496,6 @@ public:
                     break;
             }
         }
-
-        if ( bvh_tree == BVH_TREE::BINARY ) bvh_build( bvh_tree );
 
     error:
         error_msg += " (at line " + std::to_string( line_num ) + " of " + obj_file + ")";
@@ -1610,12 +1609,13 @@ private:
             }
 
         } else {
-            real pivot = (node->box.min.c[axis] + node->box.max.c[axis]) * 0.5;
-            uint m = bvh_qsplit( poly_i, n, pivot, axis );
             node->left_is_leaf = false;
             node->right_is_leaf = false;
-            node->left_i  = bvh_node( poly_i, m,   (axis + 1) % 3 );
-            node->right_i = bvh_node(      m, n-m, (axis + 1) % 3 );
+            real pivot = (node->box.min.c[axis] + node->box.max.c[axis]) * 0.5;
+            uint m = bvh_qsplit( poly_i, n, pivot, axis );
+            uint nm = m - poly_i + 1;
+            node->left_i  = bvh_node( poly_i, nm,   (axis + 1) % 3 );
+            node->right_i = bvh_node(      m, n-nm, (axis + 1) % 3 );
 
             node->box = bvh_nodes[node->left_i].box;
             node->box.expand( bvh_nodes[node->right_i].box );

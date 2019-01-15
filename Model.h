@@ -60,7 +60,10 @@
 //
 //     5) If you want Model to generate a BVH tree for you, add Model::BVH_TREE::BINARY as the fourth argument
 //        to the Model() constructor in (2) to get a binary BVH tree.  QUAD and OCT trees are not
-//        currently supported
+//        currently supported.
+//
+//        Note: BVH building reorders the polygons, so any polygon offsets in an Object structure will be garbage.
+//              Most apps don't use the objects[] so this is not normally a problem.
 //
 // How it works:
 //

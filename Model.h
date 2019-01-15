@@ -496,7 +496,7 @@ public:
             }
         }
 
-        if ( bvh_tree != BVH_TREE::NONE ) hdr->bvh_root_i = build_bvh( bvh_tree );
+        if ( bvh_tree == BVH_TREE::BINARY ) bvh_build( bvh_tree );
 
     error:
         error_msg += " (at line " + std::to_string( line_num ) + " of " + obj_file + ")";
@@ -1544,10 +1544,10 @@ private:
         v.c[2] /= denom;
     }
 
-    uint build_bvh( BVH_TREE bvh_tree )
+    void bvh_build( BVH_TREE bvh_tree )
     {
         (void)bvh_tree;
-        return bvh_node( 0, hdr->poly_cnt, 1 );
+        hdr->bvh_root_i = bvh_node( 0, hdr->poly_cnt, 1 );
     }
 
     void poly_bounding_box( uint poly_i, AABB& box )

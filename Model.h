@@ -533,9 +533,17 @@ public:
         { \
             size_t _byte_cnt = byte_cnt; \
             _byte_cnt += _byte_cnt % page_size; \
-            if ( byte_cnt != 0 && ::write( fd, addr, _byte_cnt ) <= 0 ) { \
-                close( fd ); \
-                rtn_assert( 0, "could not write() file " + file_path + " - write() error: " + strerror( errno ) ); \
+            char * _addr = reinterpret_cast<char *>( addr ); \
+            for( ; _byte_cnt != 0;  ) \
+            { \
+                uint _this_byte_cnt = 1024*1024*1024; \
+                if ( _byte_cnt < _this_byte_cnt ) _this_byte_cnt = _byte_cnt; \
+                if ( ::write( fd, _addr, _this_byte_cnt ) <= 0 ) { \
+                    close( fd ); \
+                    rtn_assert( 0, "could not write() file " + file_path + " - write() error: " + strerror( errno ) ); \
+                } \
+                _byte_cnt -= _this_byte_cnt; \
+                _addr     += _this_byte_cnt; \
             } \
         } \
 
@@ -636,17 +644,17 @@ public:
         // Write out header than individual arrays.
         // Each is padded out to a page boundary in the file.
         //------------------------------------------------------------
-        char * ptr = start;
+        char * _addr = start;
         size_t page_size = getpagesize();
 
         #define _uread( array, type, cnt ) \
             if ( (cnt) == 0 ) { \
                 array = nullptr; \
             } else { \
-                array = reinterpret_cast<type *>( ptr ); \
+                array = reinterpret_cast<type *>( _addr ); \
                 size_t _byte_cnt = (cnt)*sizeof(type); \
                 _byte_cnt += _byte_cnt % page_size; \
-                ptr += _byte_cnt; \
+                _addr += _byte_cnt; \
             } \
 
         _uread( hdr,         Header,   1 );
@@ -993,12 +1001,21 @@ private:
             close( fd );
             rtn_assert( 0, "could not read file " + std::string(fname) + " - malloc() error: " + strerror( errno ) );
         }
-        if ( read( fd, start, size ) <= 0 ) {
-            close( fd );
-            rtn_assert( 0, "could not read() file " + std::string(fname) + " - read error: " + std::string( strerror( errno ) ) );
+        end = start + size;
+
+        char * addr = start;
+        while( size != 0 ) 
+        {
+            size_t _this_size = 1024*1024*1024;
+            if ( size < _this_size ) _this_size = size;
+            if ( read( fd, addr, _this_size ) <= 0 ) {
+                close( fd );
+                rtn_assert( 0, "could not read() file " + std::string(fname) + " - read error: " + std::string( strerror( errno ) ) );
+            }
+            size -= _this_size;
+            addr += _this_size;
         }
         close( fd );
-        end = start + size;
         return true;
     }
 

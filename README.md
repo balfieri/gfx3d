@@ -1,4 +1,4 @@
-# ModelReader
+# Model.h
 
 This is a single C++ Model.h file that reads in 3D models in .obj/.mtl format. It also reads in any textures that are listed in the .mtl files.
 

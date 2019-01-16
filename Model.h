@@ -67,11 +67,16 @@
 //
 // How it works:
 //
-//     1) Preallocate large virtual memory 1D arrays for materials, texels, positions, normals, vertexes, polygons
+//     1) Allocate large virtual memory 1D arrays for materials, texels, positions, normals, vertexes, polygons.
+//        These are allocated on a page boundary to make uncompressed writes faster.
+//        These arrays are dynamically resized.
 //     2) Read entire .obj file into memory (the o/s should effectively make this work like an mmap).
 //     3) Parse .obj file using custom parser that goes character-by-character and does its own number conversions. 
 //     4) Add elements to 1D arrays.  Load any .mtl file encounted in .obj file.  
 //     5) Optionally generate BVH tree.
+//     6) Write to  uncompressed file is fast because all structures are aligned on a page boundary in mem and in file.
+//     7) Read from uncompressed file is fast because all structures are aligned on a page boundary in mem and in file.
+//        The O/S will do the equivalent of an mmap() for each array.
 //
 // To Do:
 //

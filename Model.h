@@ -70,16 +70,13 @@
 //     1) Preallocate large virtual memory 1D arrays for materials, texels, positions, normals, vertexes, polygons
 //     2) Read entire .obj file into memory (the o/s should effectively make this work like an mmap).
 //     3) Parse .obj file using custom parser that goes character-by-character and does its own number conversions. 
-//     4) Add elements to 1D arrays.  Load any .mtl file encounted in .obj file.
+//     4) Add elements to 1D arrays.  Load any .mtl file encounted in .obj file.  
+//     5) Optionally generate BVH tree.
 //
 // To Do:
 //
 //     1) Support rest of .obj and .mtl commands and options.
-//     2) Support the .fbx binary format.
-//     3) This code is set up to write out everything to one binary file.
-//        There are no pointers in the data, only indexes.
-//        The best way to do it is to put everything in one mmap() region that is backed by a file.
-//        Then later mmap() in the same file to get back the same data without even touching it.
+//     2) Support the .fbx and .max binary formats.  Currently, you must find an fbx-to-obj conversion program.
 //
 #ifndef _Model_h
 #define _Model_h

@@ -110,16 +110,298 @@ public:
     class real3
     {
     public:
+        real c[3];
+        
         real3( void ) {}
         real3( real c0, real c1, real c2 ) { c[0] = c0; c[1] = c1; c[2] = c2; }
 
-        real            c[3];
+        inline real dot( const real3 &v2 ) const
+        {
+            return c[0] * v2.c[0] + c[1] * v2.c[1] + c[2] * v2.c[2];
+        }
+
+        inline real3 cross( const real3 &v2 ) const
+        {
+            return real3( (c[1]*v2.c[2]   - c[2]*v2.c[1]),
+                          (-(c[0]*v2.c[2] - c[2]*v2.c[0])),
+                          (c[0]*v2.c[1]   - c[1]*v2.c[0]) );
+        }
+
+        inline real length( void ) const
+        { 
+            return std::sqrt( c[0]*c[0] + c[1]*c[1] + c[2]*c[2] ); 
+        }
+
+        inline real length_sqr( void ) const 
+        { 
+            return c[0]*c[0] + c[1]*c[1] + c[2]*c[2];
+        }
+
+        inline real3 add( const real3& v2 ) const
+        {
+            real3 r;
+            r.c[0] = c[0] + v2.c[0];
+            r.c[1] = c[1] + v2.c[1];
+            r.c[2] = c[2] + v2.c[2];
+            return r;
+        }
+
+        inline real3 operator + ( const real3& v ) const
+        {
+            return add( v );
+        }
+
+        inline real3 sub( const real3& v2 ) const
+        {
+            real3 r;
+            r.c[0] = c[0] - v2.c[0];
+            r.c[1] = c[1] - v2.c[1];
+            r.c[2] = c[2] - v2.c[2];
+            return r;
+        }
+
+        inline real3 operator - ( const real3& v ) const
+        {
+            return sub( v );
+        }
+
+        inline real3 mul( const real3& v2 ) const
+        {
+            real3 r;
+            r.c[0] = c[0] * v2.c[0];
+            r.c[1] = c[1] * v2.c[1];
+            r.c[2] = c[2] * v2.c[2];
+            return r;
+        }
+
+        inline real3 operator * ( const real3& v ) const
+        {
+            return mul( v );
+        }
+
+        inline real3 mul( real s ) const
+        {
+            real3 r;
+            r.c[0] = c[0] * s;
+            r.c[1] = c[1] * s;
+            r.c[2] = c[2] * s;
+            return r;
+        }
+
+        inline real3 operator * ( real s ) const
+        {
+            return mul( s );
+        }
+
+        inline real3 div( const real3& v2 ) const
+        {
+            real3 r;
+            r.c[0] = c[0] / v2.c[0];
+            r.c[1] = c[1] / v2.c[1];
+            r.c[2] = c[2] / v2.c[2];
+            return r;
+        }
+
+        inline real3 operator / ( const real3& v ) const
+        {
+            return div( v );
+        }
+
+        inline real3 div( real s ) const
+        {
+            real3 r;
+            r.c[0] = c[0] / s;
+            r.c[1] = c[1] / s;
+            r.c[2] = c[2] / s;
+            return r;
+        }
+
+        inline real3 operator / ( real s ) const
+        {
+            return div( s );
+        }
+
+        inline void normalize( void )
+        {
+            *this /= length();
+        }
+
+        inline real3 normalized( void )
+        {
+            return div( length() );
+        }
+
+        inline real3& operator += ( const real3 &v2 )
+        {
+            c[0] += v2.c[0];
+            c[1] += v2.c[1];
+            c[2] += v2.c[2];
+            return *this;
+        }
+
+        inline real3& operator -= ( const real3 &v2 )
+        {
+            c[0] -= v2.c[0];
+            c[1] -= v2.c[1];
+            c[2] -= v2.c[2];
+            return *this;
+        }
+
+        inline real3& operator *= ( const real3 &v2 )
+        {
+            c[0] *= v2.c[0];
+            c[1] *= v2.c[1];
+            c[2] *= v2.c[2];
+            return *this;
+        }
+
+        inline real3& operator *= ( const real s )
+        {
+            c[0] *= s;
+            c[1] *= s;
+            c[2] *= s;
+            return *this;
+        }
+        
+        inline real3& operator /= ( const real3 &v2 )
+        {
+            c[0] /= v2.c[0];
+            c[1] /= v2.c[1];
+            c[2] /= v2.c[2];
+            return *this;
+        }
+
+        inline real3& operator /= ( const real s )
+        {
+            c[0] /= s;
+            c[1] /= s;
+            c[2] /= s;
+            return *this;
+        }
     };
 
     class real2
     {
     public:
-        real            c[2];
+        real c[2];
+
+        real2( void ) {}
+        real2( real c0, real c1 ) { c[0] = c0; c[1] = c1; }
+
+        inline real dot( const real2 &v2 ) const
+        {
+            return c[0] * v2.c[0] + c[1] * v2.c[1];
+        }
+
+        inline real length( void ) const
+        { 
+            return std::sqrt( c[0]*c[0] + c[1]*c[1] );
+        }
+
+        inline real length_sqr( void ) const 
+        { 
+            return c[0]*c[0] + c[1]*c[1];
+        }
+
+        inline real2 add( const real2& v2 ) const
+        {
+            real2 r;
+            r.c[0] = c[0] + v2.c[0];
+            r.c[1] = c[1] + v2.c[1];
+            return r;
+        }
+
+        inline real2 sub( const real2& v2 ) const
+        {
+            real2 r;
+            r.c[0] = c[0] - v2.c[0];
+            r.c[1] = c[1] - v2.c[1];
+            return r;
+        }
+
+        inline real2 mul( const real2& v2 ) const
+        {
+            real2 r;
+            r.c[0] = c[0] * v2.c[0];
+            r.c[1] = c[1] * v2.c[1];
+            return r;
+        }
+
+        inline real2 mul( real s ) const
+        {
+            real2 r;
+            r.c[0] = c[0] * s;
+            r.c[1] = c[1] * s;
+            return r;
+        }
+
+        inline real2 div( const real2& v2 ) const
+        {
+            real2 r;
+            r.c[0] = c[0] / v2.c[0];
+            r.c[1] = c[1] / v2.c[1];
+            return r;
+        }
+
+        inline real2 div( real s ) const
+        {
+            real2 r;
+            r.c[0] = c[0] / s;
+            r.c[1] = c[1] / s;
+            return r;
+        }
+
+        inline void normalize( void )
+        {
+            *this /= length();
+        }
+
+        inline real2 normalized( void )
+        {
+            return div( length() );
+        }
+
+        inline real2& operator += ( const real2 &v2 )
+        {
+            c[0] += v2.c[0];
+            c[1] += v2.c[1];
+            return *this;
+        }
+
+        inline real2& operator -= ( const real2 &v2 )
+        {
+            c[0] -= v2.c[0];
+            c[1] -= v2.c[1];
+            return *this;
+        }
+
+        inline real2& operator *= ( const real2 &v2 )
+        {
+            c[0] *= v2.c[0];
+            c[1] *= v2.c[1];
+            return *this;
+        }
+
+        inline real2& operator *= ( const real s )
+        {
+            c[0] *= s;
+            c[1] *= s;
+            return *this;
+        }
+        
+        inline real2& operator /= ( const real2 &v2 )
+        {
+            c[0] /= v2.c[0];
+            c[1] /= v2.c[1];
+            return *this;
+        }
+
+        inline real2& operator /= ( const real s )
+        {
+            c[0] /= s;
+            c[1] /= s;
+            return *this;
+        }
     };
 
     enum class MIPMAP_FILTER
@@ -162,6 +444,75 @@ public:
         uint        poly_i;                 // index of first polygon in polygons array
     };
 
+    class HitInfo
+    {
+    public:
+        uint        poly_i;
+        real        t;  
+        real        u;
+        real        v;
+        real3       p;
+        real3       normal;
+    };
+
+    class AABB                              // axis aligned bounding box
+    {
+    public:
+        real3           min;                // bounding box min
+        real3           max;                // bounding box max
+
+        inline void pad( real p ) 
+        {
+            min -= real3( p, p, p );
+            max += real3( p, p, p );
+        }
+
+        inline void expand( const AABB& other )
+        {
+            for( uint i = 0; i < 3; i++ )
+            {
+                if ( other.min.c[i] < min.c[i] ) min.c[i] = other.min.c[i];
+                if ( other.max.c[i] > max.c[i] ) max.c[i] = other.max.c[i];
+            }
+        }
+
+        inline void expand( const real3& p ) 
+        {
+            if ( p.c[0] < min.c[0] ) min.c[0] = p.c[0];
+            if ( p.c[1] < min.c[1] ) min.c[1] = p.c[1];
+            if ( p.c[2] < min.c[2] ) min.c[2] = p.c[2];
+            if ( p.c[0] > max.c[0] ) max.c[0] = p.c[0];
+            if ( p.c[1] > max.c[1] ) max.c[1] = p.c[1];
+            if ( p.c[2] > max.c[2] ) max.c[2] = p.c[2];
+        }
+
+        inline bool hit( const real3& origin, const real3& direction, real tmin, real tmax ) const 
+        {
+            for( uint a = 0; a < 3; a++ ) 
+            {
+                real dir = direction.c[a];
+                real v0 = (min.c[a] - origin.c[a]) / dir;
+                real v1 = (max.c[a] - origin.c[a]) / dir;
+                real t0 = (v0 < v1) ? v0 : v1;
+                real t1 = (v0 > v1) ? v0 : v1; 
+                if ( t0 > tmin) tmin = t0;
+                if ( t1 < tmax) tmax = t1;
+                if ( tmax <= tmin ) return false;
+            }
+            return true;
+        }
+
+        inline static AABB surrounding_box( const real3& p0, const real3& p1, const real3& p2 ) 
+        {
+            AABB box;
+            box.min = p0;
+            box.max = p0;
+            box.expand( p1 );
+            box.expand( p2 );
+            return box;
+        }  
+    };
+
     class Polygon
     {
     public:
@@ -169,7 +520,10 @@ public:
         uint        vtx_cnt;                // number of vertices
         uint        vtx_i;                  // index into vertexes array of first vertex
         real3       normal;                 // surface normal
-        real        area;                   // surface area
+        real        area;                   // surface area };
+        
+        bool bounding_box( const Model * model, AABB& box, real padding=0.00001 ) const;
+        bool hit( const Model * model, const real3& origin, const real3& direction, real t_min, real t_max, HitInfo& hit_info ) const;
     };
 
     class Vertex
@@ -210,22 +564,6 @@ public:
         uint            texel_i;            // index into texels array of first texel
     };
 
-    class AABB                              // axis aligned bounding box
-    {
-    public:
-        real3           min;                // bounding box min
-        real3           max;                // bounding box max
-
-        void expand( const AABB& other )
-        {
-            for( uint i = 0; i < 3; i++ )
-            {
-                if ( other.min.c[i] < min.c[i] ) min.c[i] = other.min.c[i];
-                if ( other.max.c[i] > max.c[i] ) max.c[i] = other.max.c[i];
-            }
-        }
-    };
-
     class BVH_Node
     {
     public:
@@ -234,6 +572,9 @@ public:
         bool            right_is_leaf;      // if true, right is a polygon
         uint            left_i;             // index into bvh_nodes or polygons array of left subtree 
         uint            right_i;            // index into bvh_nodes or polygons array of right subtree 
+
+        bool bounding_box( const Model * model, AABB& b ) const;
+        bool hit( const Model * model, const real3& origin, const real3& direction, real t_min, real t_max, HitInfo& hit_info ) const;
     };
 
     // public fields
@@ -266,17 +607,33 @@ public:
     std::map<std::string, Texture  *> name_to_tex;
 
 
+    Model( std::string dir_path, std::string obj_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE, BVH_TREE bvh_tree=BVH_TREE::NONE );
+    Model( std::string file_path, bool is_compressed=true );
+    ~Model(); 
 
-    //------------------------------------------------------------------------------
-    // IMPLEMENTATION
-    //------------------------------------------------------------------------------
+    bool write( std::string file_path, bool is_compressed=true ); 
 
+
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+//
+// IMPLEMENTATION
+//
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+private:
     #define dprint( msg )
     //#define dprint( msg ) std::cout << (msg) << "\n"
 
     // these are done as macros to avoid evaluating msg (it makes a big difference)
-    #define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; assert( false ); return false; }
-    #define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = msg; assert( false ); goto error;   }
+    #define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); assert( false ); return false; }
+    #define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); assert( false ); goto error;   }
 
     // returns array of T on a page boundary
     template<typename T>
@@ -306,271 +663,7 @@ public:
         }
     }
 
-    Model( std::string dir_path, std::string obj_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE, BVH_TREE bvh_tree=BVH_TREE::NONE )
-    {
-        is_good = false;
-        error_msg = "<unknown error>";
-        mapped_region = nullptr;
-
-        hdr = aligned_alloc<Header>( 1 );
-        memset( hdr, 0, sizeof( Header ) );
-        hdr->version = VERSION;
-        hdr->pos_cnt = 1;
-        hdr->norm_cnt = 1;
-        hdr->texcoord_cnt = 1;
-        hdr->mipmap_filter = mipmap_filter;
-        hdr->bvh_node_cnt = 0;
-        hdr->bvh_root_i = 0;
-
-        //------------------------------------------------------------
-        // Initial lengths of arrays are large in virtual memory
-        //------------------------------------------------------------
-        max = aligned_alloc<Header>( 1 );
-        max->obj_cnt     =   128*1024;
-        max->poly_cnt    =  1024*1024;
-        max->mtl_cnt     =       1024;
-
-        max->vtx_cnt     = 4*max->poly_cnt;
-        max->pos_cnt     = max->vtx_cnt;
-        max->norm_cnt    = max->vtx_cnt;
-        max->texcoord_cnt= max->vtx_cnt;
-        max->mipmap_filter= mipmap_filter;
-        max->tex_cnt     = max->mtl_cnt;
-        max->texel_cnt   = max->mtl_cnt * 128*1024;
-        max->char_cnt    = max->obj_cnt * 128;
-        max->bvh_node_cnt= max->poly_cnt / 2;
-
-        //------------------------------------------------------------
-        // Allocate arrays
-        //------------------------------------------------------------
-        objects         = aligned_alloc<Object>(   max->obj_cnt );
-        polygons        = aligned_alloc<Polygon>(  max->poly_cnt );
-        vertexes        = aligned_alloc<Vertex>(   max->vtx_cnt );
-        positions       = aligned_alloc<real3>(    max->pos_cnt );
-        normals         = aligned_alloc<real3>(    max->norm_cnt );
-        texcoords       = aligned_alloc<real2>(    max->texcoord_cnt );
-        materials       = aligned_alloc<Material>( max->mtl_cnt );
-        textures        = aligned_alloc<Texture>(  max->tex_cnt );
-        texels          = aligned_alloc<char>(     max->texel_cnt );
-        strings         = aligned_alloc<char>(     max->char_cnt );
-        bvh_nodes       = aligned_alloc<BVH_Node>( max->bvh_node_cnt );
-
-        //------------------------------------------------------------
-        // Map in .obj file
-        //------------------------------------------------------------
-        if ( !open_and_read( dir_path, obj_file, obj_start, obj_end ) ) return;
-        obj = obj_start;
-        line_num = 1;
-
-        //------------------------------------------------------------
-        // Parse .obj file contents
-        //------------------------------------------------------------
-        char *      mtllib = nullptr;
-        char *      obj_name = nullptr;
-        char *      name;
-        std::string mtl_name;
-        Material *  material = nullptr;
-        uint        mtl_i = uint(-1);
-        Object *    object = nullptr;
-        Polygon *   polygon = nullptr;
-        Vertex *    vertex = nullptr;
-
-        for( ;; ) 
-        {
-            skip_whitespace( obj, obj_end );
-            if ( obj == obj_end ) {
-                // done, no errors
-                hdr->byte_cnt = uint64_t( 1                 ) * sizeof( hdr ) +
-                                uint64_t( hdr->obj_cnt      ) * sizeof( objects[0] ) +
-                                uint64_t( hdr->poly_cnt     ) * sizeof( polygons[0] ) +
-                                uint64_t( hdr->vtx_cnt      ) * sizeof( vertexes[0] ) +
-                                uint64_t( hdr->pos_cnt      ) * sizeof( positions[0] ) +
-                                uint64_t( hdr->norm_cnt     ) * sizeof( normals[0] ) +
-                                uint64_t( hdr->texcoord_cnt ) * sizeof( texcoords[0] ) +
-                                uint64_t( hdr->mtl_cnt      ) * sizeof( materials[0] ) +
-                                uint64_t( hdr->tex_cnt      ) * sizeof( textures[0] ) +
-                                uint64_t( hdr->texel_cnt    ) * sizeof( texels[0] ) +
-                                uint64_t( hdr->char_cnt     ) * sizeof( strings[0] ) + 
-                                uint64_t( hdr->bvh_node_cnt ) * sizeof( bvh_nodes[0] );
-                is_good = true;
-                if ( bvh_tree != BVH_TREE::NONE ) bvh_build( bvh_tree );
-                return;
-            }
-
-            obj_cmd_t cmd;
-            if ( !parse_obj_cmd( cmd ) ) break;
-            dprint( "obj_cmd=" + std::to_string( cmd ) );
-
-            switch( cmd )
-            {
-                case CMD_O:
-                    perhaps_realloc<Object>( objects, hdr->obj_cnt, max->obj_cnt, 1 );
-                    object = &objects[ hdr->obj_cnt++ ];
-
-                    if ( !parse_name( obj_name, obj, obj_end ) ) goto error;
-                    object->name_i = obj_name - strings;
-                    object->poly_cnt = 0;
-                    object->poly_i = hdr->poly_cnt;
-                    break;
-                    
-                case CMD_G:
-                    if ( !parse_name( name, obj, obj_end ) ) goto error;
-                    break;
-                    
-                case CMD_V:
-                    perhaps_realloc<real3>( positions, hdr->pos_cnt, max->pos_cnt, 1 );
-                    if ( !parse_real3( positions[ hdr->pos_cnt++ ], obj, obj_end ) ) goto error;
-                    break;
-                    
-                case CMD_VN:
-                    perhaps_realloc<real3>( normals, hdr->norm_cnt, max->norm_cnt, 1 );
-                    if ( !parse_real3( normals[ hdr->norm_cnt++ ], obj, obj_end ) ) goto error;
-                    break;
-                    
-                case CMD_VT:
-                    perhaps_realloc<real2>( texcoords, hdr->texcoord_cnt, max->texcoord_cnt, 1 );
-                    if ( !parse_real2( texcoords[ hdr->texcoord_cnt++ ], obj, obj_end ) ) goto error;
-                    break;
-                    
-                case CMD_F:
-                {
-                    perhaps_realloc<Polygon>( polygons, hdr->poly_cnt, max->poly_cnt, 1 );
-                    polygon = &polygons[ hdr->poly_cnt++ ];
-                    polygon->mtl_i = mtl_i;
-                    polygon->vtx_cnt = 0;
-                    polygon->vtx_i = hdr->vtx_cnt;
-                    while( !eol( obj, obj_end ) ) 
-                    {
-                        polygon->vtx_cnt++;
-                        perhaps_realloc<Vertex>( vertexes, hdr->vtx_cnt, max->vtx_cnt, 1 );
-                        vertex = &vertexes[ hdr->vtx_cnt++ ];
-
-                        int v_i;
-                        if ( !parse_int( v_i, obj, obj_end ) )   goto error;
-                        dprint( "v_i=" + std::to_string( v_i ) );
-                        vertex->v_i = (v_i >= 0)  ? v_i : (hdr->pos_cnt + v_i);
-
-                        if ( !expect_char( '/', obj, obj_end ) ) goto error;
-
-                        int vt_i;
-                        if ( obj != obj_end && *obj == '/' ) {
-                            vt_i = 0;
-                        } else {
-                            if ( !parse_int( vt_i, obj, obj_end ) ) goto error;
-                        }
-                        dprint( "vt_i=" + std::to_string( vt_i ) );
-                        vertex->vt_i = (vt_i >= 0) ? vt_i : ((int)hdr->texcoord_cnt + vt_i);
-
-                        int vn_i;
-                        if ( !expect_char( '/', obj, obj_end ) ) goto error;
-                        if ( !parse_int( vn_i, obj, obj_end ) )  goto error ;
-                        dprint( "vn_i=" + std::to_string( vn_i ) );
-                        vertex->vn_i = (vn_i >= 0) ? vn_i : (hdr->norm_cnt + vn_i);
-
-                    }
-                    obj_assert( polygon->vtx_cnt != 0, ".obj f command has no vertices" );
-                    if ( object != nullptr ) object->poly_cnt++;
-
-                    // precompute surface normal and area (works for triangle only)
-                    Vertex * pvertexes = &vertexes[polygon->vtx_i];
-                    real3 p0( positions[pvertexes[0].v_i].c[0], positions[pvertexes[0].v_i].c[1], positions[pvertexes[0].v_i].c[2] );
-                    real3 p1( positions[pvertexes[1].v_i].c[0], positions[pvertexes[1].v_i].c[1], positions[pvertexes[1].v_i].c[2] );
-                    real3 p2( positions[pvertexes[2].v_i].c[0], positions[pvertexes[2].v_i].c[1], positions[pvertexes[2].v_i].c[2] );
-                    polygon->normal = cross( sub( p1, p0 ), sub( p2, p0 ) );
-                    real len = length( polygon->normal );
-                    polygon->area = len / 2;
-                    div( polygon->normal, len );
-                    break;
-                }
-
-                case CMD_MTLLIB:
-                    if ( !parse_name( mtllib, obj, obj_end ) ) goto error;
-                    if ( !mtllib_load( dir_path, mtllib ) ) goto error;
-                    break;
-                    
-                case CMD_USEMTL:
-                    obj_assert( mtllib != nullptr, "no mtllib defined for object " + std::string( obj_name ) );
-                    if ( !parse_name( name, obj, obj_end ) ) goto error;
-                    mtl_name = std::string( name );
-                    obj_assert( name_to_mtl.find( mtl_name ) != name_to_mtl.end(), "unknown material: " + std::string( mtl_name ) );
-                    material = name_to_mtl[mtl_name];
-                    mtl_i = material - materials;
-                    break;
-
-                default:
-                    break;
-            }
-        }
-
-    error:
-        error_msg += " (at line " + std::to_string( line_num ) + " of " + obj_file + ")";
-        assert( 0 );
-    }
-
-    ~Model() 
-    {
-        if ( mapped_region != nullptr ) {
-            delete mapped_region;
-            mapped_region = nullptr;
-        } else {
-            delete objects;
-            delete polygons;
-            delete vertexes;
-            delete positions;
-            delete normals;
-            delete texcoords;
-            delete materials;
-            delete textures;
-            delete texels;
-            delete strings;
-            delete bvh_nodes;
-        }
-    }
-
-    bool write( std::string file_path, bool is_compressed=true ) 
-    {
-        if ( !is_compressed ) return write_uncompressed( file_path );
-
-        gzFile fd = gzopen( file_path.c_str(), "w" );
-        rtn_assert( fd != Z_NULL, "could not gzopen() file " + file_path + " for writing - gzopen() error: " + strerror( errno ) );
-
-        //------------------------------------------------------------
-        // Write out header than individual arrays.
-        //------------------------------------------------------------
-        #define _write( addr, byte_cnt ) \
-        { \
-            char * _addr = reinterpret_cast<char *>( addr ); \
-            for( uint _byte_cnt = byte_cnt; _byte_cnt != 0;  ) \
-            { \
-                uint _this_byte_cnt = 1024*1024*1024; \
-                if ( _byte_cnt < _this_byte_cnt ) _this_byte_cnt = _byte_cnt; \
-                if ( gzwrite( fd, _addr, _this_byte_cnt ) <= 0 ) { \
-                    gzclose( fd ); \
-                    rtn_assert( 0, "could not gzwrite() file " + file_path + " - gzwrite() error: " + strerror( errno ) ); \
-                } \
-                _byte_cnt -= _this_byte_cnt; \
-                _addr     += _this_byte_cnt; \
-            } \
-        } \
-
-        _write( hdr,         1                 * sizeof(hdr[0]) );
-        _write( objects,     hdr->obj_cnt      * sizeof(objects[0]) );
-        _write( polygons,    hdr->poly_cnt     * sizeof(polygons[0]) );
-        _write( vertexes,    hdr->vtx_cnt      * sizeof(vertexes[0]) );
-        _write( positions,   hdr->pos_cnt      * sizeof(positions[0]) );
-        _write( normals,     hdr->norm_cnt     * sizeof(normals[0]) );
-        _write( texcoords,   hdr->texcoord_cnt * sizeof(texcoords[0]) );
-        _write( materials,   hdr->mtl_cnt      * sizeof(materials[0]) );
-        _write( textures,    hdr->tex_cnt      * sizeof(textures[0]) );
-        _write( texels,      hdr->texel_cnt    * sizeof(texels[0]) );
-        _write( strings,     hdr->char_cnt     * sizeof(strings[0]) );
-        _write( bvh_nodes,   hdr->bvh_node_cnt * sizeof(bvh_nodes[0]) );
-
-        gzclose( fd );
-        return true;
-    }
-
-    bool write_uncompressed( std::string file_path )
+    bool write_uncompressed( std::string file_path ) 
     {
         int fd = open( file_path.c_str(), O_WRONLY );
         rtn_assert( fd >= 0, "could not open() file " + file_path + " for writing - open() error: " + strerror( errno ) );
@@ -614,77 +707,6 @@ public:
 
         close( fd );
         return true;
-    }
-
-    Model( std::string file_path, bool is_compressed=true )
-    {
-        is_good = false;
-        mapped_region = nullptr;
-        if ( !is_compressed ) {
-            read_uncompressed( file_path );
-            return;
-        }
-
-        gzFile fd = gzopen( file_path.c_str(), "r" );
-        if ( fd == Z_NULL ) {
-            "Could not gzopen() file " + file_path + " for reading - gzopen() error: " + strerror( errno );
-            return;
-        }
-
-        //------------------------------------------------------------
-        // Write out header than individual arrays.
-        //------------------------------------------------------------
-        #define _read( array, type, cnt ) \
-            if ( cnt == 0 ) { \
-                array = nullptr; \
-            } else { \
-                array = aligned_alloc<type>( cnt ); \
-                if ( array == nullptr ) { \
-                    gzclose( fd ); \
-                    error_msg = "could not allocate " #array " array"; \
-                    assert( 0 ); \
-                    return; \
-                } \
-                char * _addr = reinterpret_cast<char *>( array ); \
-                for( uint _byte_cnt = (cnt)*sizeof(type); _byte_cnt != 0;  ) \
-                { \
-                    uint _this_byte_cnt = 1024*1024*1024; \
-                    if ( _byte_cnt < _this_byte_cnt ) _this_byte_cnt = _byte_cnt; \
-                    if ( gzread( fd, _addr, _this_byte_cnt ) <= 0 ) { \
-                        gzclose( fd ); \
-                        error_msg = "could not gzread() file " + file_path + " - gzread() error: " + strerror( errno ); \
-                        assert( 0 ); \
-                        return; \
-                    } \
-                    _byte_cnt -= _this_byte_cnt; \
-                    _addr     += _this_byte_cnt; \
-                } \
-            } \
-
-        _read( hdr,         Header,   1 );
-        if ( hdr->version != VERSION ) {
-            gzclose( fd );
-            error_msg = "hdr->version does not match VERSION";
-            assert( 0 ); \
-            return;
-        }
-        max = aligned_alloc<Header>( 1 );
-        memcpy( max, hdr, sizeof( Header ) );
-        _read( objects,     Object,   hdr->obj_cnt );
-        _read( polygons,    Polygon,  hdr->poly_cnt );
-        _read( vertexes,    Vertex,   hdr->vtx_cnt );
-        _read( positions,   real3,    hdr->pos_cnt );
-        _read( normals,     real3,    hdr->norm_cnt );
-        _read( texcoords,   real2,    hdr->texcoord_cnt );
-        _read( materials,   Material, hdr->mtl_cnt );
-        _read( textures,    Texture,  hdr->tex_cnt );
-        _read( texels,      char,     hdr->texel_cnt );
-        _read( strings,     char,     hdr->char_cnt );
-        _read( bvh_nodes,   BVH_Node, hdr->bvh_node_cnt );
-
-        gzclose( fd );
-
-        is_good = true;
     }
 
     bool read_uncompressed( std::string file_path )
@@ -734,7 +756,6 @@ public:
         return true;
     }
 
-private:
     typedef enum 
     {
         CMD_O,
@@ -1063,7 +1084,7 @@ private:
         {
             size_t _this_size = 1024*1024*1024;
             if ( size < _this_size ) _this_size = size;
-            if ( read( fd, addr, _this_size ) <= 0 ) {
+            if ( ::read( fd, addr, _this_size ) <= 0 ) {
                 close( fd );
                 rtn_assert( 0, "could not read() file " + std::string(fname) + " - read error: " + std::string( strerror( errno ) ) );
             }
@@ -1506,72 +1527,10 @@ private:
         return true;
     }
 
-    inline real dot( const real3 &v1, const real3 &v2 ) 
-    {
-        return v1.c[0] *v2.c[0] + v1.c[1] *v2.c[1]  + v1.c[2] *v2.c[2];
-    }
-
-    inline real3 cross( const real3 &v1, const real3 &v2 ) 
-    {
-        return real3( (v1.c[1]*v2.c[2] - v1.c[2]*v2.c[1]),
-                      (-(v1.c[0]*v2.c[2] - v1.c[2]*v2.c[0])),
-                      (v1.c[0]*v2.c[1] - v1.c[1]*v2.c[0]) );
-    }
-
-    inline real length( const real3& v ) const 
-    { 
-        return std::sqrt( v.c[0]*v.c[0] + v.c[1]*v.c[1] + v.c[2]*v.c[2] ); 
-    }
-
-    inline real3 add( const real3& v1, const real3& v2 )
-    {
-        real3 r;
-        r.c[0] = v1.c[0] + v2.c[0];
-        r.c[1] = v1.c[1] + v2.c[1];
-        r.c[2] = v1.c[2] + v2.c[2];
-        return r;
-    }
-
-    inline real3 sub( const real3& v1, const real3& v2 )
-    {
-        real3 r;
-        r.c[0] = v1.c[0] - v2.c[0];
-        r.c[1] = v1.c[1] - v2.c[1];
-        r.c[2] = v1.c[2] - v2.c[2];
-        return r;
-    }
-
-    inline void div( real3& v, real denom ) 
-    {
-        v.c[0] /= denom;
-        v.c[1] /= denom;
-        v.c[2] /= denom;
-    }
-
     void bvh_build( BVH_TREE bvh_tree )
     {
         (void)bvh_tree;
         hdr->bvh_root_i = bvh_node( 0, hdr->poly_cnt, 1 );
-    }
-
-    void poly_bounding_box( uint poly_i, AABB& box )
-    {
-        const Polygon& poly = polygons[poly_i];
-        for( uint i = 0; i < poly.vtx_cnt; i++ )
-        {
-            const Vertex& vtx = vertexes[poly.vtx_i+i];
-            const real3&  pos = positions[vtx.v_i];
-            if ( i == 0 ) {
-                box.min = pos;
-                box.max = pos;
-            } else {
-                for( uint j = 0; j < 3; j++ )
-                {
-                    if ( pos.c[j] < box.min.c[j] ) box.min.c[j] = pos.c[j];
-                    if ( pos.c[j] > box.max.c[j] ) box.max.c[j] = pos.c[j];
-                }
-            }
-        }
     }
 
     inline uint bvh_qsplit( uint poly_i, uint n, real pivot, uint axis )
@@ -1581,7 +1540,7 @@ private:
        for( uint i = poly_i; i < (poly_i+n); i++ )
        {
            AABB box;
-           poly_bounding_box( i, box );
+           polygons[i].bounding_box( this, box );
            real centroid = (box.min.c[axis] + box.max.c[axis]) * 0.5;
            if ( centroid < pivot ) {
                Polygon temp = polygons[i];
@@ -1609,10 +1568,10 @@ private:
             node->right_is_leaf = true;
             node->left_i  = poly_i;
             node->right_i = poly_i + n-1;
-            poly_bounding_box( poly_i, node->box );
+            polygons[poly_i].bounding_box( this, node->box );
             if ( n == 2 ) {
                 AABB new_box;
-                poly_bounding_box( poly_i+1, new_box );
+                polygons[poly_i].bounding_box( this, new_box );
                 node->box.expand( new_box );
             }
 
@@ -1624,16 +1583,479 @@ private:
             uint nm = m - poly_i;
             uint left_i  = bvh_node( poly_i, nm,   (axis + 1) % 3 );
             uint right_i = bvh_node(      m, n-nm, (axis + 1) % 3 );
+            assert( left_i > bvh_i );
+            assert( right_i > bvh_i );
             node = &bvh_nodes[bvh_i];  // could change after previous calls
             node->left_i  = left_i;
             node->right_i = right_i;
 
-            node->box = bvh_nodes[node->left_i].box;
-            node->box.expand( bvh_nodes[node->right_i].box );
+            node->box = bvh_nodes[left_i].box;
+            node->box.expand( bvh_nodes[right_i].box );
         }
 
         return bvh_i;
     }
 };
+
+inline std::istream& operator >> ( std::istream& is, Model::real3& v ) 
+{
+    is >> v.c[0] >> v.c[1] >> v.c[2];
+    return is;
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::real3& v ) 
+{
+    os << "[" << v.c[0] << "," << v.c[1] << "," << v.c[2] << "]";
+    return os;
+}
+
+inline Model::real3 operator * ( Model::real s, const Model::real3& v ) 
+{
+    return Model::real3( s*v.c[0], s*v.c[1], s*v.c[2] );
+}
+
+Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER mipmap_filter, Model::BVH_TREE bvh_tree )
+{
+    is_good = false;
+    error_msg = "<unknown error>";
+    mapped_region = nullptr;
+
+    hdr = aligned_alloc<Header>( 1 );
+    memset( hdr, 0, sizeof( Header ) );
+    hdr->version = VERSION;
+    hdr->pos_cnt = 1;
+    hdr->norm_cnt = 1;
+    hdr->texcoord_cnt = 1;
+    hdr->mipmap_filter = mipmap_filter;
+    hdr->bvh_node_cnt = 0;
+    hdr->bvh_root_i = 0;
+
+    //------------------------------------------------------------
+    // Initial lengths of arrays are large in virtual memory
+    //------------------------------------------------------------
+    max = aligned_alloc<Header>( 1 );
+    max->obj_cnt     =   128*1024;
+    max->poly_cnt    =  1024*1024;
+    max->mtl_cnt     =       1024;
+
+    max->vtx_cnt     = 4*max->poly_cnt;
+    max->pos_cnt     = max->vtx_cnt;
+    max->norm_cnt    = max->vtx_cnt;
+    max->texcoord_cnt= max->vtx_cnt;
+    max->mipmap_filter= mipmap_filter;
+    max->tex_cnt     = max->mtl_cnt;
+    max->texel_cnt   = max->mtl_cnt * 128*1024;
+    max->char_cnt    = max->obj_cnt * 128;
+    max->bvh_node_cnt= max->poly_cnt / 2;
+
+    //------------------------------------------------------------
+    // Allocate arrays
+    //------------------------------------------------------------
+    objects         = aligned_alloc<Object>(   max->obj_cnt );
+    polygons        = aligned_alloc<Polygon>(  max->poly_cnt );
+    vertexes        = aligned_alloc<Vertex>(   max->vtx_cnt );
+    positions       = aligned_alloc<real3>(    max->pos_cnt );
+    normals         = aligned_alloc<real3>(    max->norm_cnt );
+    texcoords       = aligned_alloc<real2>(    max->texcoord_cnt );
+    materials       = aligned_alloc<Material>( max->mtl_cnt );
+    textures        = aligned_alloc<Texture>(  max->tex_cnt );
+    texels          = aligned_alloc<char>(     max->texel_cnt );
+    strings         = aligned_alloc<char>(     max->char_cnt );
+    bvh_nodes       = aligned_alloc<BVH_Node>( max->bvh_node_cnt );
+
+    //------------------------------------------------------------
+    // Map in .obj file
+    //------------------------------------------------------------
+    if ( !open_and_read( dir_path, obj_file, obj_start, obj_end ) ) return;
+    obj = obj_start;
+    line_num = 1;
+
+    //------------------------------------------------------------
+    // Parse .obj file contents
+    //------------------------------------------------------------
+    char *      mtllib = nullptr;
+    char *      obj_name = nullptr;
+    char *      name;
+    std::string mtl_name;
+    Material *  material = nullptr;
+    uint        mtl_i = uint(-1);
+    Object *    object = nullptr;
+    Polygon *   polygon = nullptr;
+    Vertex *    vertex = nullptr;
+
+    for( ;; ) 
+    {
+        skip_whitespace( obj, obj_end );
+        if ( obj == obj_end ) {
+            // done, no errors
+            hdr->byte_cnt = uint64_t( 1                 ) * sizeof( hdr ) +
+                            uint64_t( hdr->obj_cnt      ) * sizeof( objects[0] ) +
+                            uint64_t( hdr->poly_cnt     ) * sizeof( polygons[0] ) +
+                            uint64_t( hdr->vtx_cnt      ) * sizeof( vertexes[0] ) +
+                            uint64_t( hdr->pos_cnt      ) * sizeof( positions[0] ) +
+                            uint64_t( hdr->norm_cnt     ) * sizeof( normals[0] ) +
+                            uint64_t( hdr->texcoord_cnt ) * sizeof( texcoords[0] ) +
+                            uint64_t( hdr->mtl_cnt      ) * sizeof( materials[0] ) +
+                            uint64_t( hdr->tex_cnt      ) * sizeof( textures[0] ) +
+                            uint64_t( hdr->texel_cnt    ) * sizeof( texels[0] ) +
+                            uint64_t( hdr->char_cnt     ) * sizeof( strings[0] ) + 
+                            uint64_t( hdr->bvh_node_cnt ) * sizeof( bvh_nodes[0] );
+            is_good = true;
+            if ( bvh_tree != BVH_TREE::NONE ) bvh_build( bvh_tree );
+            return;
+        }
+
+        obj_cmd_t cmd;
+        if ( !parse_obj_cmd( cmd ) ) break;
+        dprint( "obj_cmd=" + std::to_string( cmd ) );
+
+        switch( cmd )
+        {
+            case CMD_O:
+                perhaps_realloc<Object>( objects, hdr->obj_cnt, max->obj_cnt, 1 );
+                object = &objects[ hdr->obj_cnt++ ];
+
+                if ( !parse_name( obj_name, obj, obj_end ) ) goto error;
+                object->name_i = obj_name - strings;
+                object->poly_cnt = 0;
+                object->poly_i = hdr->poly_cnt;
+                break;
+                
+            case CMD_G:
+                if ( !parse_name( name, obj, obj_end ) ) goto error;
+                break;
+                
+            case CMD_V:
+                perhaps_realloc<real3>( positions, hdr->pos_cnt, max->pos_cnt, 1 );
+                if ( !parse_real3( positions[ hdr->pos_cnt++ ], obj, obj_end ) ) goto error;
+                break;
+                
+            case CMD_VN:
+                perhaps_realloc<real3>( normals, hdr->norm_cnt, max->norm_cnt, 1 );
+                if ( !parse_real3( normals[ hdr->norm_cnt++ ], obj, obj_end ) ) goto error;
+                break;
+                
+            case CMD_VT:
+                perhaps_realloc<real2>( texcoords, hdr->texcoord_cnt, max->texcoord_cnt, 1 );
+                if ( !parse_real2( texcoords[ hdr->texcoord_cnt++ ], obj, obj_end ) ) goto error;
+                break;
+                
+            case CMD_F:
+            {
+                perhaps_realloc<Polygon>( polygons, hdr->poly_cnt, max->poly_cnt, 1 );
+                polygon = &polygons[ hdr->poly_cnt++ ];
+                polygon->mtl_i = mtl_i;
+                polygon->vtx_cnt = 0;
+                polygon->vtx_i = hdr->vtx_cnt;
+                while( !eol( obj, obj_end ) ) 
+                {
+                    polygon->vtx_cnt++;
+                    perhaps_realloc<Vertex>( vertexes, hdr->vtx_cnt, max->vtx_cnt, 1 );
+                    vertex = &vertexes[ hdr->vtx_cnt++ ];
+
+                    int v_i;
+                    if ( !parse_int( v_i, obj, obj_end ) )   goto error;
+                    dprint( "v_i=" + std::to_string( v_i ) );
+                    vertex->v_i = (v_i >= 0)  ? v_i : (hdr->pos_cnt + v_i);
+
+                    if ( !expect_char( '/', obj, obj_end ) ) goto error;
+
+                    int vt_i;
+                    if ( obj != obj_end && *obj == '/' ) {
+                        vt_i = 0;
+                    } else {
+                        if ( !parse_int( vt_i, obj, obj_end ) ) goto error;
+                    }
+                    dprint( "vt_i=" + std::to_string( vt_i ) );
+                    vertex->vt_i = (vt_i >= 0) ? vt_i : ((int)hdr->texcoord_cnt + vt_i);
+
+                    int vn_i;
+                    if ( !expect_char( '/', obj, obj_end ) ) goto error;
+                    if ( !parse_int( vn_i, obj, obj_end ) )  goto error ;
+                    dprint( "vn_i=" + std::to_string( vn_i ) );
+                    vertex->vn_i = (vn_i >= 0) ? vn_i : (hdr->norm_cnt + vn_i);
+
+                }
+                obj_assert( polygon->vtx_cnt != 0, ".obj f command has no vertices" );
+                if ( object != nullptr ) object->poly_cnt++;
+
+                // precompute surface normal and area (works for triangle only)
+                Vertex * pvertexes = &vertexes[polygon->vtx_i];
+                real3 p0( positions[pvertexes[0].v_i].c[0], positions[pvertexes[0].v_i].c[1], positions[pvertexes[0].v_i].c[2] );
+                real3 p1( positions[pvertexes[1].v_i].c[0], positions[pvertexes[1].v_i].c[1], positions[pvertexes[1].v_i].c[2] );
+                real3 p2( positions[pvertexes[2].v_i].c[0], positions[pvertexes[2].v_i].c[1], positions[pvertexes[2].v_i].c[2] );
+                polygon->normal = (p1 - p0).cross( p2 - p0 );
+                real len = polygon->normal.length();
+                polygon->area = len / 2;
+                polygon->normal = polygon->normal / len;
+                break;
+            }
+
+            case CMD_MTLLIB:
+                if ( !parse_name( mtllib, obj, obj_end ) ) goto error;
+                if ( !mtllib_load( dir_path, mtllib ) ) goto error;
+                break;
+                
+            case CMD_USEMTL:
+                obj_assert( mtllib != nullptr, "no mtllib defined for object " + std::string( obj_name ) );
+                if ( !parse_name( name, obj, obj_end ) ) goto error;
+                mtl_name = std::string( name );
+                obj_assert( name_to_mtl.find( mtl_name ) != name_to_mtl.end(), "unknown material: " + std::string( mtl_name ) );
+                material = name_to_mtl[mtl_name];
+                mtl_i = material - materials;
+                break;
+
+            default:
+                break;
+        }
+    }
+    error:
+        error_msg += " (at line " + std::to_string( line_num ) + " of " + obj_file + ")";
+        assert( 0 );
+}
+
+Model::Model( std::string file_path, bool is_compressed )
+{
+    is_good = false;
+    mapped_region = nullptr;
+    if ( !is_compressed ) {
+        read_uncompressed( file_path );
+        return;
+    }
+
+    gzFile fd = gzopen( file_path.c_str(), "r" );
+    if ( fd == Z_NULL ) {
+        "Could not gzopen() file " + file_path + " for reading - gzopen() error: " + strerror( errno );
+        return;
+    }
+
+    //------------------------------------------------------------
+    // Write out header than individual arrays.
+    //------------------------------------------------------------
+    #define _read( array, type, cnt ) \
+        if ( cnt == 0 ) { \
+            array = nullptr; \
+        } else { \
+            array = aligned_alloc<type>( cnt ); \
+            if ( array == nullptr ) { \
+                gzclose( fd ); \
+                error_msg = "could not allocate " #array " array"; \
+                assert( 0 ); \
+                return; \
+            } \
+            char * _addr = reinterpret_cast<char *>( array ); \
+            for( uint _byte_cnt = (cnt)*sizeof(type); _byte_cnt != 0;  ) \
+            { \
+                uint _this_byte_cnt = 1024*1024*1024; \
+                if ( _byte_cnt < _this_byte_cnt ) _this_byte_cnt = _byte_cnt; \
+                if ( gzread( fd, _addr, _this_byte_cnt ) <= 0 ) { \
+                    gzclose( fd ); \
+                    error_msg = "could not gzread() file " + file_path + " - gzread() error: " + strerror( errno ); \
+                    assert( 0 ); \
+                    return; \
+                } \
+                _byte_cnt -= _this_byte_cnt; \
+                _addr     += _this_byte_cnt; \
+            } \
+        } \
+
+    _read( hdr,         Header,   1 );
+    if ( hdr->version != VERSION ) {
+        gzclose( fd );
+        error_msg = "hdr->version does not match VERSION";
+        assert( 0 ); \
+        return;
+    }
+    max = aligned_alloc<Header>( 1 );
+    memcpy( max, hdr, sizeof( Header ) );
+    _read( objects,     Object,   hdr->obj_cnt );
+    _read( polygons,    Polygon,  hdr->poly_cnt );
+    _read( vertexes,    Vertex,   hdr->vtx_cnt );
+    _read( positions,   real3,    hdr->pos_cnt );
+    _read( normals,     real3,    hdr->norm_cnt );
+    _read( texcoords,   real2,    hdr->texcoord_cnt );
+    _read( materials,   Material, hdr->mtl_cnt );
+    _read( textures,    Texture,  hdr->tex_cnt );
+    _read( texels,      char,     hdr->texel_cnt );
+    _read( strings,     char,     hdr->char_cnt );
+    _read( bvh_nodes,   BVH_Node, hdr->bvh_node_cnt );
+
+    gzclose( fd );
+
+    is_good = true;
+}
+
+Model::~Model()
+{
+    if ( mapped_region != nullptr ) {
+        delete mapped_region;
+        mapped_region = nullptr;
+    } else {
+        delete objects;
+        delete polygons;
+        delete vertexes;
+        delete positions;
+        delete normals;
+        delete texcoords;
+        delete materials;
+        delete textures;
+        delete texels;
+        delete strings;
+        delete bvh_nodes;
+    }
+}
+
+bool Model::write( std::string file_path, bool is_compressed ) 
+{
+    if ( !is_compressed ) return write_uncompressed( file_path );
+
+    gzFile fd = gzopen( file_path.c_str(), "w" );
+    rtn_assert( fd != Z_NULL, "could not gzopen() file " + file_path + " for writing - gzopen() error: " + strerror( errno ) );
+
+    //------------------------------------------------------------
+    // Write out header than individual arrays.
+    //------------------------------------------------------------
+    #define _write( addr, byte_cnt ) \
+    { \
+        char * _addr = reinterpret_cast<char *>( addr ); \
+        for( uint _byte_cnt = byte_cnt; _byte_cnt != 0;  ) \
+        { \
+            uint _this_byte_cnt = 1024*1024*1024; \
+            if ( _byte_cnt < _this_byte_cnt ) _this_byte_cnt = _byte_cnt; \
+            if ( gzwrite( fd, _addr, _this_byte_cnt ) <= 0 ) { \
+                gzclose( fd ); \
+                rtn_assert( 0, "could not gzwrite() file " + file_path + " - gzwrite() error: " + strerror( errno ) ); \
+            } \
+            _byte_cnt -= _this_byte_cnt; \
+            _addr     += _this_byte_cnt; \
+        } \
+    } \
+
+    _write( hdr,         1                 * sizeof(hdr[0]) );
+    _write( objects,     hdr->obj_cnt      * sizeof(objects[0]) );
+    _write( polygons,    hdr->poly_cnt     * sizeof(polygons[0]) );
+    _write( vertexes,    hdr->vtx_cnt      * sizeof(vertexes[0]) );
+    _write( positions,   hdr->pos_cnt      * sizeof(positions[0]) );
+    _write( normals,     hdr->norm_cnt     * sizeof(normals[0]) );
+    _write( texcoords,   hdr->texcoord_cnt * sizeof(texcoords[0]) );
+    _write( materials,   hdr->mtl_cnt      * sizeof(materials[0]) );
+    _write( textures,    hdr->tex_cnt      * sizeof(textures[0]) );
+    _write( texels,      hdr->texel_cnt    * sizeof(texels[0]) );
+    _write( strings,     hdr->char_cnt     * sizeof(strings[0]) );
+    _write( bvh_nodes,   hdr->bvh_node_cnt * sizeof(bvh_nodes[0]) );
+
+    gzclose( fd );
+    return true;
+}
+
+inline bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, real t_min, real t_max, 
+                                 HitInfo& hit_info ) const
+{
+    if ( vtx_cnt == 3 ) {
+        // triangle - this code comes originally from Peter Shirley
+        const Vertex * vertexes = &model->vertexes[vtx_i];
+        const real3 * positions = model->positions;
+        const real3& p0 = positions[vertexes[0].v_i];
+
+        // plane equation (p - corner) dot N = 0
+        // (o + t*v - corner) dot N = 0
+        // t*dot(v,N) = (corner-o) dot N
+        // t = dot(corner - o, N) / dot(v,N)
+        real d = direction.dot( normal );
+        real t = (p0 - origin).dot( normal ) / d;
+        if ( t > t_min && t < t_max ) {
+             // compute barycentrics, see if it's in triangle
+             const real3& p1 = positions[vertexes[1].v_i];
+             const real3& p2 = positions[vertexes[2].v_i];
+             const real3 p = origin + direction*t;
+             // careful about order!
+             const real3 p_m_p0  = p  - p0;
+             const real3 p1_m_p0 = p1 - p0;
+             const real3 p2_m_p0 = p2 - p0;
+             real area1 = p1_m_p0.cross( p_m_p0 ).dot( normal );
+             real area2 = p_m_p0.cross( p2_m_p0 ).dot( normal );
+             real area_2x = area * 2.0;
+             real beta    = area1/area_2x;
+             real gamma   = area2/area_2x;
+             if ( beta >= 0.0 && gamma >= 0.0 && (beta + gamma) <= 1.0 ) {
+                const real3 * normals   = model->normals;
+                const real2 * texcoords = model->texcoords;
+                const real3& n0 = normals[vertexes[0].vn_i];
+                const real3& n1 = normals[vertexes[1].vn_i];
+                const real3& n2 = normals[vertexes[2].vn_i];
+                real u0 = texcoords[vertexes[0].vt_i].c[0];
+                real u1 = texcoords[vertexes[1].vt_i].c[0];
+                real u2 = texcoords[vertexes[2].vt_i].c[0];
+                real v0 = texcoords[vertexes[0].vt_i].c[1];
+                real v1 = texcoords[vertexes[1].vt_i].c[1];
+                real v2 = texcoords[vertexes[2].vt_i].c[1];
+
+                real alpha = 1.0 - beta - gamma;
+                hit_info.poly_i = this - model->polygons;
+                hit_info.t = t;
+                hit_info.normal = n0*alpha + n1*beta + n2*gamma;
+                hit_info.normal.normalize();
+                hit_info.p = p;
+                hit_info.u = alpha*u0 + beta*u1 + gamma*u2 ;
+                hit_info.v = alpha*v0 + beta*v1 + gamma*v2 ;
+                return true;
+             }
+        }
+    }
+    return false;
+}
+
+bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real padding ) const 
+{
+    if ( vtx_cnt >= 3 ) {
+        Vertex * vertexes  = &model->vertexes[vtx_i];
+        real3  * positions = model->positions;
+        const real3& p0 = positions[vertexes[0].v_i];
+        const real3& p1 = positions[vertexes[1].v_i];
+        const real3& p2 = positions[vertexes[2].v_i];
+        box = AABB::surrounding_box( p0, p1, p2 );
+        box.pad( padding );
+        return true;
+    } else {
+        return false;
+    }
+}
+
+inline bool Model::BVH_Node::bounding_box( const Model * model, Model::AABB& b ) const
+{
+    (void)model;
+    b = box;
+    return true;
+}
+
+inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origin, const Model::real3& direction, 
+                                  Model::real t_min, Model::real t_max, Model::HitInfo& hit_info ) const
+{
+    uint bvh_i = this - model->bvh_nodes;
+    assert( bvh_i < model->hdr->bvh_node_cnt );
+    if ( box.hit( origin, direction, t_min, t_max ) ) {
+        HitInfo left_hit_info;
+        HitInfo right_hit_info;
+        assert( left_is_leaf == right_is_leaf );
+        assert( left_is_leaf   || (left_i  > bvh_i && left_i  < model->hdr->bvh_node_cnt) );
+        assert( right_is_leaf  || (right_i > bvh_i && right_i < model->hdr->bvh_node_cnt) );
+        assert( !left_is_leaf  || left_i   < model->hdr->poly_cnt );
+        assert( !right_is_leaf || right_i  < model->hdr->poly_cnt );
+        bool hit_left  = left_is_leaf  ? model->polygons[left_i].hit(   model, origin, direction, t_min, t_max, left_hit_info ) 
+                                       : model->bvh_nodes[left_i].hit(  model, origin, direction, t_min, t_max, left_hit_info );
+        bool hit_right = right_is_leaf ? model->polygons[right_i].hit(  model, origin, direction, t_min, t_max, right_hit_info ) 
+                                       : model->bvh_nodes[right_i].hit( model, origin, direction, t_min, t_max, right_hit_info );
+        bool r = false;
+        if ( hit_left && (!hit_right || left_hit_info.t < right_hit_info.t) ) {
+            hit_info = left_hit_info;
+            r = true;
+        } else if ( hit_right ) {
+            hit_info = right_hit_info;
+            r = true;
+        }
+        return r;
+    }
+    return false;
+}
 
 #endif

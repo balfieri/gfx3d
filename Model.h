@@ -1563,16 +1563,22 @@ private:
         uint bvh_i = hdr->bvh_node_cnt++;
         BVH_Node * node = &bvh_nodes[bvh_i];
 
+        polygons[poly_i].bounding_box( this, node->box );
+        for( uint i = 1; i < n; i++ )
+        {
+            AABB new_box;
+            polygons[poly_i+i].bounding_box( this, new_box );
+            node->box.expand( new_box );
+        }
+
         if ( n == 1 || n == 2 ) {
             node->left_is_leaf = true;
             node->right_is_leaf = true;
             node->left_i  = poly_i;
-            node->right_i = poly_i + n-1;
-            polygons[poly_i].bounding_box( this, node->box );
             if ( n == 2 ) {
-                AABB new_box;
-                polygons[poly_i].bounding_box( this, new_box );
-                node->box.expand( new_box );
+                node->right_i = poly_i + 1;
+            } else {
+                node->right_i = poly_i;
             }
 
         } else {
@@ -1588,9 +1594,6 @@ private:
             node = &bvh_nodes[bvh_i];  // could change after previous calls
             node->left_i  = left_i;
             node->right_i = right_i;
-
-            node->box = bvh_nodes[left_i].box;
-            node->box.expand( bvh_nodes[right_i].box );
         }
 
         return bvh_i;
@@ -2032,19 +2035,14 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
                                   Model::real t_min, Model::real t_max, Model::HitInfo& hit_info ) const
 {
     uint bvh_i = this - model->bvh_nodes;
-    assert( bvh_i < model->hdr->bvh_node_cnt );
     if ( box.hit( origin, direction, t_min, t_max ) ) {
         HitInfo left_hit_info;
         HitInfo right_hit_info;
-        assert( left_is_leaf == right_is_leaf );
-        assert( left_is_leaf   || (left_i  > bvh_i && left_i  < model->hdr->bvh_node_cnt) );
-        assert( right_is_leaf  || (right_i > bvh_i && right_i < model->hdr->bvh_node_cnt) );
-        assert( !left_is_leaf  || left_i   < model->hdr->poly_cnt );
-        assert( !right_is_leaf || right_i  < model->hdr->poly_cnt );
         bool hit_left  = left_is_leaf  ? model->polygons[left_i].hit(   model, origin, direction, t_min, t_max, left_hit_info ) 
                                        : model->bvh_nodes[left_i].hit(  model, origin, direction, t_min, t_max, left_hit_info );
-        bool hit_right = right_is_leaf ? model->polygons[right_i].hit(  model, origin, direction, t_min, t_max, right_hit_info ) 
-                                       : model->bvh_nodes[right_i].hit( model, origin, direction, t_min, t_max, right_hit_info );
+        bool hit_right = (left_i == right_i) ? false :  // lone leaf
+                         right_is_leaf       ? model->polygons[right_i].hit(  model, origin, direction, t_min, t_max, right_hit_info ) :
+                                               model->bvh_nodes[right_i].hit( model, origin, direction, t_min, t_max, right_hit_info );
         bool r = false;
         if ( hit_left && (!hit_right || left_hit_info.t < right_hit_info.t) ) {
             hit_info = left_hit_info;

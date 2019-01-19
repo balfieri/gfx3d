@@ -107,6 +107,29 @@ public:
     typedef uint32_t uint;
     typedef float    real;
 
+    enum class MIPMAP_FILTER
+    {
+        NONE,                               // do not generate mipmap levels
+        BOX,                                // generate mipmap levels using simple box filter (average)
+    };
+
+    enum class BVH_TREE
+    {
+        NONE,                               // do not generate BVH tree
+        BINARY,                             // generate binary BVH tree
+    };
+
+    Model( std::string dir_path, std::string obj_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE, BVH_TREE bvh_tree=BVH_TREE::NONE );
+    Model( std::string file_path, bool is_compressed=true );
+    ~Model(); 
+
+    bool write( std::string file_path, bool is_compressed=true ); 
+
+    static const uint VERSION = 0xB0BA1f03; // current version is 3
+
+    bool                is_good;            // set to true if constructor succeeds
+    std::string         error_msg;          // if !is_good
+
     class real3
     {
     public:
@@ -160,18 +183,6 @@ public:
         real2& operator *= ( const real s );
         real2& operator /= ( const real2 &v2 );
         real2& operator /= ( const real s );
-    };
-
-    enum class MIPMAP_FILTER
-    {
-        NONE,                               // do not generate mipmap levels
-        BOX,                                // generate mipmap levels using simple box filter (average)
-    };
-
-    enum class BVH_TREE
-    {
-        NONE,                               // do not generate BVH tree
-        BINARY,                             // generate binary BVH tree
     };
 
     class Header                            // header (of future binary file)
@@ -292,13 +303,6 @@ public:
         bool hit( const Model * model, const real3& origin, const real3& direction, real t_min, real t_max, HitInfo& hit_info ) const;
     };
 
-    // public fields
-    //
-    static const uint VERSION = 0xB0BA1f03; // current version is 3
-
-    bool                is_good;            // set to true if constructor succeeds
-    std::string         error_msg;          // if !is_good
-
     // structs
     char *              mapped_region;      // != nullptr means the whole file was sucked in by read_uncompressed()
     Header *            hdr;
@@ -320,14 +324,6 @@ public:
     // maps
     std::map<std::string, Material *> name_to_mtl;
     std::map<std::string, Texture  *> name_to_tex;
-
-
-    Model( std::string dir_path, std::string obj_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE, BVH_TREE bvh_tree=BVH_TREE::NONE );
-    Model( std::string file_path, bool is_compressed=true );
-    ~Model(); 
-
-    bool write( std::string file_path, bool is_compressed=true ); 
-
 
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------

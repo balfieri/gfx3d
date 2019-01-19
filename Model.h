@@ -119,20 +119,14 @@ public:
         real3  cross( const real3 &v2 ) const;
         real   length( void ) const;
         real   length_sqr( void ) const ;
-        real3  add( const real3& v2 ) const;
-        real3  operator + ( const real3& v ) const;
-        real3  sub( const real3& v2 ) const;
-        real3  operator - ( const real3& v ) const;
-        real3  mul( const real3& v2 ) const;
-        real3  operator * ( const real3& v ) const;
-        real3  mul( real s ) const;
-        real3  operator * ( real s ) const;
-        real3  div( const real3& v2 ) const;
-        real3  operator / ( const real3& v ) const;
-        real3  div( real s ) const;
-        real3  operator / ( real s ) const;
         real3& normalize( void );
         real3  normalized( void ) const;
+        real3  operator + ( const real3& v ) const;
+        real3  operator - ( const real3& v ) const;
+        real3  operator * ( const real3& v ) const;
+        real3  operator * ( real s ) const;
+        real3  operator / ( const real3& v ) const;
+        real3  operator / ( real s ) const;
         real3& operator += ( const real3 &v2 );
         real3& operator -= ( const real3 &v2 );
         real3& operator *= ( const real3 &v2 );
@@ -153,20 +147,14 @@ public:
         real2  cross( const real2 &v2 ) const;
         real   length( void ) const;
         real   length_sqr( void ) const ;
-        real2  add( const real2& v2 ) const;
-        real2  operator + ( const real2& v ) const;
-        real2  sub( const real2& v2 ) const;
-        real2  operator - ( const real2& v ) const;
-        real2  mul( const real2& v2 ) const;
-        real2  operator * ( const real2& v ) const;
-        real2  mul( real s ) const;
-        real2  operator * ( real s ) const;
-        real2  div( const real2& v2 ) const;
-        real2  operator / ( const real2& v ) const;
-        real2  div( real s ) const;
-        real2  operator / ( real s ) const;
         real2& normalize( void );
         real2  normalized( void ) const;
+        real2  operator + ( const real2& v ) const;
+        real2  operator - ( const real2& v ) const;
+        real2  operator * ( const real2& v ) const;
+        real2  operator * ( real s ) const;
+        real2  operator / ( const real2& v ) const;
+        real2  operator / ( real s ) const;
         real2& operator += ( const real2 &v2 );
         real2& operator -= ( const real2 &v2 );
         real2& operator *= ( const real2 &v2 );
@@ -1773,95 +1761,6 @@ inline Model::real Model::real3::length_sqr( void ) const
     return c[0]*c[0] + c[1]*c[1] + c[2]*c[2];
 }
 
-inline Model::real3 Model::real3::add( const Model::real3& v2 ) const
-{
-    real3 r;
-    r.c[0] = c[0] + v2.c[0];
-    r.c[1] = c[1] + v2.c[1];
-    r.c[2] = c[2] + v2.c[2];
-    return r;
-}
-
-inline Model::real3 Model::real3::operator + ( const Model::real3& v ) const
-{
-    return add( v );
-}
-
-inline Model::real3 Model::real3::sub( const Model::real3& v2 ) const
-{
-    real3 r;
-    r.c[0] = c[0] - v2.c[0];
-    r.c[1] = c[1] - v2.c[1];
-    r.c[2] = c[2] - v2.c[2];
-    return r;
-}
-
-inline Model::real3 Model::real3::operator - ( const Model::real3& v ) const
-{
-    return sub( v );
-}
-
-inline Model::real3 Model::real3::mul( const Model::real3& v2 ) const
-{
-    real3 r;
-    r.c[0] = c[0] * v2.c[0];
-    r.c[1] = c[1] * v2.c[1];
-    r.c[2] = c[2] * v2.c[2];
-    return r;
-}
-
-inline Model::real3 Model::real3::operator * ( const Model::real3& v ) const
-{
-    return mul( v );
-}
-
-inline Model::real3 operator * ( Model::real s, const Model::real3& v ) 
-{
-    return Model::real3( s*v.c[0], s*v.c[1], s*v.c[2] );
-}
-
-inline Model::real3 Model::real3::mul( Model::real s ) const
-{
-    real3 r;
-    r.c[0] = c[0] * s;
-    r.c[1] = c[1] * s;
-    r.c[2] = c[2] * s;
-    return r;
-}
-
-inline Model::real3 Model::real3::operator * ( Model::real s ) const
-{
-    return mul( s );
-}
-
-inline Model::real3 Model::real3::div( const Model::real3& v2 ) const
-{
-    real3 r;
-    r.c[0] = c[0] / v2.c[0];
-    r.c[1] = c[1] / v2.c[1];
-    r.c[2] = c[2] / v2.c[2];
-    return r;
-}
-
-inline Model::real3 Model::real3::operator / ( const Model::real3& v ) const
-{
-    return div( v );
-}
-
-inline Model::real3 Model::real3::div( Model::real s ) const
-{
-    real3 r;
-    r.c[0] = c[0] / s;
-    r.c[1] = c[1] / s;
-    r.c[2] = c[2] / s;
-    return r;
-}
-
-inline Model::real3 Model::real3::operator / ( Model::real s ) const
-{
-    return div( s );
-}
-
 inline Model::real3& Model::real3::normalize( void )
 {
     *this /= length();
@@ -1870,7 +1769,66 @@ inline Model::real3& Model::real3::normalize( void )
 
 inline Model::real3 Model::real3::normalized( void ) const
 {
-    return div( length() );
+    return *this / length();
+}
+
+inline Model::real3 Model::real3::operator + ( const Model::real3& v2 ) const
+{
+    real3 r;
+    r.c[0] = c[0] + v2.c[0];
+    r.c[1] = c[1] + v2.c[1];
+    r.c[2] = c[2] + v2.c[2];
+    return r;
+}
+
+inline Model::real3 Model::real3::operator - ( const Model::real3& v2 ) const
+{
+    real3 r;
+    r.c[0] = c[0] - v2.c[0];
+    r.c[1] = c[1] - v2.c[1];
+    r.c[2] = c[2] - v2.c[2];
+    return r;
+}
+
+inline Model::real3 Model::real3::operator * ( const Model::real3& v2 ) const
+{
+    real3 r;
+    r.c[0] = c[0] * v2.c[0];
+    r.c[1] = c[1] * v2.c[1];
+    r.c[2] = c[2] * v2.c[2];
+    return r;
+}
+
+inline Model::real3 operator * ( Model::real s, const Model::real3& v ) 
+{
+    return Model::real3( s*v.c[0], s*v.c[1], s*v.c[2] );
+}
+
+inline Model::real3 Model::real3::operator * ( Model::real s ) const
+{
+    real3 r;
+    r.c[0] = c[0] * s;
+    r.c[1] = c[1] * s;
+    r.c[2] = c[2] * s;
+    return r;
+}
+
+inline Model::real3 Model::real3::operator / ( const Model::real3& v2 ) const
+{
+    real3 r;
+    r.c[0] = c[0] / v2.c[0];
+    r.c[1] = c[1] / v2.c[1];
+    r.c[2] = c[2] / v2.c[2];
+    return r;
+}
+
+inline Model::real3 Model::real3::operator / ( Model::real s ) const
+{
+    real3 r;
+    r.c[0] = c[0] / s;
+    r.c[1] = c[1] / s;
+    r.c[2] = c[2] / s;
+    return r;
 }
 
 inline Model::real3& Model::real3::operator += ( const Model::real3 &v2 )
@@ -1936,84 +1894,6 @@ inline Model::real Model::real2::length_sqr( void ) const
     return c[0]*c[0] + c[1]*c[1];
 }
 
-inline Model::real2 Model::real2::add( const Model::real2& v2 ) const
-{
-    real2 r;
-    r.c[0] = c[0] + v2.c[0];
-    r.c[1] = c[1] + v2.c[1];
-    return r;
-}
-
-inline Model::real2 Model::real2::operator + ( const Model::real2& v ) const
-{
-    return add( v );
-}
-
-inline Model::real2 Model::real2::sub( const Model::real2& v2 ) const
-{
-    real2 r;
-    r.c[0] = c[0] - v2.c[0];
-    r.c[1] = c[1] - v2.c[1];
-    return r;
-}
-
-inline Model::real2 Model::real2::operator - ( const Model::real2& v ) const
-{
-    return sub( v );
-}
-
-inline Model::real2 Model::real2::mul( const Model::real2& v2 ) const
-{
-    real2 r;
-    r.c[0] = c[0] * v2.c[0];
-    r.c[1] = c[1] * v2.c[1];
-    return r;
-}
-
-inline Model::real2 Model::real2::operator * ( const Model::real2& v ) const
-{
-    return mul( v );
-}
-
-inline Model::real2 Model::real2::mul( Model::real s ) const
-{
-    real2 r;
-    r.c[0] = c[0] * s;
-    r.c[1] = c[1] * s;
-    return r;
-}
-
-inline Model::real2 Model::real2::operator * ( Model::real s ) const
-{
-    return mul( s );
-}
-
-inline Model::real2 Model::real2::div( const Model::real2& v2 ) const
-{
-    real2 r;
-    r.c[0] = c[0] / v2.c[0];
-    r.c[1] = c[1] / v2.c[1];
-    return r;
-}
-
-inline Model::real2 Model::real2::operator / ( const Model::real2& v ) const
-{
-    return div( v );
-}
-
-inline Model::real2 Model::real2::div( Model::real s ) const
-{
-    real2 r;
-    r.c[0] = c[0] / s;
-    r.c[1] = c[1] / s;
-    return r;
-}
-
-inline Model::real2 Model::real2::operator / ( Model::real s ) const
-{
-    return div( s );
-}
-
 inline Model::real2& Model::real2::normalize( void )
 {
     *this /= length();
@@ -2022,7 +1902,55 @@ inline Model::real2& Model::real2::normalize( void )
 
 inline Model::real2 Model::real2::normalized( void ) const
 {
-    return div( length() );
+    return *this / length();
+}
+
+inline Model::real2 Model::real2::operator + ( const Model::real2& v2 ) const
+{
+    real2 r;
+    r.c[0] = c[0] + v2.c[0];
+    r.c[1] = c[1] + v2.c[1];
+    return r;
+}
+
+inline Model::real2 Model::real2::operator - ( const Model::real2& v2 ) const
+{
+    real2 r;
+    r.c[0] = c[0] - v2.c[0];
+    r.c[1] = c[1] - v2.c[1];
+    return r;
+}
+
+inline Model::real2 Model::real2::operator * ( const Model::real2& v2 ) const
+{
+    real2 r;
+    r.c[0] = c[0] * v2.c[0];
+    r.c[1] = c[1] * v2.c[1];
+    return r;
+}
+
+inline Model::real2 Model::real2::operator * ( Model::real s ) const
+{
+    real2 r;
+    r.c[0] = c[0] * s;
+    r.c[1] = c[1] * s;
+    return r;
+}
+
+inline Model::real2 Model::real2::operator / ( const Model::real2& v2 ) const
+{
+    real2 r;
+    r.c[0] = c[0] / v2.c[0];
+    r.c[1] = c[1] / v2.c[1];
+    return r;
+}
+
+inline Model::real2 Model::real2::operator / ( Model::real s ) const
+{
+    real2 r;
+    r.c[0] = c[0] / s;
+    r.c[1] = c[1] / s;
+    return r;
 }
 
 inline Model::real2& Model::real2::operator += ( const Model::real2 &v2 )

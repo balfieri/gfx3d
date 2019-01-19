@@ -2035,6 +2035,7 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
                                   Model::real t_min, Model::real t_max, Model::HitInfo& hit_info ) const
 {
     uint bvh_i = this - model->bvh_nodes;
+    bool r = false;
     if ( box.hit( origin, direction, t_min, t_max ) ) {
         HitInfo left_hit_info;
         HitInfo right_hit_info;
@@ -2043,7 +2044,6 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
         bool hit_right = (left_i == right_i) ? false :  // lone leaf
                          right_is_leaf       ? model->polygons[right_i].hit(  model, origin, direction, t_min, t_max, right_hit_info ) :
                                                model->bvh_nodes[right_i].hit( model, origin, direction, t_min, t_max, right_hit_info );
-        bool r = false;
         if ( hit_left && (!hit_right || left_hit_info.t < right_hit_info.t) ) {
             hit_info = left_hit_info;
             r = true;
@@ -2051,9 +2051,8 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
             hit_info = right_hit_info;
             r = true;
         }
-        return r;
     }
-    return false;
+    return r;
 }
 
 #endif

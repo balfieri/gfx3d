@@ -232,56 +232,11 @@ public:
         real3           min;                // bounding box min
         real3           max;                // bounding box max
 
-        inline void pad( real p ) 
-        {
-            min -= real3( p, p, p );
-            max += real3( p, p, p );
-        }
-
-        inline void expand( const AABB& other )
-        {
-            for( uint i = 0; i < 3; i++ )
-            {
-                if ( other.min.c[i] < min.c[i] ) min.c[i] = other.min.c[i];
-                if ( other.max.c[i] > max.c[i] ) max.c[i] = other.max.c[i];
-            }
-        }
-
-        inline void expand( const real3& p ) 
-        {
-            if ( p.c[0] < min.c[0] ) min.c[0] = p.c[0];
-            if ( p.c[1] < min.c[1] ) min.c[1] = p.c[1];
-            if ( p.c[2] < min.c[2] ) min.c[2] = p.c[2];
-            if ( p.c[0] > max.c[0] ) max.c[0] = p.c[0];
-            if ( p.c[1] > max.c[1] ) max.c[1] = p.c[1];
-            if ( p.c[2] > max.c[2] ) max.c[2] = p.c[2];
-        }
-
-        inline bool hit( const real3& origin, const real3& direction, real tmin, real tmax ) const 
-        {
-            for( uint a = 0; a < 3; a++ ) 
-            {
-                real dir = direction.c[a];
-                real v0 = (min.c[a] - origin.c[a]) / dir;
-                real v1 = (max.c[a] - origin.c[a]) / dir;
-                real t0 = (v0 < v1) ? v0 : v1;
-                real t1 = (v0 > v1) ? v0 : v1; 
-                if ( t0 > tmin) tmin = t0;
-                if ( t1 < tmax) tmax = t1;
-                if ( tmax <= tmin ) return false;
-            }
-            return true;
-        }
-
-        inline static AABB surrounding_box( const real3& p0, const real3& p1, const real3& p2 ) 
-        {
-            AABB box;
-            box.min = p0;
-            box.max = p0;
-            box.expand( p1 );
-            box.expand( p2 );
-            return box;
-        }  
+        void pad( real p );
+        void expand( const AABB& other );
+        void expand( const real3& p );
+        bool hit( const real3& origin, const real3& direction, real tmin, real tmax ) const; 
+        static AABB surrounding_box( const real3& p0, const real3& p1, const real3& p2 );
     };
 
     class Polygon
@@ -1562,18 +1517,6 @@ inline bool Model::parse_mtl_cmd( mtl_cmd_t& cmd, char *& mtl, char *& mtl_end )
     }
 }
 
-inline std::istream& operator >> ( std::istream& is, Model::real3& v ) 
-{
-    is >> v.c[0] >> v.c[1] >> v.c[2];
-    return is;
-}
-
-inline std::ostream& operator << ( std::ostream& os, const Model::real3& v ) 
-{
-    os << "[" << v.c[0] << "," << v.c[1] << "," << v.c[2] << "]";
-    return os;
-}
-
 inline bool Model::parse_real3( Model::real3& r3, char *& xxx, char *& xxx_end )
 {
     return parse_real( r3.c[0], xxx, xxx_end ) && 
@@ -1673,6 +1616,69 @@ inline bool Model::parse_int( int& i, char *& xxx, char *& xxx_end )
     rtn_assert( vld, "unable to parse int" );
     return true;
 }
+
+inline std::istream& operator >> ( std::istream& is, Model::real3& v ) 
+{
+    is >> v.c[0] >> v.c[1] >> v.c[2];
+    return is;
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::real3& v ) 
+{
+    os << "[" << v.c[0] << "," << v.c[1] << "," << v.c[2] << "]";
+    return os;
+}
+
+inline void Model::AABB::pad( Model::real p ) 
+{
+    min -= real3( p, p, p );
+    max += real3( p, p, p );
+}
+
+inline void Model::AABB::expand( const Model::AABB& other )
+{
+    for( uint i = 0; i < 3; i++ )
+    {
+        if ( other.min.c[i] < min.c[i] ) min.c[i] = other.min.c[i];
+        if ( other.max.c[i] > max.c[i] ) max.c[i] = other.max.c[i];
+    }
+}
+
+inline void Model::AABB::expand( const Model::real3& p ) 
+{
+    if ( p.c[0] < min.c[0] ) min.c[0] = p.c[0];
+    if ( p.c[1] < min.c[1] ) min.c[1] = p.c[1];
+    if ( p.c[2] < min.c[2] ) min.c[2] = p.c[2];
+    if ( p.c[0] > max.c[0] ) max.c[0] = p.c[0];
+    if ( p.c[1] > max.c[1] ) max.c[1] = p.c[1];
+    if ( p.c[2] > max.c[2] ) max.c[2] = p.c[2];
+}
+
+inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& direction, Model::real tmin, Model::real tmax ) const 
+{
+    for( uint a = 0; a < 3; a++ ) 
+    {
+        real dir = direction.c[a];
+        real v0 = (min.c[a] - origin.c[a]) / dir;
+        real v1 = (max.c[a] - origin.c[a]) / dir;
+        real t0 = (v0 < v1) ? v0 : v1;
+        real t1 = (v0 > v1) ? v0 : v1; 
+        if ( t0 > tmin) tmin = t0;
+        if ( t1 < tmax) tmax = t1;
+        if ( tmax <= tmin ) return false;
+    }
+    return true;
+}
+
+inline Model::AABB Model::AABB::surrounding_box( const Model::real3& p0, const Model::real3& p1, const Model::real3& p2 ) 
+{
+    AABB box;
+    box.min = p0;
+    box.max = p0;
+    box.expand( p1 );
+    box.expand( p2 );
+    return box;
+}  
 
 void Model::bvh_build( Model::BVH_TREE bvh_tree )
 {

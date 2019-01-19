@@ -232,11 +232,13 @@ public:
         real3           min;                // bounding box min
         real3           max;                // bounding box max
 
+        AABB( void ) {}
+        AABB( const real3& p0, const real3& p1, const real3& p2 );
+
         void pad( real p );
         void expand( const AABB& other );
         void expand( const real3& p );
         bool hit( const real3& origin, const real3& direction, real tmin, real tmax ) const; 
-        static AABB surrounding_box( const real3& p0, const real3& p1, const real3& p2 );
     };
 
     class Polygon
@@ -1670,14 +1672,12 @@ inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& di
     return true;
 }
 
-inline Model::AABB Model::AABB::surrounding_box( const Model::real3& p0, const Model::real3& p1, const Model::real3& p2 ) 
+inline Model::AABB::AABB( const Model::real3& p0, const Model::real3& p1, const Model::real3& p2 ) 
 {
-    AABB box;
-    box.min = p0;
-    box.max = p0;
-    box.expand( p1 );
-    box.expand( p2 );
-    return box;
+    min = p0;
+    max = p0;
+    expand( p1 );
+    expand( p2 );
 }  
 
 void Model::bvh_build( Model::BVH_TREE bvh_tree )
@@ -2132,7 +2132,7 @@ bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real p
         const real3& p0 = positions[vertexes[0].v_i];
         const real3& p1 = positions[vertexes[1].v_i];
         const real3& p2 = positions[vertexes[2].v_i];
-        box = AABB::surrounding_box( p0, p1, p2 );
+        box = AABB( p0, p1, p2 );
         box.pad( padding );
         return true;
     } else {

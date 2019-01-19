@@ -144,7 +144,6 @@ public:
         real2( real c0, real c1 ) { c[0] = c0; c[1] = c1; }
 
         real   dot( const real2 &v2 ) const;
-        real2  cross( const real2 &v2 ) const;
         real   length( void ) const;
         real   length_sqr( void ) const ;
         real2& normalize( void );

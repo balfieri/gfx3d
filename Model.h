@@ -231,6 +231,7 @@ public:
         real3           max;                // bounding box max
 
         AABB( void ) {}
+        AABB( const real3& p );             // init with one point
         AABB( const real3& p0, const real3& p1, const real3& p2 );
 
         void pad( real p );
@@ -260,25 +261,27 @@ public:
         uint        vt_i;                   // index into texcoords array
     };
 
+    // see https://www.fileformat.info/format/material/
+    // we don't yet support advanced features of the spec
     class Material
     {
     public:
         uint            name_i;             // index into strings array
-        real3           Ka;
-        real3           Kd;
-        real3           Ke;
-        real3           Ks;
-        real3           Tf;
-        real            Tr;
-        real            Ns;
-        real            Ni;
-        real            d;
-        real            illum;
-        uint            map_Ka_i;           // index into textures array
-        uint            map_Kd_i;
-        uint            map_Ke_i;
-        uint            map_Ks_i;
-        uint            map_Bump_i;
+        real3           Ka;                 // RGB ambient reflectivity                         (default: [1,1,1])
+        real3           Kd;                 // RGB diffuse reflectivity                         (default: [1,1,1])
+        real3           Ke;                 // RGB emissive                                     (default: [0,0,0])
+        real3           Ks;                 // RGB specular reflectivity                        (default: [0,0,0])
+        real3           Tf;                 // RGB tranmission filter                           (default: [1,1,1])
+        real            Tr;                 // transparency (currently used for RGB)            (default: 0=opaque)
+        real            Ns;                 // specular exponent (focus of specular highlight)  (default: [0,0,0])
+        real            Ni;                 // optical density == index of refraction (0.001 to 10, 1=default=no bending, 1.5=glass)
+        real            d;                  // dissolve                                         (default: 1=opaque)
+        real            illum;              // ilumination model (0-10, consult documentation)  (default: 2)
+        uint            map_Ka_i;           // ambient texture (multiplied by Ka) 
+        uint            map_Kd_i;           // diffuse texture (multiplied by Kd)
+        uint            map_Ke_i;           // emittance texture (multipled by Ke)
+        uint            map_Ks_i;           // specular texture (multipled by Ks)
+        uint            map_Bump_i;         // bump map texture
     };
 
     class Texture
@@ -410,6 +413,7 @@ private:
 //#define dprint( msg ) std::cout << (msg) << "\n"
 
 // these are done as macros to avoid evaluating msg (it makes a big difference)
+#include <assert.h>
 #define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); assert( false ); return false; }
 #define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); assert( false ); goto error;   }
 
@@ -578,15 +582,47 @@ Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER m
                 obj_assert( polygon->vtx_cnt != 0, ".obj f command has no vertices" );
                 if ( object != nullptr ) object->poly_cnt++;
 
-                // precompute surface normal and area (works for triangle only)
-                Vertex * pvertexes = &vertexes[polygon->vtx_i];
-                real3 p0( positions[pvertexes[0].v_i].c[0], positions[pvertexes[0].v_i].c[1], positions[pvertexes[0].v_i].c[2] );
-                real3 p1( positions[pvertexes[1].v_i].c[0], positions[pvertexes[1].v_i].c[1], positions[pvertexes[1].v_i].c[2] );
-                real3 p2( positions[pvertexes[2].v_i].c[0], positions[pvertexes[2].v_i].c[1], positions[pvertexes[2].v_i].c[2] );
-                polygon->normal = (p1 - p0).cross( p2 - p0 );
-                real len = polygon->normal.length();
-                polygon->area = len / 2;
-                polygon->normal = polygon->normal / len;
+                // split 4+ sided polygons into triangles
+                uint first_poly_i = hdr->poly_cnt-1;
+                if ( polygon->vtx_cnt > 3 ) {
+                    uint extra_triangle_cnt = polygon->vtx_cnt - 3;
+                    perhaps_realloc<Polygon>( polygons, hdr->poly_cnt, max->poly_cnt, extra_triangle_cnt );
+                    polygon->vtx_cnt = 3;
+
+                    // We don't need 3*extra_triangle_cnt more vertexes.
+                    // We can use the extra_triangle_cnt Vertexes that are already allocated.
+                    // We just have to carefully move them.
+                    // At the same time, we can copy the other two vertexes that we need.
+                    // Start with the last triangle to avoid clobbering stuff.
+                    perhaps_realloc<Vertex>( vertexes, hdr->vtx_cnt, max->vtx_cnt, 2*extra_triangle_cnt );
+                    uint poly_vtx_i = polygon->vtx_i;
+                    for( uint t = 1; t <= extra_triangle_cnt; t++ )
+                    {
+                        uint tt = extra_triangle_cnt+1 - t;                      // reverse triangles to avoid clobbering
+                        Polygon * triangle = polygon + tt;
+                        triangle->mtl_i    = polygon->mtl_i;
+                        triangle->vtx_i    = polygon->vtx_i + tt*3;
+                        triangle->vtx_cnt = 3;
+                        vertexes[triangle->vtx_i+2] = vertexes[poly_vtx_i+2+tt]; // reverse vertexes to avoid clobbering
+                        vertexes[triangle->vtx_i+1] = vertexes[poly_vtx_i+1+tt];
+                        vertexes[triangle->vtx_i+0] = vertexes[poly_vtx_i+0];    // same starting vtx for all triangles
+                    }
+                }
+
+                // precompute surface normal and area for each triangle (ignore for points and lines)
+                uint triangle_cnt = (polygon->vtx_cnt < 3) ? 0 : (hdr->poly_cnt - first_poly_i);
+                for( uint t = 0; t < triangle_cnt; t++ )
+                {
+                    Polygon * triangle = polygon + t;
+                    Vertex * pvertexes = &vertexes[triangle->vtx_i];
+                    real3 p0( positions[pvertexes[0].v_i].c[0], positions[pvertexes[0].v_i].c[1], positions[pvertexes[0].v_i].c[2] );
+                    real3 p1( positions[pvertexes[1].v_i].c[0], positions[pvertexes[1].v_i].c[1], positions[pvertexes[1].v_i].c[2] );
+                    real3 p2( positions[pvertexes[2].v_i].c[0], positions[pvertexes[2].v_i].c[1], positions[pvertexes[2].v_i].c[2] );
+                    triangle->normal = (p1 - p0).cross( p2 - p0 );
+                    real len = triangle->normal.length();
+                    triangle->area = len / 2;
+                    triangle->normal = triangle->normal / len;
+                }
                 break;
             }
 
@@ -777,7 +813,8 @@ inline void Model::perhaps_realloc( T *& array, Model::uint& hdr_cnt, Model::uin
 
 bool Model::write_uncompressed( std::string file_path ) 
 {
-    int fd = open( file_path.c_str(), O_WRONLY );
+    int fd = open( file_path.c_str(), O_CREAT|O_WRONLY|O_TRUNC|S_IRUSR|S_IWUSR|S_IRGRP );
+    if ( fd < 0 ) std::cout << "open() for write error: " << strerror( errno ) << "\n";
     rtn_assert( fd >= 0, "could not open() file " + file_path + " for writing - open() error: " + strerror( errno ) );
 
     //------------------------------------------------------------
@@ -906,8 +943,20 @@ bool Model::mtllib_load( std::string dir_path, std::string mtl_file )
                 } else {
                     perhaps_realloc<Material>( materials, hdr->mtl_cnt, max->mtl_cnt, 1 );
                     material = &materials[ hdr->mtl_cnt++ ];
-                    memset( material, 0, sizeof( Material ) );
                     material->name_i = mtl_name - strings;
+                    for( uint j = 0; j < 3; j++ )
+                    {
+                        material->Ka.c[j] = 1.0;
+                        material->Kd.c[j] = 1.0;
+                        material->Ke.c[j] = 0.0;
+                        material->Ks.c[j] = 0.0;
+                        material->Tf.c[j] = 1.0;
+                    }
+                    material->Tr = 0.0;
+                    material->Ns = 0.0;
+                    material->Ni = 1.0;
+                    material->d  = 1.0;
+                    material->illum = 2;
                     material->map_Ka_i = uint(-1);
                     material->map_Kd_i = uint(-1);
                     material->map_Ke_i = uint(-1);
@@ -1136,6 +1185,7 @@ bool Model::open_and_read( std::string dir_path, std::string file_name, char *& 
     std::string file_path = (dir_path != "") ? (dir_path + "/" + file_name) : file_name;
     const char * fname = file_path.c_str();
     int fd = open( fname, O_RDONLY );
+    if ( fd < 0 ) std::cout << "open_and_read() error: " << strerror( errno ) << "\n";
     rtn_assert( fd >= 0, "could not open file " + file_path + " - open() error: " + strerror( errno ) );
 
     struct stat file_stat;
@@ -1655,6 +1705,12 @@ inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& di
     return true;
 }
 
+inline Model::AABB::AABB( const Model::real3& p )
+{
+    min = p;
+    max = p;
+}  
+
 inline Model::AABB::AABB( const Model::real3& p0, const Model::real3& p1, const Model::real3& p2 ) 
 {
     min = p0;
@@ -1990,6 +2046,22 @@ inline Model::real2& Model::real2::operator /= ( const Model::real s )
     return *this;
 }
 
+bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real padding ) const 
+{
+    const Vertex * vertexes = &model->vertexes[vtx_i];
+    for( uint32_t i = 0; i < vtx_cnt; i++ )
+    {
+        const real3& p = model->positions[vertexes[i].v_i];
+        if ( i == 0 ) {
+            box = AABB( p );
+        } else {
+            box.expand( p );
+        }
+    }
+    box.pad( padding );
+    return true;
+}
+
 inline bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, real t_min, real t_max, 
                                  HitInfo& hit_info ) const
 {
@@ -2031,36 +2103,27 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
                 real v0 = texcoords[vertexes[0].vt_i].c[1];
                 real v1 = texcoords[vertexes[1].vt_i].c[1];
                 real v2 = texcoords[vertexes[2].vt_i].c[1];
-
                 real alpha = 1.0 - beta - gamma;
                 hit_info.poly_i = this - model->polygons;
                 hit_info.t = t;
-                hit_info.normal = n0*alpha + n1*beta + n2*gamma;
+                //hit_info.normal = n0*alpha + n1*beta + n2*gamma;
+                hit_info.normal = n0*alpha + n1*gamma + n2*beta;
                 hit_info.normal.normalize();
                 hit_info.p = p;
-                hit_info.u = alpha*u0 + beta*u1 + gamma*u2 ;
-                hit_info.v = alpha*v0 + beta*v1 + gamma*v2 ;
+                hit_info.u = alpha*u0 + gamma*u1 + beta*u2 ;
+                hit_info.v = alpha*v0 + gamma*v1 + beta*v2 ;
+                if ( 0 ) std::cout << "\nhit poly_i=" << hit_info.poly_i << 
+                             " t=" << hit_info.t << " normal=" << hit_info.normal << 
+                             " p=" << hit_info.p << " u=" << hit_info.u << " v=" << hit_info.v <<
+                             " p0=" << p0 << " p1=" << p1 << " p2=" << p2 << 
+                             " n0=" << n0 << " n1=" << n1 << " n2=" << n2 << 
+                             " u0=" << u0 << " u1=" << u1 << " u2=" << u2 <<
+                             " v0=" << v0 << " v1=" << v1 << " v2=" << v2 << "\n";
                 return true;
              }
         }
     }
     return false;
-}
-
-bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real padding ) const 
-{
-    if ( vtx_cnt >= 3 ) {
-        Vertex * vertexes  = &model->vertexes[vtx_i];
-        real3  * positions = model->positions;
-        const real3& p0 = positions[vertexes[0].v_i];
-        const real3& p1 = positions[vertexes[1].v_i];
-        const real3& p2 = positions[vertexes[2].v_i];
-        box = AABB( p0, p1, p2 );
-        box.pad( padding );
-        return true;
-    } else {
-        return false;
-    }
 }
 
 inline bool Model::BVH_Node::bounding_box( const Model * model, Model::AABB& b ) const
@@ -2073,7 +2136,6 @@ inline bool Model::BVH_Node::bounding_box( const Model * model, Model::AABB& b )
 inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origin, const Model::real3& direction, 
                                   Model::real t_min, Model::real t_max, Model::HitInfo& hit_info ) const
 {
-    uint bvh_i = this - model->bvh_nodes;
     bool r = false;
     if ( box.hit( origin, direction, t_min, t_max ) ) {
         HitInfo left_hit_info;
@@ -2081,8 +2143,8 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
         bool hit_left  = left_is_leaf  ? model->polygons[left_i].hit(   model, origin, direction, t_min, t_max, left_hit_info ) 
                                        : model->bvh_nodes[left_i].hit(  model, origin, direction, t_min, t_max, left_hit_info );
         bool hit_right = (left_i == right_i) ? false :  // lone leaf
-                         right_is_leaf       ? model->polygons[right_i].hit(  model, origin, direction, t_min, t_max, right_hit_info ) :
-                                               model->bvh_nodes[right_i].hit( model, origin, direction, t_min, t_max, right_hit_info );
+                         right_is_leaf ? model->polygons[right_i].hit(  model, origin, direction, t_min, t_max, right_hit_info )
+                                       : model->bvh_nodes[right_i].hit( model, origin, direction, t_min, t_max, right_hit_info );
         if ( hit_left && (!hit_right || left_hit_info.t < right_hit_info.t) ) {
             hit_info = left_hit_info;
             r = true;

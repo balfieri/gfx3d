@@ -220,6 +220,7 @@ public:
         real        t;  
         real        u;
         real        v;
+        real        solid_angle;            // solid angle of hit surface (used by mip_level calculation)
         real3       p;
         real3       normal;
     };
@@ -321,7 +322,7 @@ public:
     Material *          materials;
     Texture *           textures;
     BVH_Node *          bvh_nodes;
-    char *              texels;
+    unsigned char *     texels;
     char *              strings;
 
     // maps
@@ -403,7 +404,7 @@ private:
 
     // reallocate array if we are about to exceed its current size
     template<typename T>
-    inline void perhaps_realloc( T *& array, uint& hdr_cnt, uint& max_cnt, uint add_cnt );
+    inline void perhaps_realloc( T *& array, const uint& hdr_cnt, uint& max_cnt, uint add_cnt );
 
     bool write_uncompressed( std::string file_path );
     bool read_uncompressed( std::string file_path );
@@ -462,7 +463,7 @@ Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER m
     texcoords       = aligned_alloc<real2>(    max->texcoord_cnt );
     materials       = aligned_alloc<Material>( max->mtl_cnt );
     textures        = aligned_alloc<Texture>(  max->tex_cnt );
-    texels          = aligned_alloc<char>(     max->texel_cnt );
+    texels          = aligned_alloc<unsigned char>( max->texel_cnt );
     strings         = aligned_alloc<char>(     max->char_cnt );
     bvh_nodes       = aligned_alloc<BVH_Node>( max->bvh_node_cnt );
 
@@ -711,7 +712,7 @@ Model::Model( std::string file_path, bool is_compressed )
     _read( texcoords,   real2,    hdr->texcoord_cnt );
     _read( materials,   Material, hdr->mtl_cnt );
     _read( textures,    Texture,  hdr->tex_cnt );
-    _read( texels,      char,     hdr->texel_cnt );
+    _read( texels,      unsigned char, hdr->texel_cnt );
     _read( strings,     char,     hdr->char_cnt );
     _read( bvh_nodes,   BVH_Node, hdr->bvh_node_cnt );
 
@@ -794,7 +795,7 @@ T * Model::aligned_alloc( Model::uint cnt )
 
 // reallocate array if we are about to exceed its current size
 template<typename T>
-inline void Model::perhaps_realloc( T *& array, Model::uint& hdr_cnt, Model::uint& max_cnt, Model::uint add_cnt )
+inline void Model::perhaps_realloc( T *& array, const Model::uint& hdr_cnt, Model::uint& max_cnt, Model::uint add_cnt )
 {
     while( (hdr_cnt + add_cnt) > max_cnt ) {
         void * mem = nullptr;
@@ -813,7 +814,7 @@ inline void Model::perhaps_realloc( T *& array, Model::uint& hdr_cnt, Model::uin
 
 bool Model::write_uncompressed( std::string file_path ) 
 {
-    int fd = open( file_path.c_str(), O_CREAT|O_WRONLY|O_TRUNC|S_IRUSR|S_IWUSR|S_IRGRP );
+    int fd = open( file_path.c_str(), O_CREAT|O_WRONLY|O_TRUNC|O_SYNC|S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP );
     if ( fd < 0 ) std::cout << "open() for write error: " << strerror( errno ) << "\n";
     rtn_assert( fd >= 0, "could not open() file " + file_path + " for writing - open() error: " + strerror( errno ) );
 
@@ -854,6 +855,7 @@ bool Model::write_uncompressed( std::string file_path )
     _uwrite( strings,     hdr->char_cnt     * sizeof(strings[0]) );
     _uwrite( bvh_nodes,   hdr->bvh_node_cnt * sizeof(bvh_nodes[0]) );
 
+    fsync( fd ); // flush
     close( fd );
     return true;
 }
@@ -896,7 +898,7 @@ bool Model::read_uncompressed( std::string file_path )
     _uread( texcoords,   real2,    hdr->texcoord_cnt );
     _uread( materials,   Material, hdr->mtl_cnt );
     _uread( textures,    Texture,  hdr->tex_cnt );
-    _uread( texels,      char,     hdr->texel_cnt );
+    _uread( texels,      unsigned char, hdr->texel_cnt );
     _uread( strings,     char,     hdr->char_cnt );
     _uread( bvh_nodes,   BVH_Node, hdr->bvh_node_cnt );
 
@@ -1102,20 +1104,21 @@ bool Model::load_texture( std::string dir_path, char *& tex_name, Model::Texture
     uint byte_width = width * 3;
     uint byte_cnt   = byte_width * height;
 
-    char * bgr = data+54;  // first BGR texel
+    unsigned char * bgr     = reinterpret_cast<unsigned char *>( data+54 );  // first BGR texel
+    unsigned char * bgr_end = reinterpret_cast<unsigned char *>( data_end );
     texture->texel_i = hdr->texel_cnt;
 
-    perhaps_realloc<char>( texels, hdr->texel_cnt, max->texel_cnt, byte_cnt );
+    perhaps_realloc<unsigned char>( texels, hdr->texel_cnt, max->texel_cnt, byte_cnt );
     hdr->texel_cnt += byte_cnt;
 
     // Copy texels and convert BGR to RGB byte order.
     //
-    char * rgb = texels + texture->texel_i;
+    unsigned char * rgb = texels + texture->texel_i;
     for( uint i = 0; i < height; i++ )
     {
         for( uint j = 0; j < byte_width; j += 3, bgr += 3, rgb += 3 )
         {
-            if ( bgr < data_end ) {
+            if ( bgr < bgr_end ) {
                 rgb[0] = bgr[2];
                 rgb[1] = bgr[1];
                 rgb[2] = bgr[0];
@@ -1131,6 +1134,7 @@ bool Model::load_texture( std::string dir_path, char *& tex_name, Model::Texture
 
     // if requested, generate mipmap levels down to 1x1
     //
+    uint prior_byte_cnt = 0;
     while( hdr->mipmap_filter != MIPMAP_FILTER::NONE && !(width == 1 && height == 1) )
     {
         uint to_width  = width  >> 1;
@@ -1140,24 +1144,27 @@ bool Model::load_texture( std::string dir_path, char *& tex_name, Model::Texture
 
         uint   to_byte_width = to_width * 3;
         uint   to_byte_cnt   = to_byte_width * to_height;
-        perhaps_realloc<char>( texels, hdr->texel_cnt, max->texel_cnt, to_byte_cnt );
+        perhaps_realloc<unsigned char>( texels, hdr->texel_cnt, max->texel_cnt, to_byte_cnt );
         hdr->texel_cnt += to_byte_cnt;
 
-        rgb = texels + texture->texel_i;
-        char * to_rgb        = rgb + byte_cnt;
-        char * to_rgb_saved  = to_rgb;
+        unsigned char * rgb  = texels + texture->texel_i + prior_byte_cnt;  // must do this after realloc
+        unsigned char * trgb = rgb + byte_cnt;
 
-        for( uint i = 0; i < to_height; i++ )
+        for( uint ti = 0; ti < to_height; ti++ )
         {
-            for( uint j = 0; j < to_byte_width; j += 3, to_rgb += 3 )
+            for( uint tj = 0; tj < to_width; tj++, trgb += 3 )
             {
                 uint sum[3] = { 0, 0, 0 };
                 uint cnt = 0;
-                for( uint fi = 2*i; fi < (2*i+1) && fi < height; fi++ )
+                for( uint fi = 0; fi < 2; fi++ )
                 {
-                    char * frgb = rgb + fi*byte_width + 2*j;
-                    for( uint fj = 2*j; fj < (2*j+1) && fj < byte_width; fj += 3, frgb += 3 )
+                    uint fii = ti*2 + fi;
+                    if ( fii >= height ) continue;
+                    for( uint fj = 0; fj < 2; fj++ )
                     {
+                        uint fjj = tj*2 + fj;
+                        if ( fjj >= width ) continue;
+                        unsigned char * frgb = rgb + fii*byte_width + fjj*3;
                         sum[0] += frgb[0];
                         sum[1] += frgb[1];
                         sum[2] += frgb[2];
@@ -1165,16 +1172,17 @@ bool Model::load_texture( std::string dir_path, char *& tex_name, Model::Texture
                     }
                 }
 
-                to_rgb[0] = (sum[0] + 0.5) / cnt;
-                to_rgb[1] = (sum[1] + 0.5) / cnt;
-                to_rgb[2] = (sum[2] + 0.5) / cnt;
+                trgb[0] = (real(sum[0]) + 0.5) / real(cnt);
+                trgb[1] = (real(sum[1]) + 0.5) / real(cnt);
+                trgb[2] = (real(sum[2]) + 0.5) / real(cnt);
             }
         }
 
-        rgb        = to_rgb_saved;
-        height     = to_height;
-        width      = to_width;
-        byte_width = to_byte_width;
+        prior_byte_cnt += byte_cnt;
+        height          = to_height;
+        width           = to_width;
+        byte_width      = to_byte_width;
+        byte_cnt        = to_byte_cnt;
     }
 
     return true;
@@ -2104,16 +2112,23 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
                 real v1 = texcoords[vertexes[1].vt_i].c[1];
                 real v2 = texcoords[vertexes[2].vt_i].c[1];
                 real alpha = 1.0 - beta - gamma;
+
                 hit_info.poly_i = this - model->polygons;
                 hit_info.t = t;
-                //hit_info.normal = n0*alpha + n1*beta + n2*gamma;
+                hit_info.p = p;
+
                 hit_info.normal = n0*alpha + n1*gamma + n2*beta;
                 hit_info.normal.normalize();
-                hit_info.p = p;
+
+                real distance_squared = t*t / direction.length_sqr();
+                hit_info.solid_angle = area / distance_squared;                                         // off by 2X, but...
+                hit_info.solid_angle *= std::abs(0.5*(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1)); // correction for UV at corners as lengths
                 hit_info.u = alpha*u0 + gamma*u1 + beta*u2 ;
                 hit_info.v = alpha*v0 + gamma*v1 + beta*v2 ;
+
                 if ( 0 ) std::cout << "\nhit poly_i=" << hit_info.poly_i << 
                              " t=" << hit_info.t << " normal=" << hit_info.normal << 
+                             " solid_angle=" << hit_info.solid_angle <<
                              " p=" << hit_info.p << " u=" << hit_info.u << " v=" << hit_info.v <<
                              " p0=" << p0 << " p1=" << p1 << " p2=" << p2 << 
                              " n0=" << n0 << " n1=" << n1 << " n2=" << n2 << 

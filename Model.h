@@ -81,6 +81,7 @@
 // To Do:
 //
 //     1) Support rest of .obj and .mtl commands and options.
+//        - v: we disregard 4+ extra params
 //     2) Support the .fbx and .max binary formats.  Currently, you must find an fbx-to-obj conversion program.
 //
 #ifndef _Model_h
@@ -104,7 +105,8 @@
 class Model
 {
 public:
-    typedef uint32_t uint;
+    typedef uint32_t uint;                  // by default, we use 32-bit indexes for geometry
+    typedef uint64_t uint64;                // by default, we use 64-bit indexes for texels
     typedef float    real;
 
     enum class MIPMAP_FILTER
@@ -125,7 +127,7 @@ public:
 
     bool write( std::string file_path, bool is_compressed=true ); 
 
-    static const uint VERSION = 0xB0BA1f03; // current version is 3
+    static const uint VERSION = 0xB0BA1f04; // current version is 4
 
     bool                is_good;            // set to true if constructor succeeds
     std::string         error_msg;          // if !is_good
@@ -189,20 +191,20 @@ public:
     {
     public:
         uint        version;                // version
-        uint64_t    byte_cnt;               // total in-memory bytes including this header
-        uint        obj_cnt;                // in objects array  
-        uint        poly_cnt;               // in polygons array 
-        uint        vtx_cnt;                // in vertexes array
-        uint        pos_cnt;                // in positions array
-        uint        norm_cnt;               // in normals array
-        uint        texcoord_cnt;           // in texcoords array
+        uint64      byte_cnt;               // total in-memory bytes including this header
+        uint64      obj_cnt;                // in objects array  
+        uint64      poly_cnt;               // in polygons array 
+        uint64      vtx_cnt;                // in vertexes array
+        uint64      pos_cnt;                // in positions array
+        uint64      norm_cnt;               // in normals array
+        uint64      texcoord_cnt;           // in texcoords array
         MIPMAP_FILTER mipmap_filter;        // if NONE, there are no mip levels beyond level 0
-        uint        mtl_cnt;                // in materials array
-        uint        tex_cnt;                // in textures array
-        uint        texel_cnt;              // in texels array  (last in file)
-        uint        char_cnt;               // in strings array
-        uint        bvh_node_cnt;           // in bvh_nodes array
-        uint        bvh_root_i;             // index of root bvh_node in bvh_nodes array
+        uint64      mtl_cnt;                // in materials array
+        uint64      tex_cnt;                // in textures array
+        uint64      texel_cnt;              // in texels array  (last in file)
+        uint64      char_cnt;               // in strings array
+        uint64      bvh_node_cnt;           // in bvh_nodes array
+        uint64      bvh_root_i;             // index of root bvh_node in bvh_nodes array
     };
 
     class Object
@@ -281,7 +283,9 @@ public:
         uint            map_Ka_i;           // ambient texture (multiplied by Ka) 
         uint            map_Kd_i;           // diffuse texture (multiplied by Kd)
         uint            map_Ke_i;           // emittance texture (multipled by Ke)
-        uint            map_Ks_i;           // specular texture (multipled by Ks)
+        uint            map_Ks_i;           // specular color texture (multipled by Ks)
+        uint            map_Ns_i;           // specular highlight texture (multipled by Ns)
+        uint            map_d_i;            // alpha texture (multiplied by d)
         uint            map_Bump_i;         // bump map texture
     };
 
@@ -291,7 +295,8 @@ public:
         uint            name_i;             // index in strings array (null-terminated strings)
         uint            width;              // level 0 width
         uint            height;             // level 0 height
-        uint            texel_i;            // index into texels array of first texel
+        uint64          texel_i;            // index into texels array of first texel
+        real            bump_multiplier;    // should be for bump maps only but also used with other textures
     };
 
     class BVH_Node
@@ -347,6 +352,7 @@ private:
     {
         CMD_O,
         CMD_G,
+        CMD_S,
         CMD_V,
         CMD_VN,
         CMD_VT,
@@ -372,6 +378,8 @@ private:
         CMD_MAP_KD,
         CMD_MAP_KE,
         CMD_MAP_KS,
+        CMD_MAP_NS,
+        CMD_MAP_D,
         CMD_MAP_BUMP
     } mtl_cmd_t;
             
@@ -383,28 +391,33 @@ private:
     bool mtllib_load( std::string dir_path, std::string mtl_file );
     bool load_texture( std::string dir_path, char *& tex_name, Texture *& texture );
     bool open_and_read( std::string dir_path, std::string file_name, char *& start, char *& end );
+    void skip_whitespace_to_eol( char *& xxx, char *& xxx_end );  // on this line only
     void skip_whitespace( char *& xxx, char *& xxx_end );
     bool eol( char *& xxx, char *& xxx_end );
     bool expect_char( char ch, char *& xxx, char* xxx_end );
     bool expect_cmd( const char * s, char *& xxx, char *& xxx_end );
     bool parse_name( char *& name, char *& xxx, char *& xxx_end );
+    bool parse_option_name( std::string& option_name, char *& xxx, char *& xxx_end );
     bool parse_obj_cmd( obj_cmd_t& cmd );
     bool parse_mtl_cmd( mtl_cmd_t& cmd, char *& mtl, char *& mtl_end );
     bool parse_real3( real3& r3, char *& xxx, char *& xxx_end );
     bool parse_real2( real2& r2, char *& xxx, char *& xxx_end );
     bool parse_real( real& r, char *& xxx, char *& xxx_end );
     bool parse_int( int& i, char *& xxx, char *& xxx_end );
+    std::string surrounding_lines( char *& xxx, char *& xxx_end );
+
+    // BVH builder
     void bvh_build( BVH_TREE bvh_tree );
     uint bvh_qsplit( uint poly_i, uint n, real pivot, uint axis );
     uint bvh_node( uint poly_i, uint n, uint axis );
 
     // allocates an array of T on a page boundary
     template<typename T>
-    T * aligned_alloc( uint cnt );
+    T * aligned_alloc( uint64 cnt );
 
     // reallocate array if we are about to exceed its current size
     template<typename T>
-    inline void perhaps_realloc( T *& array, const uint& hdr_cnt, uint& max_cnt, uint add_cnt );
+    inline void perhaps_realloc( T *& array, const uint64& hdr_cnt, uint64& max_cnt, uint64 add_cnt );
 
     bool write_uncompressed( std::string file_path );
     bool read_uncompressed( std::string file_path );
@@ -415,8 +428,8 @@ private:
 
 // these are done as macros to avoid evaluating msg (it makes a big difference)
 #include <assert.h>
-#define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); assert( false ); return false; }
-#define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); assert( false ); goto error;   }
+#define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << msg << "\n"; assert( false ); return false; }
+#define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << msg << "\n"; assert( false ); goto error;   }
 
 Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER mipmap_filter, Model::BVH_TREE bvh_tree )
 {
@@ -492,18 +505,18 @@ Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER m
         skip_whitespace( obj, obj_end );
         if ( obj == obj_end ) {
             // done, no errors
-            hdr->byte_cnt = uint64_t( 1                 ) * sizeof( hdr ) +
-                            uint64_t( hdr->obj_cnt      ) * sizeof( objects[0] ) +
-                            uint64_t( hdr->poly_cnt     ) * sizeof( polygons[0] ) +
-                            uint64_t( hdr->vtx_cnt      ) * sizeof( vertexes[0] ) +
-                            uint64_t( hdr->pos_cnt      ) * sizeof( positions[0] ) +
-                            uint64_t( hdr->norm_cnt     ) * sizeof( normals[0] ) +
-                            uint64_t( hdr->texcoord_cnt ) * sizeof( texcoords[0] ) +
-                            uint64_t( hdr->mtl_cnt      ) * sizeof( materials[0] ) +
-                            uint64_t( hdr->tex_cnt      ) * sizeof( textures[0] ) +
-                            uint64_t( hdr->texel_cnt    ) * sizeof( texels[0] ) +
-                            uint64_t( hdr->char_cnt     ) * sizeof( strings[0] ) + 
-                            uint64_t( hdr->bvh_node_cnt ) * sizeof( bvh_nodes[0] );
+            hdr->byte_cnt = uint64( 1                 ) * sizeof( hdr ) +
+                            uint64( hdr->obj_cnt      ) * sizeof( objects[0] ) +
+                            uint64( hdr->poly_cnt     ) * sizeof( polygons[0] ) +
+                            uint64( hdr->vtx_cnt      ) * sizeof( vertexes[0] ) +
+                            uint64( hdr->pos_cnt      ) * sizeof( positions[0] ) +
+                            uint64( hdr->norm_cnt     ) * sizeof( normals[0] ) +
+                            uint64( hdr->texcoord_cnt ) * sizeof( texcoords[0] ) +
+                            uint64( hdr->mtl_cnt      ) * sizeof( materials[0] ) +
+                            uint64( hdr->tex_cnt      ) * sizeof( textures[0] ) +
+                            uint64( hdr->texel_cnt    ) * sizeof( texels[0] ) +
+                            uint64( hdr->char_cnt     ) * sizeof( strings[0] ) + 
+                            uint64( hdr->bvh_node_cnt ) * sizeof( bvh_nodes[0] );
             is_good = true;
             if ( bvh_tree != BVH_TREE::NONE ) bvh_build( bvh_tree );
             return;
@@ -529,19 +542,50 @@ Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER m
                 if ( !parse_name( name, obj, obj_end ) ) goto error;
                 break;
                 
+            case CMD_S:
+                if ( !parse_name( name, obj, obj_end ) ) goto error;
+                break;
+                
             case CMD_V:
                 perhaps_realloc<real3>( positions, hdr->pos_cnt, max->pos_cnt, 1 );
                 if ( !parse_real3( positions[ hdr->pos_cnt++ ], obj, obj_end ) ) goto error;
+                if ( !eol( obj, obj_end ) ) {
+                    // TODO: skip rest of v params for now
+                    while( obj != obj_end ) 
+                    {
+                        char ch = *obj;
+                        if ( ch == '\n' || ch == '\r' ) break;
+                        obj++;
+                    }
+                }
                 break;
                 
             case CMD_VN:
                 perhaps_realloc<real3>( normals, hdr->norm_cnt, max->norm_cnt, 1 );
                 if ( !parse_real3( normals[ hdr->norm_cnt++ ], obj, obj_end ) ) goto error;
+                if ( !eol( obj, obj_end ) ) {
+                    // TODO: skip rest of vn params for now
+                    while( obj != obj_end ) 
+                    {
+                        char ch = *obj;
+                        if ( ch == '\n' || ch == '\r' ) break;
+                        obj++;
+                    }
+                }
                 break;
                 
             case CMD_VT:
                 perhaps_realloc<real2>( texcoords, hdr->texcoord_cnt, max->texcoord_cnt, 1 );
                 if ( !parse_real2( texcoords[ hdr->texcoord_cnt++ ], obj, obj_end ) ) goto error;
+                if ( !eol( obj, obj_end ) ) {
+                    // TODO: skip rest of vt params for now
+                    while( obj != obj_end ) 
+                    {
+                        char ch = *obj;
+                        if ( ch == '\n' || ch == '\r' ) break;
+                        obj++;
+                    }
+                }
                 break;
                 
             case CMD_F:
@@ -562,23 +606,31 @@ Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER m
                     dprint( "v_i=" + std::to_string( v_i ) );
                     vertex->v_i = (v_i >= 0)  ? v_i : (hdr->pos_cnt + v_i);
 
-                    if ( !expect_char( '/', obj, obj_end ) ) goto error;
+                    if ( *obj == '/' ) {
+                        if ( !expect_char( '/', obj, obj_end ) ) goto error;
 
-                    int vt_i;
-                    if ( obj != obj_end && *obj == '/' ) {
-                        vt_i = 0;
+                        int vt_i;
+                        if ( obj != obj_end && *obj == '/' ) {
+                            vt_i = 0;
+                        } else {
+                            if ( !parse_int( vt_i, obj, obj_end ) ) goto error;
+                        }
+                        dprint( "vt_i=" + std::to_string( vt_i ) );
+                        vertex->vt_i = (vt_i >= 0) ? vt_i : ((int)hdr->texcoord_cnt + vt_i);
+
+                        if ( *obj == '/' ) {
+                            int vn_i;
+                            if ( !expect_char( '/', obj, obj_end ) ) goto error;
+                            if ( !parse_int( vn_i, obj, obj_end ) )  goto error;
+                            dprint( "vn_i=" + std::to_string( vn_i ) );
+                            vertex->vn_i = (vn_i >= 0) ? vn_i : (hdr->norm_cnt + vn_i);
+                        } else {
+                            vertex->vn_i = uint(-1);
+                        }
                     } else {
-                        if ( !parse_int( vt_i, obj, obj_end ) ) goto error;
+                        vertex->vt_i = uint(-1);
+                        vertex->vn_i = uint(-1);
                     }
-                    dprint( "vt_i=" + std::to_string( vt_i ) );
-                    vertex->vt_i = (vt_i >= 0) ? vt_i : ((int)hdr->texcoord_cnt + vt_i);
-
-                    int vn_i;
-                    if ( !expect_char( '/', obj, obj_end ) ) goto error;
-                    if ( !parse_int( vn_i, obj, obj_end ) )  goto error ;
-                    dprint( "vn_i=" + std::to_string( vn_i ) );
-                    vertex->vn_i = (vn_i >= 0) ? vn_i : (hdr->norm_cnt + vn_i);
-
                 }
                 obj_assert( polygon->vtx_cnt != 0, ".obj f command has no vertices" );
                 if ( object != nullptr ) object->poly_cnt++;
@@ -666,7 +718,7 @@ Model::Model( std::string file_path, bool is_compressed )
     }
 
     //------------------------------------------------------------
-    // Write out header than individual arrays.
+    // Reader in header then individual arrays.
     //------------------------------------------------------------
     #define _read( array, type, cnt ) \
         if ( cnt == 0 ) { \
@@ -680,9 +732,9 @@ Model::Model( std::string file_path, bool is_compressed )
                 return; \
             } \
             char * _addr = reinterpret_cast<char *>( array ); \
-            for( uint _byte_cnt = (cnt)*sizeof(type); _byte_cnt != 0;  ) \
+            for( uint64 _byte_cnt = (cnt)*sizeof(type); _byte_cnt != 0;  ) \
             { \
-                uint _this_byte_cnt = 1024*1024*1024; \
+                uint64 _this_byte_cnt = 1024*1024*1024; \
                 if ( _byte_cnt < _this_byte_cnt ) _this_byte_cnt = _byte_cnt; \
                 if ( gzread( fd, _addr, _this_byte_cnt ) <= 0 ) { \
                     gzclose( fd ); \
@@ -754,9 +806,9 @@ bool Model::write( std::string file_path, bool is_compressed )
     #define _write( addr, byte_cnt ) \
     { \
         char * _addr = reinterpret_cast<char *>( addr ); \
-        for( uint _byte_cnt = byte_cnt; _byte_cnt != 0;  ) \
+        for( uint64 _byte_cnt = byte_cnt; _byte_cnt != 0;  ) \
         { \
-            uint _this_byte_cnt = 1024*1024*1024; \
+            uint64 _this_byte_cnt = 1024*1024*1024; \
             if ( _byte_cnt < _this_byte_cnt ) _this_byte_cnt = _byte_cnt; \
             if ( gzwrite( fd, _addr, _this_byte_cnt ) <= 0 ) { \
                 gzclose( fd ); \
@@ -786,7 +838,7 @@ bool Model::write( std::string file_path, bool is_compressed )
 
 // returns array of T on a page boundary
 template<typename T>
-T * Model::aligned_alloc( Model::uint cnt )
+T * Model::aligned_alloc( Model::uint64 cnt )
 {
     void * mem = nullptr;
     posix_memalign( &mem, getpagesize(), cnt*sizeof(T) );
@@ -795,11 +847,11 @@ T * Model::aligned_alloc( Model::uint cnt )
 
 // reallocate array if we are about to exceed its current size
 template<typename T>
-inline void Model::perhaps_realloc( T *& array, const Model::uint& hdr_cnt, Model::uint& max_cnt, Model::uint add_cnt )
+inline void Model::perhaps_realloc( T *& array, const Model::uint64& hdr_cnt, Model::uint64& max_cnt, Model::uint64 add_cnt )
 {
     while( (hdr_cnt + add_cnt) > max_cnt ) {
         void * mem = nullptr;
-        uint old_max_cnt = max_cnt;
+        uint64 old_max_cnt = max_cnt;
         max_cnt *= 2;
         if ( max_cnt < old_max_cnt ) {
             assert( old_max_cnt != uint(-1) );
@@ -922,9 +974,11 @@ bool Model::mtllib_load( std::string dir_path, std::string mtl_file )
     char * mtl_name = nullptr;
     char * tex_name = nullptr;
 
-    Material * material = nullptr;
-    Texture *  texture  = nullptr;
-    uint       tex_i;
+    Material *  material = nullptr;
+    Texture *   texture  = nullptr;
+    uint        tex_i;
+    std::string option_name;
+    real        bump_multiplier;
 
     for( ;; ) 
     {
@@ -1023,8 +1077,20 @@ bool Model::mtllib_load( std::string dir_path, std::string mtl_file )
             case CMD_MAP_KD:
             case CMD_MAP_KE:
             case CMD_MAP_KS:
+            case CMD_MAP_NS:
+            case CMD_MAP_D:
             case CMD_MAP_BUMP:
                 rtn_assert( material != nullptr, "no material defined" );
+
+                bump_multiplier = 1.0;
+                while( parse_option_name( option_name, mtl, mtl_end ) )
+                {
+                    if ( option_name == std::string("-bm") ) {
+                        if ( !parse_real( bump_multiplier, mtl, mtl_end ) ) return false;
+                    } else {
+                        rtn_assert( 0, "unknown texture map option: " + option_name );
+                    }
+                }
                 if ( !parse_name( tex_name, mtl, mtl_end ) ) return false;
                 if ( name_to_tex.find( tex_name ) != name_to_tex.end() ) {
                     // already loaded it
@@ -1035,6 +1101,7 @@ bool Model::mtllib_load( std::string dir_path, std::string mtl_file )
                     //
                     if ( !load_texture( dir_path, tex_name, texture ) ) return false;
                 }
+                texture->bump_multiplier = bump_multiplier;
 
                 tex_i = texture - textures;
 
@@ -1044,6 +1111,8 @@ bool Model::mtllib_load( std::string dir_path, std::string mtl_file )
                     case CMD_MAP_KD:        material->map_Kd_i   = tex_i; break;
                     case CMD_MAP_KE:        material->map_Ke_i   = tex_i; break;
                     case CMD_MAP_KS:        material->map_Ks_i   = tex_i; break;
+                    case CMD_MAP_NS:        material->map_Ns_i   = tex_i; break;
+                    case CMD_MAP_D:         material->map_d_i    = tex_i; break;
                     case CMD_MAP_BUMP:      material->map_Bump_i = tex_i; break;
                     default:                                              break; // should not happen
                 }
@@ -1054,7 +1123,7 @@ bool Model::mtllib_load( std::string dir_path, std::string mtl_file )
                 rtn_assert( 0, "unknown .mtl command" );
         }
 
-        rtn_assert( eol( mtl, mtl_end ), "not at eol in .mtl file" );
+        rtn_assert( eol( mtl, mtl_end ), "not at eol in .mtl file: " + surrounding_lines( mtl, mtl_end ) );
     }
 
     return true;
@@ -1118,7 +1187,7 @@ bool Model::load_texture( std::string dir_path, char *& tex_name, Model::Texture
     {
         for( uint j = 0; j < byte_width; j += 3, bgr += 3, rgb += 3 )
         {
-            if ( bgr < bgr_end ) {
+            if ( (bgr+2) < bgr_end ) {
                 rgb[0] = bgr[2];
                 rgb[1] = bgr[1];
                 rgb[2] = bgr[0];
@@ -1193,7 +1262,7 @@ bool Model::open_and_read( std::string dir_path, std::string file_name, char *& 
     std::string file_path = (dir_path != "") ? (dir_path + "/" + file_name) : file_name;
     const char * fname = file_path.c_str();
     int fd = open( fname, O_RDONLY );
-    if ( fd < 0 ) std::cout << "open_and_read() error: " << strerror( errno ) << "\n";
+    if ( fd < 0 ) std::cout << "open_and_read() error reading " << dir_path << "/" << file_name << ": " << strerror( errno ) << "\n";
     rtn_assert( fd >= 0, "could not open file " + file_path + " - open() error: " + strerror( errno ) );
 
     struct stat file_stat;
@@ -1247,11 +1316,28 @@ inline void Model::skip_whitespace( char *& xxx, char *& xxx_end )
     }
 }
 
+inline void Model::skip_whitespace_to_eol( char *& xxx, char *& xxx_end )
+{
+    bool in_comment = false;
+    for( ;; )
+    {
+        if ( xxx == xxx_end ) return;
+
+        char ch = *xxx;
+        if ( ch == '#' ) in_comment = true;
+        if ( !in_comment && ch != ' ' && ch != '\n' && ch != '\r' && ch != '\t' ) break;
+
+        if ( ch == '\n' || ch == '\r' ) {
+            if ( ch == '\n' && xxx == obj ) line_num++;
+            break;
+        }
+        xxx++;
+    }
+}
+
 inline bool Model::eol( char *& xxx, char *& xxx_end )
 {
-    // skip some whitespace
-    //
-    while( xxx != xxx_end && (*xxx == ' ' || *xxx == '\t') ) xxx++;
+    skip_whitespace_to_eol( xxx, xxx_end );
 
     if ( xxx == xxx_end || *xxx == '\n' || *xxx == '\r' ) {
         if ( xxx != xxx_end ) {
@@ -1340,6 +1426,25 @@ inline bool Model::parse_name( char *& name, char *& xxx, char *& xxx_end )
     rtn_assert( 0, "could not parse name" );
 }
 
+inline bool Model::parse_option_name( std::string& option_name, char *& xxx, char *& xxx_end )
+{
+    while( xxx != xxx_end && (*xxx == ' ' || *xxx == '\t') ) xxx++;  // skip leading spaces
+    if ( xxx == xxx_end or *xxx != '-' ) return false;
+    xxx++;
+
+    option_name = "-";
+    while( xxx != xxx_end )
+    {
+        char ch = *xxx;
+        if ( !( ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ) ) break;
+
+        option_name += std::string( 1, ch );
+        xxx++;
+    }
+
+    return true;
+}
+
 inline bool Model::parse_obj_cmd( obj_cmd_t& cmd )
 {
     rtn_assert( obj != obj_end, "no .obj command" );
@@ -1358,6 +1463,12 @@ inline bool Model::parse_obj_cmd( obj_cmd_t& cmd )
         case 'G':           
             rtn_assert( obj != obj_end && *obj == ' ', "bad .obj g command" );
             cmd = CMD_G;
+            return true;
+
+        case 's':           
+        case 'S':           
+            rtn_assert( obj != obj_end && *obj == ' ', "bad .obj s command" );
+            cmd = CMD_S;
             return true;
 
         case 'f':           
@@ -1402,7 +1513,7 @@ inline bool Model::parse_obj_cmd( obj_cmd_t& cmd )
             return expect_cmd( "semtl", obj, obj_end ); 
             
         default:
-            rtn_assert( 0, "bad .obj command character: " + std::string( 1, ch ) );
+            rtn_assert( 0, "bad .obj command character: " + surrounding_lines( obj, obj_end ) );
     }
 }
 
@@ -1541,6 +1652,21 @@ inline bool Model::parse_mtl_cmd( mtl_cmd_t& cmd, char *& mtl, char *& mtl_end )
                 }
                 return true;
 
+            } else if ( ch == 'n' || ch == 'N' ) {
+                if ( !expect_char( 's', mtl, mtl_end ) || 
+                     !expect_char( ' ', mtl, mtl_end ) ) {
+                    rtn_assert( 0, "unexpected .mtl map_n command" );
+                }
+                cmd = CMD_MAP_NS;
+                return true;
+
+            } else if ( ch == 'd' || ch == 'D' ) {
+                if ( !expect_char( ' ', mtl, mtl_end ) ) {
+                    rtn_assert( 0, "unexpected .mtl map_d command" );
+                }
+                cmd = CMD_MAP_D;
+                return true;
+
             } else if ( ch == 'b' || ch == 'B' ) {
                 if ( !expect_char( 'u', mtl, mtl_end ) || 
                      !expect_char( 'm', mtl, mtl_end ) || 
@@ -1553,10 +1679,22 @@ inline bool Model::parse_mtl_cmd( mtl_cmd_t& cmd, char *& mtl, char *& mtl_end )
                 return true;
             }
 
-            rtn_assert( 0, "truncated .mtl m command" );
+            rtn_assert( 0, "truncated .mtl m command: " + surrounding_lines( mtl, mtl_end ) );
+
+        case 'b':
+        case 'B':
+            if ( !expect_char( 'u', mtl, mtl_end ) || 
+                 !expect_char( 'm', mtl, mtl_end ) || 
+                 !expect_char( 'p', mtl, mtl_end ) ||
+                 !expect_char( ' ', mtl, mtl_end ) ) {
+                rtn_assert( 0, "unexpected .mtl b command" );
+            }
+
+            cmd = CMD_MAP_BUMP;
+            return true;
 
         default:
-            rtn_assert( 0, "bad .mtl command character" );
+            rtn_assert( 0, "bad .mtl command character: " + surrounding_lines( mtl, mtl_end ) );
     }
 }
 
@@ -1658,6 +1796,19 @@ inline bool Model::parse_int( int& i, char *& xxx, char *& xxx_end )
     if ( is_neg ) i = -i;
     rtn_assert( vld, "unable to parse int" );
     return true;
+}
+
+std::string Model::surrounding_lines( char *& xxx, char *& xxx_end )
+{
+    uint eol_cnt = 0;
+    std::string s = "";
+    while( eol_cnt != 2 && xxx != xxx_end )
+    {
+        s += std::string( 1, *xxx ) ;
+        if ( *xxx == '\n' ) eol_cnt++;
+        xxx++;
+    }
+    return s;
 }
 
 inline std::istream& operator >> ( std::istream& is, Model::real3& v ) 
@@ -2117,8 +2268,12 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
                 hit_info.t = t;
                 hit_info.p = p;
 
-                hit_info.normal = n0*alpha + n1*gamma + n2*beta;
-                hit_info.normal.normalize();
+                if ( vertexes[0].vn_i != uint(-1) ) {
+                    hit_info.normal = n0*alpha + n1*gamma + n2*beta;
+                    hit_info.normal.normalize();
+                }
+ // TODO: Over-riding vertex normals for now
+ hit_info.normal = normal;
 
                 real distance_squared = t*t / direction.length_sqr();
                 hit_info.solid_angle = area / distance_squared;                                         // off by 2X, but...

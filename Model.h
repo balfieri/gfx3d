@@ -22,15 +22,7 @@
 //
 // How to use it:
 //
-//     1) Please first convert .jpg/.png/etc. textures to .bmp format: 
-//
-//              cd textures
-//              mogrify -format bmp *.{jpg,png,TGA} 
-//
-//        This way, we don't create a dependency on other code.
-//        Model will convert .jpg/.png/etc. suffixes to .bmp automatically, so no need to change .mtl files.
-//
-//     2) #include "Model.h"
+//     1) #include "Model.h"
 //
 //        Model * model = new Model( "~/models/sanmiguel", "sanmiguel.obj" );   // model dir, .obj file
 //        if ( !model->is_good ) {
@@ -40,7 +32,7 @@
 //        model->write( "~models/sanmiguel/sanmiguel.model" );   // will write out the self-contained binary model
 //                                                               // default is compressed, add "false" as 2nd arg for uncompressed
 //
-//     3) After that, you can quickly read in the single binary model file using:
+//     2) After that, you can quickly read in the single binary model file using:
 //
 //        Model * model = new Model( "~models/sanmiguel/sanmiguel.model" );  // add "false" as 2nd arg for uncompressed
 //        if ( !model->is_good ) {
@@ -48,7 +40,7 @@
 //            exit( 1 );
 //        }
 //
-//     4) If you want Model to generate mipmap textures, add Model::MIPMAP_FILTER::BOX as a third argument 
+//     3) If you want Model to generate mipmap textures, add Model::MIPMAP_FILTER::BOX as a third argument 
 //        to the Model() constructor in (2) to get a box filter.  Other filters may be added later.
 //        The texture for mip level 0 is the original texture.  The texels for the other mip levels
 //        follow immediately with no padding in between.  The original width and height need not
@@ -58,7 +50,7 @@
 //        the number of texels in each level, so you'll need to compute those on the fly as you
 //        try to obtain the starting offset for a given level.
 //
-//     5) If you want Model to generate a BVH tree for you, add Model::BVH_TREE::BINARY as the fourth argument
+//     4) If you want Model to generate a BVH tree for you, add Model::BVH_TREE::BINARY as the fourth argument
 //        to the Model() constructor in (2) to get a binary BVH tree.  QUAD and OCT trees are not
 //        currently supported.
 //
@@ -102,6 +94,11 @@
 #include <string.h>
 #include <zlib.h>
 
+#ifndef STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+#endif
+
 class Model
 {
 public:
@@ -126,8 +123,9 @@ public:
     ~Model(); 
 
     bool write( std::string file_path, bool is_compressed=true ); 
+    bool replace_materials( std::string mtl_file_path );
 
-    static const uint VERSION = 0xB0BA1f04; // current version is 4
+    static const uint VERSION = 0xB0BA1f05; // current version is 5
 
     bool                is_good;            // set to true if constructor succeeds
     std::string         error_msg;          // if !is_good
@@ -295,6 +293,7 @@ public:
         uint            name_i;             // index in strings array (null-terminated strings)
         uint            width;              // level 0 width
         uint            height;             // level 0 height
+        uint            nchan;              // number of channels (typically 3 or 4)
         uint64          texel_i;            // index into texels array of first texel
         real            bump_multiplier;    // should be for bump maps only but also used with other textures
     };
@@ -331,8 +330,12 @@ public:
     char *              strings;
 
     // maps
-    std::map<std::string, Material *> name_to_mtl;
-    std::map<std::string, Texture  *> name_to_tex;
+    std::map<std::string, uint> name_to_mtl_i;
+    std::map<std::string, uint> name_to_tex_i;
+
+    // debug flags
+    static bool         debug_hit;
+    static uint         debug_tex_i;
 
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
@@ -388,11 +391,12 @@ private:
     char *              obj_end;
     uint                line_num;
 
-    bool mtllib_load( std::string dir_path, std::string mtl_file );
+    bool mtllib_load( std::string dir_path, std::string mtl_file, bool replacing=false );
     bool load_texture( std::string dir_path, char *& tex_name, Texture *& texture );
     bool open_and_read( std::string dir_path, std::string file_name, char *& start, char *& end );
     void skip_whitespace_to_eol( char *& xxx, char *& xxx_end );  // on this line only
     void skip_whitespace( char *& xxx, char *& xxx_end );
+    void skip_to_eol( char *& xxx, char *& xxx_end );
     bool eol( char *& xxx, char *& xxx_end );
     bool expect_char( char ch, char *& xxx, char* xxx_end );
     bool expect_cmd( const char * s, char *& xxx, char *& xxx_end );
@@ -430,6 +434,54 @@ private:
 #include <assert.h>
 #define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << msg << "\n"; assert( false ); return false; }
 #define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << msg << "\n"; assert( false ); goto error;   }
+
+inline std::istream& operator >> ( std::istream& is, Model::real3& v ) 
+{
+    is >> v.c[0] >> v.c[1] >> v.c[2];
+    return is;
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::real3& v ) 
+{
+    os << "[" << v.c[0] << "," << v.c[1] << "," << v.c[2] << "]";
+    return os;
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::AABB& box ) 
+{
+    os << box.min << ".." << box.max;
+    return os;
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::Material& mat ) 
+{
+    os << "name_i="  << mat.name_i <<
+          " Ka="     << mat.Ka <<
+          " Kd="     << mat.Kd <<
+          " Ke="     << mat.Ke <<
+          " Ks="     << mat.Ks <<
+          " Tf="     << mat.Tf <<
+          " Tr="     << mat.Tr <<
+          " Ns="     << mat.Ns <<
+          " Ni="     << mat.Ni <<
+          " d="      << mat.d  <<
+          " illum="  << mat.illum <<
+          " map_Ka_i=" << mat.map_Ka_i <<
+          " map_Kd_i=" << mat.map_Kd_i <<
+          " map_Ke_i=" << mat.map_Ke_i <<
+          " map_Ks_i=" << mat.map_Ks_i <<
+          " map_Ns_i=" << mat.map_Ns_i <<
+          " map_d_i="  << mat.map_d_i <<
+          " map_Bump_i=" << mat.map_Bump_i;
+    return os;
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::Texture& tex ) 
+{
+    os << "name_i=" << tex.name_i << " width=" << tex.width << " height=" << tex.height << " nchan=" << tex.nchan <<
+                    " texel_i=" << tex.texel_i << " bump_multiplier=" << tex.bump_multiplier;
+    return os;
+}
 
 Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER mipmap_filter, Model::BVH_TREE bvh_tree )
 {
@@ -549,43 +601,19 @@ Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER m
             case CMD_V:
                 perhaps_realloc<real3>( positions, hdr->pos_cnt, max->pos_cnt, 1 );
                 if ( !parse_real3( positions[ hdr->pos_cnt++ ], obj, obj_end ) ) goto error;
-                if ( !eol( obj, obj_end ) ) {
-                    // TODO: skip rest of v params for now
-                    while( obj != obj_end ) 
-                    {
-                        char ch = *obj;
-                        if ( ch == '\n' || ch == '\r' ) break;
-                        obj++;
-                    }
-                }
+                skip_to_eol( obj, obj_end );
                 break;
                 
             case CMD_VN:
                 perhaps_realloc<real3>( normals, hdr->norm_cnt, max->norm_cnt, 1 );
                 if ( !parse_real3( normals[ hdr->norm_cnt++ ], obj, obj_end ) ) goto error;
-                if ( !eol( obj, obj_end ) ) {
-                    // TODO: skip rest of vn params for now
-                    while( obj != obj_end ) 
-                    {
-                        char ch = *obj;
-                        if ( ch == '\n' || ch == '\r' ) break;
-                        obj++;
-                    }
-                }
+                skip_to_eol( obj, obj_end );
                 break;
                 
             case CMD_VT:
                 perhaps_realloc<real2>( texcoords, hdr->texcoord_cnt, max->texcoord_cnt, 1 );
                 if ( !parse_real2( texcoords[ hdr->texcoord_cnt++ ], obj, obj_end ) ) goto error;
-                if ( !eol( obj, obj_end ) ) {
-                    // TODO: skip rest of vt params for now
-                    while( obj != obj_end ) 
-                    {
-                        char ch = *obj;
-                        if ( ch == '\n' || ch == '\r' ) break;
-                        obj++;
-                    }
-                }
+                skip_to_eol( obj, obj_end );
                 break;
                 
             case CMD_F:
@@ -638,8 +666,11 @@ Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER m
                 // split 4+ sided polygons into triangles
                 uint first_poly_i = hdr->poly_cnt-1;
                 if ( polygon->vtx_cnt > 3 ) {
+                    if ( 0 ) std::cout << "splitting poly_i=" << first_poly_i << "\n";
                     uint extra_triangle_cnt = polygon->vtx_cnt - 3;
                     perhaps_realloc<Polygon>( polygons, hdr->poly_cnt, max->poly_cnt, extra_triangle_cnt );
+                    polygon = polygons + first_poly_i;  // could ahve changed
+                    hdr->poly_cnt += extra_triangle_cnt;
                     polygon->vtx_cnt = 3;
 
                     // We don't need 3*extra_triangle_cnt more vertexes.
@@ -675,6 +706,8 @@ Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER m
                     real len = triangle->normal.length();
                     triangle->area = len / 2;
                     triangle->normal = triangle->normal / len;
+                    if ( 0 && triangle_cnt > 1 ) std::cout << "    " << t << ": p0=" << p0 << " p1=" << p1 << " p2=" << p2 << 
+                                                   " normal=" << triangle->normal << " len=" << len << " area=" << triangle->area << "\n";
                 }
                 break;
             }
@@ -688,9 +721,9 @@ Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER m
                 obj_assert( mtllib != nullptr, "no mtllib defined for object " + std::string( obj_name ) );
                 if ( !parse_name( name, obj, obj_end ) ) goto error;
                 mtl_name = std::string( name );
-                obj_assert( name_to_mtl.find( mtl_name ) != name_to_mtl.end(), "unknown material: " + std::string( mtl_name ) );
-                material = name_to_mtl[mtl_name];
-                mtl_i = material - materials;
+                obj_assert( name_to_mtl_i.find( mtl_name ) != name_to_mtl_i.end(), "unknown material: " + std::string( mtl_name ) );
+                mtl_i = name_to_mtl_i[mtl_name];
+                material = &materials[mtl_i];
                 break;
 
             default:
@@ -836,6 +869,11 @@ bool Model::write( std::string file_path, bool is_compressed )
     return true;
 }
 
+bool Model::replace_materials( std::string mtl_file_path )
+{
+    return mtllib_load( "", mtl_file_path, true );
+}
+
 // returns array of T on a page boundary
 template<typename T>
 T * Model::aligned_alloc( Model::uint64 cnt )
@@ -959,7 +997,7 @@ bool Model::read_uncompressed( std::string file_path )
     return true;
 }
 
-bool Model::mtllib_load( std::string dir_path, std::string mtl_file )
+bool Model::mtllib_load( std::string dir_path, std::string mtl_file, bool replacing )
 {
     //------------------------------------------------------------
     // Map in .obj file
@@ -971,12 +1009,16 @@ bool Model::mtllib_load( std::string dir_path, std::string mtl_file )
     //------------------------------------------------------------
     // Parse .mtl file contents
     //------------------------------------------------------------
+    uint orig_mtl_cnt = hdr->mtl_cnt;
+    if ( replacing ) hdr->mtl_cnt = 0;
+
     char * mtl_name = nullptr;
     char * tex_name = nullptr;
 
+    uint        mtl_i;
     Material *  material = nullptr;
-    Texture *   texture  = nullptr;
     uint        tex_i;
+    Texture *   texture  = nullptr;
     std::string option_name;
     real        bump_multiplier;
 
@@ -992,34 +1034,43 @@ bool Model::mtllib_load( std::string dir_path, std::string mtl_file )
         switch( cmd )
         {
             case CMD_NEWMTL:
-                if ( !parse_name( mtl_name, mtl, mtl_end ) ) return false;
-                if ( name_to_mtl.find( mtl_name ) != name_to_mtl.end() ) {
-                    material = name_to_mtl[ mtl_name ];         
+                if ( !replacing ) {
+                    if ( !parse_name( mtl_name, mtl, mtl_end ) ) return false;
+                } else {
+                    skip_to_eol( mtl, mtl_end );
+                }
+                if ( !replacing && name_to_mtl_i.find( mtl_name ) != name_to_mtl_i.end() ) {
+                    mtl_i = name_to_mtl_i[ mtl_name ];         
+                    material = &materials[mtl_i];
                     dprint( "  found " + std::string( mtl_name ) );
                 } else {
-                    perhaps_realloc<Material>( materials, hdr->mtl_cnt, max->mtl_cnt, 1 );
-                    material = &materials[ hdr->mtl_cnt++ ];
-                    material->name_i = mtl_name - strings;
-                    for( uint j = 0; j < 3; j++ )
-                    {
-                        material->Ka.c[j] = 1.0;
-                        material->Kd.c[j] = 1.0;
-                        material->Ke.c[j] = 0.0;
-                        material->Ks.c[j] = 0.0;
-                        material->Tf.c[j] = 1.0;
+                    if ( !replacing ) perhaps_realloc<Material>( materials, hdr->mtl_cnt, max->mtl_cnt, 1 );
+                    rtn_assert( !replacing || hdr->mtl_cnt < orig_mtl_cnt, "more replacement materials than originally created" );
+                    mtl_i = hdr->mtl_cnt++;
+                    material = &materials[mtl_i];
+                    if ( !replacing ) {
+                        material->name_i = mtl_name - strings;
+                        for( uint j = 0; j < 3; j++ )
+                        {
+                            material->Ka.c[j] = 1.0;
+                            material->Kd.c[j] = 1.0;
+                            material->Ke.c[j] = 0.0;
+                            material->Ks.c[j] = 0.0;
+                            material->Tf.c[j] = 1.0;
+                        }
+                        material->Tr = 0.0;
+                        material->Ns = 0.0;
+                        material->Ni = 1.0;
+                        material->d  = 1.0;
+                        material->illum = 2;
+                        material->map_Ka_i = uint(-1);
+                        material->map_Kd_i = uint(-1);
+                        material->map_Ke_i = uint(-1);
+                        material->map_Ks_i = uint(-1);
+                        material->map_Bump_i = uint(-1);
+                        name_to_mtl_i[ mtl_name ] = mtl_i;
+                        dprint( "  added " + std::string( mtl_name ) );
                     }
-                    material->Tr = 0.0;
-                    material->Ns = 0.0;
-                    material->Ni = 1.0;
-                    material->d  = 1.0;
-                    material->illum = 2;
-                    material->map_Ka_i = uint(-1);
-                    material->map_Kd_i = uint(-1);
-                    material->map_Ke_i = uint(-1);
-                    material->map_Ks_i = uint(-1);
-                    material->map_Bump_i = uint(-1);
-                    name_to_mtl[ mtl_name ] = material;
-                    dprint( "  added " + std::string( mtl_name ) );
                 }
                 break;
 
@@ -1081,42 +1132,46 @@ bool Model::mtllib_load( std::string dir_path, std::string mtl_file )
             case CMD_MAP_D:
             case CMD_MAP_BUMP:
                 rtn_assert( material != nullptr, "no material defined" );
-
-                bump_multiplier = 1.0;
-                while( parse_option_name( option_name, mtl, mtl_end ) )
-                {
-                    if ( option_name == std::string("-bm") ) {
-                        if ( !parse_real( bump_multiplier, mtl, mtl_end ) ) return false;
-                    } else {
-                        rtn_assert( 0, "unknown texture map option: " + option_name );
+                
+                if ( !replacing ) {
+                    bump_multiplier = 1.0;
+                    while( parse_option_name( option_name, mtl, mtl_end ) )
+                    {
+                        if ( option_name == std::string("-bm") ) {
+                            if ( !parse_real( bump_multiplier, mtl, mtl_end ) ) return false;
+                        } else {
+                            rtn_assert( 0, "unknown texture map option: " + option_name );
+                        }
                     }
-                }
-                if ( !parse_name( tex_name, mtl, mtl_end ) ) return false;
-                if ( name_to_tex.find( tex_name ) != name_to_tex.end() ) {
-                    // already loaded it
-                    //
-                    texture = name_to_tex[ tex_name ];
+                    if ( !parse_name( tex_name, mtl, mtl_end ) ) return false;
+                    if ( name_to_tex_i.find( tex_name ) != name_to_tex_i.end() ) {
+                        // already loaded it
+                        //
+                        tex_i = name_to_tex_i[tex_name];
+                        texture = &textures[tex_i];
+                    } else {
+                        // need to load it
+                        //
+                        if ( !load_texture( dir_path, tex_name, texture ) ) return false;
+                    }
+                    texture->bump_multiplier = bump_multiplier;
+
+                    tex_i = texture - textures;
+
+                    switch( cmd ) 
+                    {
+                        case CMD_MAP_KA:        material->map_Ka_i   = tex_i; break;
+                        case CMD_MAP_KD:        material->map_Kd_i   = tex_i; break;
+                        case CMD_MAP_KE:        material->map_Ke_i   = tex_i; break;
+                        case CMD_MAP_KS:        material->map_Ks_i   = tex_i; break;
+                        case CMD_MAP_NS:        material->map_Ns_i   = tex_i; break;
+                        case CMD_MAP_D:         material->map_d_i    = tex_i; break;
+                        case CMD_MAP_BUMP:      material->map_Bump_i = tex_i; break;
+                        default:                                              break; // should not happen
+                    }
                 } else {
-                    // need to load it
-                    //
-                    if ( !load_texture( dir_path, tex_name, texture ) ) return false;
+                    skip_to_eol( mtl, mtl_end );
                 }
-                texture->bump_multiplier = bump_multiplier;
-
-                tex_i = texture - textures;
-
-                switch( cmd ) 
-                {
-                    case CMD_MAP_KA:        material->map_Ka_i   = tex_i; break;
-                    case CMD_MAP_KD:        material->map_Kd_i   = tex_i; break;
-                    case CMD_MAP_KE:        material->map_Ke_i   = tex_i; break;
-                    case CMD_MAP_KS:        material->map_Ks_i   = tex_i; break;
-                    case CMD_MAP_NS:        material->map_Ns_i   = tex_i; break;
-                    case CMD_MAP_D:         material->map_d_i    = tex_i; break;
-                    case CMD_MAP_BUMP:      material->map_Bump_i = tex_i; break;
-                    default:                                              break; // should not happen
-                }
-
                 break;
 
             default:
@@ -1129,77 +1184,49 @@ bool Model::mtllib_load( std::string dir_path, std::string mtl_file )
     return true;
 }
 
+uint Model::debug_tex_i = 1; // uint(-1);
+
 bool Model::load_texture( std::string dir_path, char *& tex_name, Model::Texture *& texture )
 {
     // allocate Texture structure
     //
     perhaps_realloc<Texture>( textures, hdr->tex_cnt, max->tex_cnt, 1 );
-    texture = &textures[ hdr->tex_cnt++ ];
+    uint tex_i = hdr->tex_cnt++;
+    texture = &textures[tex_i];
     memset( texture, 0, sizeof( Texture ) );
     texture->name_i = tex_name - strings;
-    name_to_tex[ tex_name ] = texture;
+    name_to_tex_i[ tex_name ] = tex_i;
 
-    // convert file extension to .bmp (assume 3 characters in extension for now)
-    // also change any '\' to '/'
+    // change any '\' to '/'
     //
-    char * bmp_name = strdup( tex_name );
-    size_t len = strlen( bmp_name );
+    std::string tex_name_s = std::string( tex_name );
+    if ( dir_path != "" ) tex_name_s = dir_path + "/" + tex_name_s;
+    char * file_name = strdup( tex_name_s.c_str() );
+    size_t len = strlen( file_name );
     for( size_t i = 0; i < len; i++ ) 
     {
-        if ( bmp_name[i] == '\\' ) bmp_name[i] = '/';
+        if ( file_name[i] == '\\' ) file_name[i] = '/';
     }
-    char * ext = bmp_name + len - 4;
-    rtn_assert( *ext == '.', "texture file does not have 3-character extension" );
-    ext++;
-    *ext = 'b'; ext++;
-    *ext = 'm'; ext++;
-    *ext = 'p'; ext++;
 
-    // read .bmp file (the user is responsible for running mogrify in the textures directory)
+    // read file using stb_image.h
     //
-    char * data;
-    char * data_end;
-    if ( !open_and_read( dir_path, std::string( bmp_name ), data, data_end ) ) return false;
-
-    // Extract image height and width from header.
-    // Actual byte width is padded to 4-byte boundary.
-    // Allocate RGB texels.
-    //
-    uint width  = *(int*)&data[18];
-    uint height = *(int*)&data[22];
-    texture->width  = width;
-    texture->height = height;
-
-    uint byte_width = width * 3;
-    uint byte_cnt   = byte_width * height;
-
-    unsigned char * bgr     = reinterpret_cast<unsigned char *>( data+54 );  // first BGR texel
-    unsigned char * bgr_end = reinterpret_cast<unsigned char *>( data_end );
+    int    w;
+    int    h;
+    int    nchan;
+    unsigned char * data = stbi_load( file_name, &w, &h, &nchan, 0 );
+    rtn_assert( data != nullptr, "unable to read in texture file " + std::string( file_name ) );
+    texture->width  = w;
+    texture->height = h;
+    texture->nchan  = nchan;
     texture->texel_i = hdr->texel_cnt;
-
+    uint width      = texture->width;
+    uint height     = texture->height;
+    uint byte_width = width * texture->nchan;
+    uint byte_cnt   = byte_width * height;
     perhaps_realloc<unsigned char>( texels, hdr->texel_cnt, max->texel_cnt, byte_cnt );
     hdr->texel_cnt += byte_cnt;
-
-    // Copy texels and convert BGR to RGB byte order.
-    //
-    unsigned char * rgb = texels + texture->texel_i;
-    for( uint i = 0; i < height; i++ )
-    {
-        for( uint j = 0; j < byte_width; j += 3, bgr += 3, rgb += 3 )
-        {
-            if ( (bgr+2) < bgr_end ) {
-                rgb[0] = bgr[2];
-                rgb[1] = bgr[1];
-                rgb[2] = bgr[0];
-            } else {
-                rgb[0] = 0;
-                rgb[1] = 0;
-                rgb[2] = 0;
-            }
-        }    
-    }
+    memcpy( texels + texture->texel_i, data, byte_cnt );
     delete data;
-    bgr = nullptr;
 
     // if requested, generate mipmap levels down to 1x1
     //
@@ -1211,7 +1238,7 @@ bool Model::load_texture( std::string dir_path, char *& tex_name, Model::Texture
         if ( to_width  == 0 ) to_width  = 1;
         if ( to_height == 0 ) to_height = 1;
 
-        uint   to_byte_width = to_width * 3;
+        uint   to_byte_width = to_width * texture->nchan;
         uint   to_byte_cnt   = to_byte_width * to_height;
         perhaps_realloc<unsigned char>( texels, hdr->texel_cnt, max->texel_cnt, to_byte_cnt );
         hdr->texel_cnt += to_byte_cnt;
@@ -1221,9 +1248,9 @@ bool Model::load_texture( std::string dir_path, char *& tex_name, Model::Texture
 
         for( uint ti = 0; ti < to_height; ti++ )
         {
-            for( uint tj = 0; tj < to_width; tj++, trgb += 3 )
+            for( uint tj = 0; tj < to_width; tj++, trgb += texture->nchan )
             {
-                uint sum[3] = { 0, 0, 0 };
+                uint sum[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
                 uint cnt = 0;
                 for( uint fi = 0; fi < 2; fi++ )
                 {
@@ -1233,17 +1260,19 @@ bool Model::load_texture( std::string dir_path, char *& tex_name, Model::Texture
                     {
                         uint fjj = tj*2 + fj;
                         if ( fjj >= width ) continue;
-                        unsigned char * frgb = rgb + fii*byte_width + fjj*3;
-                        sum[0] += frgb[0];
-                        sum[1] += frgb[1];
-                        sum[2] += frgb[2];
+                        unsigned char * frgb = rgb + fii*byte_width + fjj*texture->nchan;
+                        for( uint c = 0; c < texture->nchan; c++ )
+                        {
+                            sum[c] += frgb[c];
+                        }
                         cnt++;
                     }
                 }
 
-                trgb[0] = (real(sum[0]) + 0.5) / real(cnt);
-                trgb[1] = (real(sum[1]) + 0.5) / real(cnt);
-                trgb[2] = (real(sum[2]) + 0.5) / real(cnt);
+                for( uint c = 0; c < texture->nchan; c++ )
+                {
+                    trgb[c] = (real(sum[c]) + 0.5) / real(cnt);
+                }
             }
         }
 
@@ -1332,6 +1361,18 @@ inline void Model::skip_whitespace_to_eol( char *& xxx, char *& xxx_end )
             break;
         }
         xxx++;
+    }
+}
+
+inline void Model::skip_to_eol( char *& xxx, char *& xxx_end )
+{
+    if ( !eol( xxx, xxx_end ) ) {
+        while( xxx != xxx_end )
+        {
+            char ch = *xxx;
+            if ( ch == '\n' || ch == '\r' ) break;
+            xxx++;
+        }
     }
 }
 
@@ -1811,18 +1852,6 @@ std::string Model::surrounding_lines( char *& xxx, char *& xxx_end )
     return s;
 }
 
-inline std::istream& operator >> ( std::istream& is, Model::real3& v ) 
-{
-    is >> v.c[0] >> v.c[1] >> v.c[2];
-    return is;
-}
-
-inline std::ostream& operator << ( std::ostream& os, const Model::real3& v ) 
-{
-    os << "[" << v.c[0] << "," << v.c[1] << "," << v.c[2] << "]";
-    return os;
-}
-
 inline void Model::AABB::pad( Model::real p ) 
 {
     min -= real3( p, p, p );
@@ -2221,6 +2250,8 @@ bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real p
     return true;
 }
 
+bool Model::debug_hit = false;
+
 inline bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, real t_min, real t_max, 
                                  HitInfo& hit_info ) const
 {
@@ -2236,6 +2267,8 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
         // t = dot(corner - o, N) / dot(v,N)
         real d = direction.dot( normal );
         real t = (p0 - origin).dot( normal ) / d;
+        if ( debug_hit ) std::cout << "    poly_i=" << (this - model->polygons) << " d=" << d << 
+                                      " t=" << t << " t_min=" << t_min << " t_max=" << t_max << "\n";
         if ( t > t_min && t < t_max ) {
              // compute barycentrics, see if it's in triangle
              const real3& p1 = positions[vertexes[1].v_i];
@@ -2250,6 +2283,7 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
              real area_2x = area * 2.0;
              real beta    = area1/area_2x;
              real gamma   = area2/area_2x;
+             if ( debug_hit ) std::cout << "    beta=" << beta << " gamma=" << gamma << "\n";
              if ( beta >= 0.0 && gamma >= 0.0 && (beta + gamma) <= 1.0 ) {
                 const real3 * normals   = model->normals;
                 const real2 * texcoords = model->texcoords;
@@ -2271,24 +2305,30 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
                 if ( vertexes[0].vn_i != uint(-1) ) {
                     hit_info.normal = n0*alpha + n1*gamma + n2*beta;
                     hit_info.normal.normalize();
+                } else {
+                    hit_info.normal = normal;
                 }
- // TODO: Over-riding vertex normals for now
- hit_info.normal = normal;
 
                 real distance_squared = t*t / direction.length_sqr();
-                hit_info.solid_angle = area / distance_squared;                                         // off by 2X, but...
+                hit_info.solid_angle  = area / distance_squared;                                       // off by 2X, but...
                 hit_info.solid_angle *= std::abs(0.5*(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1)); // correction for UV at corners as lengths
                 hit_info.u = alpha*u0 + gamma*u1 + beta*u2 ;
                 hit_info.v = alpha*v0 + gamma*v1 + beta*v2 ;
 
-                if ( 0 ) std::cout << "\nhit poly_i=" << hit_info.poly_i << 
-                             " t=" << hit_info.t << " normal=" << hit_info.normal << 
-                             " solid_angle=" << hit_info.solid_angle <<
-                             " p=" << hit_info.p << " u=" << hit_info.u << " v=" << hit_info.v <<
-                             " p0=" << p0 << " p1=" << p1 << " p2=" << p2 << 
-                             " n0=" << n0 << " n1=" << n1 << " n2=" << n2 << 
-                             " u0=" << u0 << " u1=" << u1 << " u2=" << u2 <<
-                             " v0=" << v0 << " v1=" << v1 << " v2=" << v2 << "\n";
+                if ( debug_hit ) {
+                    std::cout << "\nhit poly_i=" << hit_info.poly_i << " mtl_i=" << mtl_i <<
+                                 " t=" << hit_info.t << " normal=" << hit_info.normal << 
+                                 " solid_angle=" << hit_info.solid_angle <<
+                                 " p=" << hit_info.p << " u=" << hit_info.u << " v=" << hit_info.v <<
+                                 " p0=" << p0 << " p1=" << p1 << " p2=" << p2;
+                    if ( vertexes[0].vn_i != uint(-1) ) {
+                        std::cout << " n0=" << n0 << " n1=" << n1 << " n2=" << n2;
+                    } else {
+                        std::cout << " [no vertex normals]";
+                    }
+                    std::cout << " u0=" << u0 << " u1=" << u1 << " u2=" << u2 <<
+                                 " v0=" << v0 << " v1=" << v1 << " v2=" << v2 << "\n";
+                }
                 return true;
              }
         }
@@ -2315,6 +2355,7 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
         bool hit_right = (left_i == right_i) ? false :  // lone leaf
                          right_is_leaf ? model->polygons[right_i].hit(  model, origin, direction, t_min, t_max, right_hit_info )
                                        : model->bvh_nodes[right_i].hit( model, origin, direction, t_min, t_max, right_hit_info );
+        if ( debug_hit ) std::cout << "hit box: " << box << " hit_left=" << hit_left << " hit_right=" << hit_right << "\n";
         if ( hit_left && (!hit_right || left_hit_info.t < right_hit_info.t) ) {
             hit_info = left_hit_info;
             r = true;

@@ -634,21 +634,21 @@ Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER m
                     dprint( "v_i=" + std::to_string( v_i ) );
                     vertex->v_i = (v_i >= 0)  ? v_i : (hdr->pos_cnt + v_i);
 
-                    if ( *obj == '/' ) {
+                    if ( obj != obj_end && *obj == '/' ) {
                         if ( !expect_char( '/', obj, obj_end ) ) goto error;
-
                         int vt_i;
                         if ( obj != obj_end && *obj == '/' ) {
-                            vt_i = 0;
+                            if ( !expect_char( '/', obj, obj_end ) ) goto error;
+                            vertex->vt_i = uint(-1);
                         } else {
                             if ( !parse_int( vt_i, obj, obj_end ) ) goto error;
+                            dprint( "vt_i=" + std::to_string( vt_i ) );
+                            vertex->vt_i = (vt_i >= 0) ? vt_i : ((int)hdr->texcoord_cnt + vt_i);
                         }
-                        dprint( "vt_i=" + std::to_string( vt_i ) );
-                        vertex->vt_i = (vt_i >= 0) ? vt_i : ((int)hdr->texcoord_cnt + vt_i);
 
-                        if ( *obj == '/' ) {
-                            int vn_i;
+                        if ( obj != obj_end && *obj == '/' ) {
                             if ( !expect_char( '/', obj, obj_end ) ) goto error;
+                            int vn_i;
                             if ( !parse_int( vn_i, obj, obj_end ) )  goto error;
                             dprint( "vn_i=" + std::to_string( vn_i ) );
                             vertex->vn_i = (vn_i >= 0) ? vn_i : (hdr->norm_cnt + vn_i);
@@ -719,11 +719,16 @@ Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER m
                 
             case CMD_USEMTL:
                 obj_assert( mtllib != nullptr, "no mtllib defined for object " + std::string( obj_name ) );
-                if ( !parse_name( name, obj, obj_end ) ) goto error;
-                mtl_name = std::string( name );
-                obj_assert( name_to_mtl_i.find( mtl_name ) != name_to_mtl_i.end(), "unknown material: " + std::string( mtl_name ) );
-                mtl_i = name_to_mtl_i[mtl_name];
-                material = &materials[mtl_i];
+                if ( !eol( obj, obj_end ) ) {
+                    if ( !parse_name( name, obj, obj_end ) ) goto error;
+                    mtl_name = std::string( name );
+                    obj_assert( name_to_mtl_i.find( mtl_name ) != name_to_mtl_i.end(), "unknown material: " + std::string( mtl_name ) );
+                    mtl_i = name_to_mtl_i[mtl_name];
+                    material = &materials[mtl_i];
+                } else {
+                    mtl_i = uint(-1);
+                    material = nullptr;
+                }
                 break;
 
             default:
@@ -1464,7 +1469,7 @@ inline bool Model::parse_name( char *& name, char *& xxx, char *& xxx_end )
         return *ptr != '\0';
     }
 
-    rtn_assert( 0, "could not parse name" );
+    rtn_assert( 0, "could not parse name: " + surrounding_lines( xxx, xxx_end ) );
 }
 
 inline bool Model::parse_option_name( std::string& option_name, char *& xxx, char *& xxx_end )

@@ -82,6 +82,7 @@
 #include <cstdint>
 #include <string>
 #include <cmath>
+#include <algorithm>
 #include <map>
 #include <iostream>
 
@@ -238,6 +239,7 @@ public:
         void pad( real p );
         void expand( const AABB& other );
         void expand( const real3& p );
+        bool encloses( const AABB& other ) const;
         bool hit( const real3& origin, const real3& direction, real tmin, real tmax ) const; 
     };
 
@@ -250,7 +252,7 @@ public:
         real3       normal;                 // surface normal
         real        area;                   // surface area };
         
-        bool bounding_box( const Model * model, AABB& box, real padding=0.00001 ) const;
+        bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
         bool hit( const Model * model, const real3& origin, const real3& direction, real t_min, real t_max, HitInfo& hit_info ) const;
     };
 
@@ -391,9 +393,11 @@ private:
     char *              obj_end;
     uint                line_num;
 
-    bool mtllib_load( std::string dir_path, std::string mtl_file, bool replacing=false );
-    bool load_texture( std::string dir_path, char *& tex_name, Texture *& texture );
+    bool load_obj( std::string dir_path, std::string obj_file );
+    bool load_mtl( std::string dir_path, std::string mtl_file, bool replacing=false );
+    bool load_tex( std::string dir_path, char *& tex_name, Texture *& texture );
     bool open_and_read( std::string dir_path, std::string file_name, char *& start, char *& end );
+
     void skip_whitespace_to_eol( char *& xxx, char *& xxx_end );  // on this line only
     void skip_whitespace( char *& xxx, char *& xxx_end );
     void skip_to_eol( char *& xxx, char *& xxx_end );
@@ -453,6 +457,20 @@ inline std::ostream& operator << ( std::ostream& os, const Model::AABB& box )
     return os;
 }
 
+inline std::ostream& operator << ( std::ostream& os, const Model::BVH_Node& bvh ) 
+{
+    os << "box=" << bvh.box << " left_is_leaf=" << bvh.left_is_leaf << " right_is_leaf=" << bvh.right_is_leaf <<
+         " left_i=" << bvh.left_i << " right_i=" << bvh.right_i;
+    return os;
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::Polygon& poly ) 
+{
+    os << "mtl_i=" << poly.mtl_i << " vtx_cnt=" << poly.vtx_cnt << " vtx_i=" << poly.vtx_i <<
+          " normal=" << poly.normal << " area=" << poly.area;
+    return os;
+}
+
 inline std::ostream& operator << ( std::ostream& os, const Model::Material& mat ) 
 {
     os << "name_i="  << mat.name_i <<
@@ -483,7 +501,7 @@ inline std::ostream& operator << ( std::ostream& os, const Model::Texture& tex )
     return os;
 }
 
-Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER mipmap_filter, Model::BVH_TREE bvh_tree )
+Model::Model( std::string dir_path, std::string top_file, Model::MIPMAP_FILTER mipmap_filter, Model::BVH_TREE bvh_tree )
 {
     is_good = false;
     error_msg = "<unknown error>";
@@ -533,211 +551,15 @@ Model::Model( std::string dir_path, std::string obj_file, Model::MIPMAP_FILTER m
     bvh_nodes       = aligned_alloc<BVH_Node>( max->bvh_node_cnt );
 
     //------------------------------------------------------------
-    // Map in .obj file
+    // Load .json or .obj depending on file extension
     //------------------------------------------------------------
-    if ( !open_and_read( dir_path, obj_file, obj_start, obj_end ) ) return;
-    obj = obj_start;
-    line_num = 1;
+    if ( !load_obj( dir_path, top_file ) ) return;
+    is_good = true;
 
     //------------------------------------------------------------
-    // Parse .obj file contents
+    // Optionally build BVH
     //------------------------------------------------------------
-    char *      mtllib = nullptr;
-    char *      obj_name = nullptr;
-    char *      name;
-    std::string mtl_name;
-    Material *  material = nullptr;
-    uint        mtl_i = uint(-1);
-    Object *    object = nullptr;
-    Polygon *   polygon = nullptr;
-    Vertex *    vertex = nullptr;
-
-    for( ;; ) 
-    {
-        skip_whitespace( obj, obj_end );
-        if ( obj == obj_end ) {
-            // done, no errors
-            hdr->byte_cnt = uint64( 1                 ) * sizeof( hdr ) +
-                            uint64( hdr->obj_cnt      ) * sizeof( objects[0] ) +
-                            uint64( hdr->poly_cnt     ) * sizeof( polygons[0] ) +
-                            uint64( hdr->vtx_cnt      ) * sizeof( vertexes[0] ) +
-                            uint64( hdr->pos_cnt      ) * sizeof( positions[0] ) +
-                            uint64( hdr->norm_cnt     ) * sizeof( normals[0] ) +
-                            uint64( hdr->texcoord_cnt ) * sizeof( texcoords[0] ) +
-                            uint64( hdr->mtl_cnt      ) * sizeof( materials[0] ) +
-                            uint64( hdr->tex_cnt      ) * sizeof( textures[0] ) +
-                            uint64( hdr->texel_cnt    ) * sizeof( texels[0] ) +
-                            uint64( hdr->char_cnt     ) * sizeof( strings[0] ) + 
-                            uint64( hdr->bvh_node_cnt ) * sizeof( bvh_nodes[0] );
-            is_good = true;
-            if ( bvh_tree != BVH_TREE::NONE ) bvh_build( bvh_tree );
-            return;
-        }
-
-        obj_cmd_t cmd;
-        if ( !parse_obj_cmd( cmd ) ) break;
-        dprint( "obj_cmd=" + std::to_string( cmd ) );
-
-        switch( cmd )
-        {
-            case CMD_O:
-                perhaps_realloc<Object>( objects, hdr->obj_cnt, max->obj_cnt, 1 );
-                object = &objects[ hdr->obj_cnt++ ];
-
-                if ( !parse_name( obj_name, obj, obj_end ) ) goto error;
-                object->name_i = obj_name - strings;
-                object->poly_cnt = 0;
-                object->poly_i = hdr->poly_cnt;
-                break;
-                
-            case CMD_G:
-                if ( !parse_name( name, obj, obj_end ) ) goto error;
-                break;
-                
-            case CMD_S:
-                if ( !parse_name( name, obj, obj_end ) ) goto error;
-                break;
-                
-            case CMD_V:
-                perhaps_realloc<real3>( positions, hdr->pos_cnt, max->pos_cnt, 1 );
-                if ( !parse_real3( positions[ hdr->pos_cnt++ ], obj, obj_end ) ) goto error;
-                skip_to_eol( obj, obj_end );
-                break;
-                
-            case CMD_VN:
-                perhaps_realloc<real3>( normals, hdr->norm_cnt, max->norm_cnt, 1 );
-                if ( !parse_real3( normals[ hdr->norm_cnt++ ], obj, obj_end ) ) goto error;
-                skip_to_eol( obj, obj_end );
-                break;
-                
-            case CMD_VT:
-                perhaps_realloc<real2>( texcoords, hdr->texcoord_cnt, max->texcoord_cnt, 1 );
-                if ( !parse_real2( texcoords[ hdr->texcoord_cnt++ ], obj, obj_end ) ) goto error;
-                skip_to_eol( obj, obj_end );
-                break;
-                
-            case CMD_F:
-            {
-                perhaps_realloc<Polygon>( polygons, hdr->poly_cnt, max->poly_cnt, 1 );
-                polygon = &polygons[ hdr->poly_cnt++ ];
-                polygon->mtl_i = mtl_i;
-                polygon->vtx_cnt = 0;
-                polygon->vtx_i = hdr->vtx_cnt;
-                while( !eol( obj, obj_end ) ) 
-                {
-                    polygon->vtx_cnt++;
-                    perhaps_realloc<Vertex>( vertexes, hdr->vtx_cnt, max->vtx_cnt, 1 );
-                    vertex = &vertexes[ hdr->vtx_cnt++ ];
-
-                    int v_i;
-                    if ( !parse_int( v_i, obj, obj_end ) )   goto error;
-                    dprint( "v_i=" + std::to_string( v_i ) );
-                    vertex->v_i = (v_i >= 0)  ? v_i : (hdr->pos_cnt + v_i);
-
-                    if ( obj != obj_end && *obj == '/' ) {
-                        if ( !expect_char( '/', obj, obj_end ) ) goto error;
-                        int vt_i;
-                        if ( obj != obj_end && *obj == '/' ) {
-                            if ( !expect_char( '/', obj, obj_end ) ) goto error;
-                            vertex->vt_i = uint(-1);
-                        } else {
-                            if ( !parse_int( vt_i, obj, obj_end ) ) goto error;
-                            dprint( "vt_i=" + std::to_string( vt_i ) );
-                            vertex->vt_i = (vt_i >= 0) ? vt_i : ((int)hdr->texcoord_cnt + vt_i);
-                        }
-
-                        if ( obj != obj_end && *obj == '/' ) {
-                            if ( !expect_char( '/', obj, obj_end ) ) goto error;
-                            int vn_i;
-                            if ( !parse_int( vn_i, obj, obj_end ) )  goto error;
-                            dprint( "vn_i=" + std::to_string( vn_i ) );
-                            vertex->vn_i = (vn_i >= 0) ? vn_i : (hdr->norm_cnt + vn_i);
-                        } else {
-                            vertex->vn_i = uint(-1);
-                        }
-                    } else {
-                        vertex->vt_i = uint(-1);
-                        vertex->vn_i = uint(-1);
-                    }
-                }
-                obj_assert( polygon->vtx_cnt != 0, ".obj f command has no vertices" );
-                if ( object != nullptr ) object->poly_cnt++;
-
-                // split 4+ sided polygons into triangles
-                uint first_poly_i = hdr->poly_cnt-1;
-                if ( polygon->vtx_cnt > 3 ) {
-                    if ( 0 ) std::cout << "splitting poly_i=" << first_poly_i << "\n";
-                    uint extra_triangle_cnt = polygon->vtx_cnt - 3;
-                    perhaps_realloc<Polygon>( polygons, hdr->poly_cnt, max->poly_cnt, extra_triangle_cnt );
-                    polygon = polygons + first_poly_i;  // could ahve changed
-                    hdr->poly_cnt += extra_triangle_cnt;
-                    polygon->vtx_cnt = 3;
-
-                    // We don't need 3*extra_triangle_cnt more vertexes.
-                    // We can use the extra_triangle_cnt Vertexes that are already allocated.
-                    // We just have to carefully move them.
-                    // At the same time, we can copy the other two vertexes that we need.
-                    // Start with the last triangle to avoid clobbering stuff.
-                    perhaps_realloc<Vertex>( vertexes, hdr->vtx_cnt, max->vtx_cnt, 2*extra_triangle_cnt );
-                    uint poly_vtx_i = polygon->vtx_i;
-                    for( uint t = 1; t <= extra_triangle_cnt; t++ )
-                    {
-                        uint tt = extra_triangle_cnt+1 - t;                      // reverse triangles to avoid clobbering
-                        Polygon * triangle = polygon + tt;
-                        triangle->mtl_i    = polygon->mtl_i;
-                        triangle->vtx_i    = polygon->vtx_i + tt*3;
-                        triangle->vtx_cnt = 3;
-                        vertexes[triangle->vtx_i+2] = vertexes[poly_vtx_i+2+tt]; // reverse vertexes to avoid clobbering
-                        vertexes[triangle->vtx_i+1] = vertexes[poly_vtx_i+1+tt];
-                        vertexes[triangle->vtx_i+0] = vertexes[poly_vtx_i+0];    // same starting vtx for all triangles
-                    }
-                }
-
-                // precompute surface normal and area for each triangle (ignore for points and lines)
-                uint triangle_cnt = (polygon->vtx_cnt < 3) ? 0 : (hdr->poly_cnt - first_poly_i);
-                for( uint t = 0; t < triangle_cnt; t++ )
-                {
-                    Polygon * triangle = polygon + t;
-                    Vertex * pvertexes = &vertexes[triangle->vtx_i];
-                    real3 p0( positions[pvertexes[0].v_i].c[0], positions[pvertexes[0].v_i].c[1], positions[pvertexes[0].v_i].c[2] );
-                    real3 p1( positions[pvertexes[1].v_i].c[0], positions[pvertexes[1].v_i].c[1], positions[pvertexes[1].v_i].c[2] );
-                    real3 p2( positions[pvertexes[2].v_i].c[0], positions[pvertexes[2].v_i].c[1], positions[pvertexes[2].v_i].c[2] );
-                    triangle->normal = (p1 - p0).cross( p2 - p0 );
-                    real len = triangle->normal.length();
-                    triangle->area = len / 2;
-                    triangle->normal = triangle->normal / len;
-                    if ( 0 && triangle_cnt > 1 ) std::cout << "    " << t << ": p0=" << p0 << " p1=" << p1 << " p2=" << p2 << 
-                                                   " normal=" << triangle->normal << " len=" << len << " area=" << triangle->area << "\n";
-                }
-                break;
-            }
-
-            case CMD_MTLLIB:
-                if ( !parse_name( mtllib, obj, obj_end ) ) goto error;
-                if ( !mtllib_load( dir_path, mtllib ) ) goto error;
-                break;
-                
-            case CMD_USEMTL:
-                obj_assert( mtllib != nullptr, "no mtllib defined for object " + std::string( obj_name ) );
-                if ( !eol( obj, obj_end ) ) {
-                    if ( !parse_name( name, obj, obj_end ) ) goto error;
-                    mtl_name = std::string( name );
-                    obj_assert( name_to_mtl_i.find( mtl_name ) != name_to_mtl_i.end(), "unknown material: " + std::string( mtl_name ) );
-                    mtl_i = name_to_mtl_i[mtl_name];
-                    material = &materials[mtl_i];
-                } else {
-                    mtl_i = uint(-1);
-                    material = nullptr;
-                }
-                break;
-
-            default:
-                break;
-        }
-    }
-    error:
-        error_msg += " (at line " + std::to_string( line_num ) + " of " + obj_file + ")";
-        assert( 0 );
+    if ( bvh_tree != BVH_TREE::NONE ) bvh_build( bvh_tree );
 }
 
 Model::Model( std::string file_path, bool is_compressed )
@@ -876,7 +698,7 @@ bool Model::write( std::string file_path, bool is_compressed )
 
 bool Model::replace_materials( std::string mtl_file_path )
 {
-    return mtllib_load( "", mtl_file_path, true );
+    return load_mtl( "", mtl_file_path, true );
 }
 
 // returns array of T on a page boundary
@@ -952,6 +774,13 @@ bool Model::write_uncompressed( std::string file_path )
 
     fsync( fd ); // flush
     close( fd );
+
+    if ( 0 ) {
+        for( uint32_t i = 0; i < hdr->bvh_node_cnt; i++ )
+        {
+            std::cout << "bvh[" << i << "]: " << bvh_nodes[i] << "\n";
+        }
+    }
     return true;
 }
 
@@ -1002,7 +831,225 @@ bool Model::read_uncompressed( std::string file_path )
     return true;
 }
 
-bool Model::mtllib_load( std::string dir_path, std::string mtl_file, bool replacing )
+bool Model::load_obj( std::string dir_path, std::string obj_file )
+{
+    //------------------------------------------------------------
+    // Map in .obj file
+    //------------------------------------------------------------
+    if ( !open_and_read( dir_path, obj_file, obj_start, obj_end ) ) return false;
+    obj = obj_start;
+    line_num = 1;
+
+    //------------------------------------------------------------
+    // Parse .obj file contents
+    //------------------------------------------------------------
+    char *      mtllib = nullptr;
+    char *      obj_name = nullptr;
+    char *      name;
+    std::string mtl_name;
+    Material *  material = nullptr;
+    uint        mtl_i = uint(-1);
+    Object *    object = nullptr;
+    Polygon *   polygon = nullptr;
+    Vertex *    vertex = nullptr;
+
+    for( ;; ) 
+    {
+        skip_whitespace( obj, obj_end );
+        if ( obj == obj_end ) {
+            // done, no errors
+            hdr->byte_cnt = uint64( 1                 ) * sizeof( hdr ) +
+                            uint64( hdr->obj_cnt      ) * sizeof( objects[0] ) +
+                            uint64( hdr->poly_cnt     ) * sizeof( polygons[0] ) +
+                            uint64( hdr->vtx_cnt      ) * sizeof( vertexes[0] ) +
+                            uint64( hdr->pos_cnt      ) * sizeof( positions[0] ) +
+                            uint64( hdr->norm_cnt     ) * sizeof( normals[0] ) +
+                            uint64( hdr->texcoord_cnt ) * sizeof( texcoords[0] ) +
+                            uint64( hdr->mtl_cnt      ) * sizeof( materials[0] ) +
+                            uint64( hdr->tex_cnt      ) * sizeof( textures[0] ) +
+                            uint64( hdr->texel_cnt    ) * sizeof( texels[0] ) +
+                            uint64( hdr->char_cnt     ) * sizeof( strings[0] ) + 
+                            uint64( hdr->bvh_node_cnt ) * sizeof( bvh_nodes[0] );
+            return true;
+        }
+
+        obj_cmd_t cmd;
+        if ( !parse_obj_cmd( cmd ) ) break;
+        dprint( "obj_cmd=" + std::to_string( cmd ) );
+
+        switch( cmd )
+        {
+            case CMD_O:
+                perhaps_realloc<Object>( objects, hdr->obj_cnt, max->obj_cnt, 1 );
+                object = &objects[ hdr->obj_cnt++ ];
+
+                if ( !parse_name( obj_name, obj, obj_end ) ) goto error;
+                object->name_i = obj_name - strings;
+                object->poly_cnt = 0;
+                object->poly_i = hdr->poly_cnt;
+                break;
+                
+            case CMD_G:
+                if ( !parse_name( name, obj, obj_end ) ) goto error;
+                break;
+                
+            case CMD_S:
+                if ( !parse_name( name, obj, obj_end ) ) goto error;
+                break;
+                
+            case CMD_V:
+                perhaps_realloc<real3>( positions, hdr->pos_cnt, max->pos_cnt, 1 );
+                if ( !parse_real3( positions[ hdr->pos_cnt++ ], obj, obj_end ) ) goto error;
+                skip_to_eol( obj, obj_end );
+                break;
+                
+            case CMD_VN:
+                perhaps_realloc<real3>( normals, hdr->norm_cnt, max->norm_cnt, 1 );
+                if ( !parse_real3( normals[ hdr->norm_cnt++ ], obj, obj_end ) ) goto error;
+                skip_to_eol( obj, obj_end );
+                break;
+                
+            case CMD_VT:
+                perhaps_realloc<real2>( texcoords, hdr->texcoord_cnt, max->texcoord_cnt, 1 );
+                if ( !parse_real2( texcoords[ hdr->texcoord_cnt++ ], obj, obj_end ) ) goto error;
+                skip_to_eol( obj, obj_end );
+                break;
+                
+            case CMD_F:
+            {
+                perhaps_realloc<Polygon>( polygons, hdr->poly_cnt, max->poly_cnt, 1 );
+                polygon = &polygons[ hdr->poly_cnt++ ];
+                polygon->mtl_i = mtl_i;
+                polygon->vtx_cnt = 0;
+                polygon->vtx_i = hdr->vtx_cnt;
+                while( !eol( obj, obj_end ) ) 
+                {
+                    polygon->vtx_cnt++;
+                    perhaps_realloc<Vertex>( vertexes, hdr->vtx_cnt, max->vtx_cnt, 1 );
+                    vertex = &vertexes[ hdr->vtx_cnt++ ];
+
+                    int v_i;
+                    if ( !parse_int( v_i, obj, obj_end ) )   goto error;
+                    dprint( "v_i=" + std::to_string( v_i ) );
+                    vertex->v_i = (v_i >= 0)  ? v_i : (hdr->pos_cnt + v_i);
+
+                    if ( obj != obj_end && *obj == '/' ) {
+                        if ( !expect_char( '/', obj, obj_end ) ) goto error;
+                        int vt_i;
+                        if ( obj != obj_end && *obj == '/' ) {
+                            if ( !expect_char( '/', obj, obj_end ) ) goto error;
+                            vertex->vt_i = uint(-1);
+                        } else {
+                            if ( !parse_int( vt_i, obj, obj_end ) ) goto error;
+                            dprint( "vt_i=" + std::to_string( vt_i ) );
+                            vertex->vt_i = (vt_i >= 0) ? vt_i : ((int)hdr->texcoord_cnt + vt_i);
+                        }
+
+                        if ( obj != obj_end && *obj == '/' ) {
+                            if ( !expect_char( '/', obj, obj_end ) ) goto error;
+                            int vn_i;
+                            if ( !parse_int( vn_i, obj, obj_end ) )  goto error;
+                            dprint( "vn_i=" + std::to_string( vn_i ) );
+                            vertex->vn_i = (vn_i >= 0) ? vn_i : (hdr->norm_cnt + vn_i);
+                        } else {
+                            vertex->vn_i = uint(-1);
+                        }
+                    } else {
+                        vertex->vt_i = uint(-1);
+                        vertex->vn_i = uint(-1);
+                    }
+                }
+                obj_assert( polygon->vtx_cnt != 0, ".obj f command has no vertices" );
+                if ( object != nullptr ) object->poly_cnt++;
+                // split 4+ sided polygons into triangles
+                uint first_poly_i = hdr->poly_cnt-1;
+                if ( polygon->vtx_cnt > 3 ) {
+                    uint extra_triangle_cnt = polygon->vtx_cnt - 3;
+                    if ( 0 ) {
+                        Vertex * pvertexes = &vertexes[polygon->vtx_i];
+                        real3 p0( positions[pvertexes[0].v_i].c[0], positions[pvertexes[0].v_i].c[1], positions[pvertexes[0].v_i].c[2] );
+                        real3 p1( positions[pvertexes[1].v_i].c[0], positions[pvertexes[1].v_i].c[1], positions[pvertexes[1].v_i].c[2] );
+                        real3 p2( positions[pvertexes[2].v_i].c[0], positions[pvertexes[2].v_i].c[1], positions[pvertexes[2].v_i].c[2] );
+                        real3 p3( positions[pvertexes[3].v_i].c[0], positions[pvertexes[3].v_i].c[1], positions[pvertexes[3].v_i].c[2] );
+                        std::cout << "splitting poly_i=" << first_poly_i << " " << *polygon <<
+                                     " p0=" << p0 << " p1=" << p1 << " p2=" << p2 << " p3=" << p3 << "\n";
+                    }
+                    uint poly_vtx_i = polygon->vtx_i;
+
+                    // save all polygon vertexes here (to make this easier)
+                    obj_assert( polygon->vtx_cnt < 128, "too many vertices" );
+                    Vertex saved_vertexes[128];
+                    for( uint v = 0; v < polygon->vtx_cnt; v++ ) saved_vertexes[v] = vertexes[poly_vtx_i+v];
+
+                    // allocate more triangles
+                    perhaps_realloc<Polygon>( polygons, hdr->poly_cnt, max->poly_cnt, extra_triangle_cnt );
+                    polygon = polygons + first_poly_i;  // could have changed
+                    hdr->poly_cnt += extra_triangle_cnt;
+
+                    // allocate 2*extra_triangle_cnt more vertexes
+                    perhaps_realloc<Vertex>( vertexes, hdr->vtx_cnt, max->vtx_cnt, 2*extra_triangle_cnt );
+                    hdr->vtx_cnt += 2*extra_triangle_cnt;
+
+                    // fill in triangles as a triangle fan
+                    for( uint t = 0; t < (1+extra_triangle_cnt); t++ )
+                    {
+                        Polygon * triangle = polygon + t;
+                        triangle->mtl_i    = polygon->mtl_i;
+                        triangle->vtx_i    = poly_vtx_i + 3*t;
+                        triangle->vtx_cnt  = 3;
+                        vertexes[triangle->vtx_i+0] = saved_vertexes[0];    // common point
+                        vertexes[triangle->vtx_i+1] = saved_vertexes[t+1];
+                        vertexes[triangle->vtx_i+2] = saved_vertexes[t+2];
+                    }
+                }
+                // precompute surface normal and area for each triangle (ignore for points and lines)
+                uint triangle_cnt = (polygon->vtx_cnt < 3) ? 0 : (hdr->poly_cnt - first_poly_i);
+                for( uint t = 0; t < triangle_cnt; t++ )
+                {
+                    Polygon * triangle = polygon + t;
+                    Vertex * pvertexes = &vertexes[triangle->vtx_i];
+                    real3 p0( positions[pvertexes[0].v_i].c[0], positions[pvertexes[0].v_i].c[1], positions[pvertexes[0].v_i].c[2] );
+                    real3 p1( positions[pvertexes[1].v_i].c[0], positions[pvertexes[1].v_i].c[1], positions[pvertexes[1].v_i].c[2] );
+                    real3 p2( positions[pvertexes[2].v_i].c[0], positions[pvertexes[2].v_i].c[1], positions[pvertexes[2].v_i].c[2] );
+                    triangle->normal = (p1 - p0).cross( p2 - p0 );
+                    real len = triangle->normal.length();
+                    triangle->area = len / 2;
+                    triangle->normal = triangle->normal / len;
+                    if ( false && triangle_cnt > 1 ) std::cout << "    poly_i=" << first_poly_i+t << " " << *triangle << ": p0=" << p0 << " p1=" << p1 << " p2=" << p2 << "\n";
+                }
+                break;
+            }
+
+            case CMD_MTLLIB:
+                if ( !parse_name( mtllib, obj, obj_end ) ) goto error;
+                if ( !load_mtl( dir_path, mtllib ) ) goto error;
+                break;
+                
+            case CMD_USEMTL:
+                obj_assert( mtllib != nullptr, "no mtllib defined for object " + std::string( obj_name ) );
+                if ( !eol( obj, obj_end ) ) {
+                    if ( !parse_name( name, obj, obj_end ) ) goto error;
+                    mtl_name = std::string( name );
+                    obj_assert( name_to_mtl_i.find( mtl_name ) != name_to_mtl_i.end(), "unknown material: " + std::string( mtl_name ) );
+                    mtl_i = name_to_mtl_i[mtl_name];
+                    material = &materials[mtl_i];
+                } else {
+                    mtl_i = uint(-1);
+                    material = nullptr;
+                }
+                break;
+
+            default:
+                break;
+        }
+    }
+    error:
+        error_msg += " (at line " + std::to_string( line_num ) + " of " + obj_file + ")";
+        assert( 0 );
+        return false;
+}
+
+bool Model::load_mtl( std::string dir_path, std::string mtl_file, bool replacing )
 {
     //------------------------------------------------------------
     // Map in .obj file
@@ -1157,7 +1204,7 @@ bool Model::mtllib_load( std::string dir_path, std::string mtl_file, bool replac
                     } else {
                         // need to load it
                         //
-                        if ( !load_texture( dir_path, tex_name, texture ) ) return false;
+                        if ( !load_tex( dir_path, tex_name, texture ) ) return false;
                     }
                     texture->bump_multiplier = bump_multiplier;
 
@@ -1191,7 +1238,7 @@ bool Model::mtllib_load( std::string dir_path, std::string mtl_file, bool replac
 
 uint Model::debug_tex_i = 1; // uint(-1);
 
-bool Model::load_texture( std::string dir_path, char *& tex_name, Model::Texture *& texture )
+bool Model::load_tex( std::string dir_path, char *& tex_name, Model::Texture *& texture )
 {
     // allocate Texture structure
     //
@@ -1740,7 +1787,7 @@ inline bool Model::parse_mtl_cmd( mtl_cmd_t& cmd, char *& mtl, char *& mtl_end )
             return true;
 
         default:
-            rtn_assert( 0, "bad .mtl command character: " + surrounding_lines( mtl, mtl_end ) );
+            rtn_assert( 0, "bad .mtl command character '" + std::string( 1, ch ) + "': " + surrounding_lines( mtl, mtl_end ) );
     }
 }
 
@@ -1773,6 +1820,19 @@ inline bool Model::parse_real( Model::real& r, char *& xxx, char *& xxx_end )
     while( xxx != xxx_end )
     {
         char ch = *xxx;
+
+        if ( ch == 'n' || ch == 'N' ) {
+            // better be a NaN
+            xxx++;
+            if ( xxx == xxx_end || (*xxx != 'a' && *xxx != 'A') ) return false;
+            xxx++;
+            if ( xxx == xxx_end || (*xxx != 'n' && *xxx != 'N') ) return false;
+            xxx++;
+            //r = std::nan( "1" );
+            r = 0.0;                    // make them zeros
+            return true;
+        }
+
         if ( ch == '-' && !in_frac ) {
             is_neg = true;
             xxx++;
@@ -1811,7 +1871,7 @@ inline bool Model::parse_real( Model::real& r, char *& xxx, char *& xxx_end )
     if ( is_neg ) r = -r;
     if ( e10 != 0 ) r *= pow( 10.0, e10 );
     dprint( "real=" + std::to_string( r ) );
-    rtn_assert( vld, "unable to parse real in " + std::string( ((xxx == obj) ? ".obj" : ".mtl") ) + " file" );
+    rtn_assert( vld, "unable to parse real in " + std::string( ((xxx == obj) ? ".obj" : ".mtl") ) + " file " + surrounding_lines( xxx, xxx_end ) );
     return vld;
 }
 
@@ -1857,47 +1917,6 @@ std::string Model::surrounding_lines( char *& xxx, char *& xxx_end )
     return s;
 }
 
-inline void Model::AABB::pad( Model::real p ) 
-{
-    min -= real3( p, p, p );
-    max += real3( p, p, p );
-}
-
-inline void Model::AABB::expand( const Model::AABB& other )
-{
-    for( uint i = 0; i < 3; i++ )
-    {
-        if ( other.min.c[i] < min.c[i] ) min.c[i] = other.min.c[i];
-        if ( other.max.c[i] > max.c[i] ) max.c[i] = other.max.c[i];
-    }
-}
-
-inline void Model::AABB::expand( const Model::real3& p ) 
-{
-    if ( p.c[0] < min.c[0] ) min.c[0] = p.c[0];
-    if ( p.c[1] < min.c[1] ) min.c[1] = p.c[1];
-    if ( p.c[2] < min.c[2] ) min.c[2] = p.c[2];
-    if ( p.c[0] > max.c[0] ) max.c[0] = p.c[0];
-    if ( p.c[1] > max.c[1] ) max.c[1] = p.c[1];
-    if ( p.c[2] > max.c[2] ) max.c[2] = p.c[2];
-}
-
-inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& direction, Model::real tmin, Model::real tmax ) const 
-{
-    for( uint a = 0; a < 3; a++ ) 
-    {
-        real dir = direction.c[a];
-        real v0 = (min.c[a] - origin.c[a]) / dir;
-        real v1 = (max.c[a] - origin.c[a]) / dir;
-        real t0 = (v0 < v1) ? v0 : v1;
-        real t1 = (v0 > v1) ? v0 : v1; 
-        if ( t0 > tmin) tmin = t0;
-        if ( t1 < tmax) tmax = t1;
-        if ( tmax <= tmin ) return false;
-    }
-    return true;
-}
-
 inline Model::AABB::AABB( const Model::real3& p )
 {
     min = p;
@@ -1935,15 +1954,13 @@ inline Model::uint Model::bvh_qsplit( Model::uint poly_i, Model::uint n, Model::
        }
     }
 
-    if ( m <= poly_i || m >= (poly_i+n) ) m = poly_i + n/2;
+    assert( m >= poly_i && m <= (poly_i+n)  );
+    if ( m == poly_i || m == (poly_i+n) ) m = poly_i + n/2;
     return m;
 }
 
 Model::uint Model::bvh_node( Model::uint poly_i, Model::uint n, Model::uint axis ) 
 {
-    assert( n != 0 );
-    assert( poly_i < hdr->poly_cnt );
-    assert( (poly_i+n) <= hdr->poly_cnt );
     perhaps_realloc( bvh_nodes, hdr->bvh_node_cnt, max->bvh_node_cnt, 1 );
     uint bvh_i = hdr->bvh_node_cnt++;
     BVH_Node * node = &bvh_nodes[bvh_i];
@@ -1960,7 +1977,12 @@ Model::uint Model::bvh_node( Model::uint poly_i, Model::uint n, Model::uint axis
         node->left_is_leaf = true;
         node->right_is_leaf = true;
         node->left_i  = poly_i;
+        AABB new_box;
+        polygons[poly_i+0].bounding_box( this, new_box );
+        assert( node->box.encloses( new_box ) );
         if ( n == 2 ) {
+            polygons[poly_i+1].bounding_box( this, new_box );
+            assert( node->box.encloses( new_box ) );
             node->right_i = poly_i + 1;
         } else {
             node->right_i = poly_i;
@@ -1974,11 +1996,10 @@ Model::uint Model::bvh_node( Model::uint poly_i, Model::uint n, Model::uint axis
         uint nm = m - poly_i;
         uint left_i  = bvh_node( poly_i, nm,   (axis + 1) % 3 );
         uint right_i = bvh_node(      m, n-nm, (axis + 1) % 3 );
-        assert( left_i > bvh_i );
-        assert( right_i > bvh_i );
         node = &bvh_nodes[bvh_i];  // could change after previous calls
         node->left_i  = left_i;
         node->right_i = right_i;
+        assert( node->box.encloses( bvh_nodes[left_i].box ) && node->box.encloses( bvh_nodes[right_i].box ) );
     }
 
     return bvh_i;
@@ -2257,6 +2278,55 @@ bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real p
 
 bool Model::debug_hit = false;
 
+inline void Model::AABB::pad( Model::real p ) 
+{
+    min -= real3( p, p, p );
+    max += real3( p, p, p );
+}
+
+inline void Model::AABB::expand( const Model::AABB& other )
+{
+    for( uint i = 0; i < 3; i++ )
+    {
+        if ( other.min.c[i] < min.c[i] ) min.c[i] = other.min.c[i];
+        if ( other.max.c[i] > max.c[i] ) max.c[i] = other.max.c[i];
+    }
+}
+
+inline void Model::AABB::expand( const Model::real3& p ) 
+{
+    if ( p.c[0] < min.c[0] ) min.c[0] = p.c[0];
+    if ( p.c[1] < min.c[1] ) min.c[1] = p.c[1];
+    if ( p.c[2] < min.c[2] ) min.c[2] = p.c[2];
+    if ( p.c[0] > max.c[0] ) max.c[0] = p.c[0];
+    if ( p.c[1] > max.c[1] ) max.c[1] = p.c[1];
+    if ( p.c[2] > max.c[2] ) max.c[2] = p.c[2];
+}
+
+inline bool Model::AABB::encloses( const AABB& other ) const
+{
+    return min.c[0] <= other.min.c[0] &&
+           min.c[1] <= other.min.c[1] &&
+           min.c[2] <= other.min.c[2] &&
+           max.c[0] >= other.max.c[0] &&
+           max.c[1] >= other.max.c[1] &&
+           max.c[2] >= other.max.c[2];
+}
+
+inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& direction, Model::real tmin, Model::real tmax ) const 
+{
+    for( uint a = 0; a < 3; a++ ) 
+    {
+        real dir = direction.c[a];
+        real v0 = (min.c[a] - origin.c[a]) / dir;
+        real v1 = (max.c[a] - origin.c[a]) / dir;
+        tmin = std::max( tmin, std::min( v0, v1 ) );
+        tmax = std::min( tmax, std::max( v0, v1 ) );
+    }
+    bool r = tmax >= std::max( tmin, real(0.0) );
+    return r;
+}
+
 inline bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, real t_min, real t_max, 
                                  HitInfo& hit_info ) const
 {
@@ -2272,8 +2342,6 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
         // t = dot(corner - o, N) / dot(v,N)
         real d = direction.dot( normal );
         real t = (p0 - origin).dot( normal ) / d;
-        if ( debug_hit ) std::cout << "    poly_i=" << (this - model->polygons) << " d=" << d << 
-                                      " t=" << t << " t_min=" << t_min << " t_max=" << t_max << "\n";
         if ( t > t_min && t < t_max ) {
              // compute barycentrics, see if it's in triangle
              const real3& p1 = positions[vertexes[1].v_i];
@@ -2288,21 +2356,30 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
              real area_2x = area * 2.0;
              real beta    = area1/area_2x;
              real gamma   = area2/area_2x;
-             if ( debug_hit ) std::cout << "    beta=" << beta << " gamma=" << gamma << "\n";
              if ( beta >= 0.0 && gamma >= 0.0 && (beta + gamma) <= 1.0 ) {
+                real alpha = 1.0 - beta - gamma;
+
                 const real3 * normals   = model->normals;
                 const real2 * texcoords = model->texcoords;
                 const real3& n0 = normals[vertexes[0].vn_i];
                 const real3& n1 = normals[vertexes[1].vn_i];
                 const real3& n2 = normals[vertexes[2].vn_i];
-                real u0 = texcoords[vertexes[0].vt_i].c[0];
-                real u1 = texcoords[vertexes[1].vt_i].c[0];
-                real u2 = texcoords[vertexes[2].vt_i].c[0];
-                real v0 = texcoords[vertexes[0].vt_i].c[1];
-                real v1 = texcoords[vertexes[1].vt_i].c[1];
-                real v2 = texcoords[vertexes[2].vt_i].c[1];
-                real alpha = 1.0 - beta - gamma;
-
+                real u0, u1, u2, v0, v1, v2;
+                if ( vertexes[0].vt_i != uint(-1) ) {
+                    u0 = texcoords[vertexes[0].vt_i].c[0];
+                    u1 = texcoords[vertexes[1].vt_i].c[0];
+                    u2 = texcoords[vertexes[2].vt_i].c[0];
+                    v0 = texcoords[vertexes[0].vt_i].c[1];
+                    v1 = texcoords[vertexes[1].vt_i].c[1];
+                    v2 = texcoords[vertexes[2].vt_i].c[1];
+                } else {
+                    u0 = 0.0;
+                    u1 = 0.0;
+                    u2 = 0.0;
+                    v0 = 0.0;
+                    v1 = 0.0;
+                    v2 = 0.0;
+                }
                 hit_info.poly_i = this - model->polygons;
                 hit_info.t = t;
                 hit_info.p = p;
@@ -2319,21 +2396,6 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
                 hit_info.solid_angle *= std::abs(0.5*(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1)); // correction for UV at corners as lengths
                 hit_info.u = alpha*u0 + gamma*u1 + beta*u2 ;
                 hit_info.v = alpha*v0 + gamma*v1 + beta*v2 ;
-
-                if ( debug_hit ) {
-                    std::cout << "\nhit poly_i=" << hit_info.poly_i << " mtl_i=" << mtl_i <<
-                                 " t=" << hit_info.t << " normal=" << hit_info.normal << 
-                                 " solid_angle=" << hit_info.solid_angle <<
-                                 " p=" << hit_info.p << " u=" << hit_info.u << " v=" << hit_info.v <<
-                                 " p0=" << p0 << " p1=" << p1 << " p2=" << p2;
-                    if ( vertexes[0].vn_i != uint(-1) ) {
-                        std::cout << " n0=" << n0 << " n1=" << n1 << " n2=" << n2;
-                    } else {
-                        std::cout << " [no vertex normals]";
-                    }
-                    std::cout << " u0=" << u0 << " u1=" << u1 << " u2=" << u2 <<
-                                 " v0=" << v0 << " v1=" << v1 << " v2=" << v2 << "\n";
-                }
                 return true;
              }
         }
@@ -2360,7 +2422,6 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
         bool hit_right = (left_i == right_i) ? false :  // lone leaf
                          right_is_leaf ? model->polygons[right_i].hit(  model, origin, direction, t_min, t_max, right_hit_info )
                                        : model->bvh_nodes[right_i].hit( model, origin, direction, t_min, t_max, right_hit_info );
-        if ( debug_hit ) std::cout << "hit box: " << box << " hit_left=" << hit_left << " hit_right=" << hit_right << "\n";
         if ( hit_left && (!hit_right || left_hit_info.t < right_hit_info.t) ) {
             hit_info = left_hit_info;
             r = true;

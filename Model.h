@@ -24,7 +24,7 @@
 //
 //     1) #include "Model.h"
 //
-//        Model * model = new Model( "~/models/sanmiguel", "sanmiguel.obj" );   // model dir, .obj file
+//        Model * model = new Model( "~/models/sanmiguel/sanmiguel.obj" );   
 //        if ( !model->is_good ) {
 //            std::cout << "Model load failed with error: " << model->error_msg << "\n";
 //            exit( 1 );
@@ -34,14 +34,14 @@
 //
 //     2) After that, you can quickly read in the single binary model file using:
 //
-//        Model * model = new Model( "~models/sanmiguel/sanmiguel.model" );  // add "false" as 2nd arg for uncompressed
+//        Model * model = new Model( "~models/sanmiguel/sanmiguel.model", false );  // false means uncompressed
 //        if ( !model->is_good ) {
 //            std::cout << "Model load failed with error: " << model->error_msg << "\n";
 //            exit( 1 );
 //        }
 //
-//     3) If you want Model to generate mipmap textures, add Model::MIPMAP_FILTER::BOX as a third argument 
-//        to the Model() constructor in (2) to get a box filter.  Other filters may be added later.
+//     3) If you want Model to generate mipmap textures, add Model::MIPMAP_FILTER::BOX as a second argument 
+//        to the Model() constructor in (1) to get a box filter.  Other filters may be added later.
 //        The texture for mip level 0 is the original texture.  The texels for the other mip levels
 //        follow immediately with no padding in between.  The original width and height need not
 //        be powers-of-2 or equal to each other.  Each mip level has 
@@ -50,8 +50,8 @@
 //        the number of texels in each level, so you'll need to compute those on the fly as you
 //        try to obtain the starting offset for a given level.
 //
-//     4) If you want Model to generate a BVH tree for you, add Model::BVH_TREE::BINARY as the fourth argument
-//        to the Model() constructor in (2) to get a binary BVH tree.  QUAD and OCT trees are not
+//     4) If you want Model to generate a BVH tree for you, add Model::BVH_TREE::BINARY as the third argument
+//        to the Model() constructor in (1) to get a binary BVH tree.  QUAD and OCT trees are not
 //        currently supported.
 //
 //        Note: BVH building reorders the polygons, so any polygon offsets in an Object structure will be garbage.

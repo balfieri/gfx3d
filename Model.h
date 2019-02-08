@@ -119,14 +119,16 @@ public:
         BINARY,                             // generate binary BVH tree
     };
 
-    Model( std::string dir_path, std::string obj_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE, BVH_TREE bvh_tree=BVH_TREE::NONE );
-    Model( std::string file_path, bool is_compressed=true );
+    Model( std::string top_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE, BVH_TREE bvh_tree=BVH_TREE::NONE );
+    Model( std::string model_file, bool is_compressed );
     ~Model(); 
 
-    bool write( std::string file_path, bool is_compressed=true ); 
+    bool write( std::string file_path, bool is_compressed ); 
     bool replace_materials( std::string mtl_file_path );
 
-    static const uint VERSION = 0xB0BA1f05; // current version is 5
+    static void dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ); // utility
+
+    static const uint VERSION = 0xB0BA1f06; // current version is 6
 
     bool                is_good;            // set to true if constructor succeeds
     std::string         error_msg;          // if !is_good
@@ -191,19 +193,35 @@ public:
     public:
         uint        version;                // version
         uint64      byte_cnt;               // total in-memory bytes including this header
+        uint64      char_cnt;               // in strings array
+
         uint64      obj_cnt;                // in objects array  
         uint64      poly_cnt;               // in polygons array 
         uint64      vtx_cnt;                // in vertexes array
         uint64      pos_cnt;                // in positions array
         uint64      norm_cnt;               // in normals array
         uint64      texcoord_cnt;           // in texcoords array
+
         MIPMAP_FILTER mipmap_filter;        // if NONE, there are no mip levels beyond level 0
         uint64      mtl_cnt;                // in materials array
         uint64      tex_cnt;                // in textures array
         uint64      texel_cnt;              // in texels array  (last in file)
-        uint64      char_cnt;               // in strings array
+
+        uint64      matrix_cnt;             // in matrixes array
+        uint64      inst_cnt;               // in instances array
+
         uint64      bvh_node_cnt;           // in bvh_nodes array
-        uint64      bvh_root_i;             // index of root bvh_node in bvh_nodes array
+        uint64      bvh_root_i;             // index of root BVH_Node in bvh_nodes array
+
+        uint64      light_cnt;              // in lights array
+        real        lighting_scale;         // not sure what this is yet (default: 1.0)
+        real        ambient_intensity;      // ambient light intensity (default: [0.1, 0.1, 0.1]
+
+        uint64      camera_cnt;             // in cameras array
+        uint64      initial_camera_i;       // initial active camera index (default: 0)
+        uint64      frame_cnt;              // in frames array 
+        uint64      animation_cnt;          // in animations array
+        real        animation_speed;        // divide frame time by this to get real time (default: 1.0)
     };
 
     class Object
@@ -240,7 +258,7 @@ public:
         void expand( const AABB& other );
         void expand( const real3& p );
         bool encloses( const AABB& other ) const;
-        bool hit( const real3& origin, const real3& direction, real tmin, real tmax ) const; 
+        bool hit( const real3& origin, const real3& direction, const real3& direction_inv, real tmin, real tmax ) const; 
     };
 
     class Polygon
@@ -253,7 +271,7 @@ public:
         real        area;                   // surface area };
         
         bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
-        bool hit( const Model * model, const real3& origin, const real3& direction, real t_min, real t_max, HitInfo& hit_info ) const;
+        bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, real t_min, real t_max, HitInfo& hit_info ) const;
     };
 
     class Vertex
@@ -300,17 +318,104 @@ public:
         real            bump_multiplier;    // should be for bump maps only but also used with other textures
     };
 
+    enum class BVH_NODE_KIND
+    {
+        BVH_NODE,                           // BVH_Node
+        POLYGON,                            // Polygon
+        INSTANCE,                           // Instance
+    };
+
     class BVH_Node
     {
     public:
         AABB            box;                // bounding box
-        bool            left_is_leaf;       // if true, left is a polygon
-        bool            right_is_leaf;      // if true, right is a polygon
-        uint            left_i;             // index into bvh_nodes or polygons array of left subtree 
-        uint            right_i;            // index into bvh_nodes or polygons array of right subtree 
+        BVH_NODE_KIND   left_kind;          // see kinds above
+        BVH_NODE_KIND   right_kind;         // see kinds above
+        uint            left_i;             // index into appropriate kind array for left subtree 
+        uint            right_i;            // index into appropriate kind array for right subtree 
 
         bool bounding_box( const Model * model, AABB& b ) const;
-        bool hit( const Model * model, const real3& origin, const real3& direction, real t_min, real t_max, HitInfo& hit_info ) const;
+        bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, real t_min, real t_max, HitInfo& hit_info ) const;
+    };
+
+    class Matrix                            // 4x4 transformation matrix used by Instance
+    {
+    public:
+        real            m[4][4];
+
+        Matrix operator + ( const Matrix& m ) const;    // add two matrices
+        Matrix operator - ( const Matrix& m ) const;    // subtract two matrices
+        real3  operator * ( const real3& v ) const;     // multiply this matrix by vector, returning vector
+    };
+
+    enum class INSTANCE_KIND
+    {
+        MODEL,                              // instance is another Model 
+        OBJECT,                             // instance is an Object within the current model
+    };
+
+    class Instance      
+    {
+    public:
+        INSTANCE_KIND   kind;               // see above
+        uint            matrix_i;           // index of Matrix in matrixes[] array (transformation matrix)
+        union {
+            uint        model_name_i;       // index in strings array of file path name of Model
+            uint        obj_i;              // index of Object in objects[] array
+        } u;
+
+        bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
+        bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, real t_min, real t_max, HitInfo& hit_info );
+    };
+
+    enum class LIGHT_KIND
+    {
+        DIRECTIONAL,
+        POINT,
+        PROBE,
+    };
+
+    class Light
+    {
+    public:
+        uint            name_i;             // index in strings array (null-terminated strings)
+        LIGHT_KIND      kind;               // type of light
+        real3           intensity;
+        real3           direction;
+        real3           position;
+        real            opening_angle;      // point lights only
+        real            penumbra_angle;     // point lights only
+    };
+
+    class Camera
+    {
+    public:
+        uint            name_i;             // index in strings array (null-terminated strings)
+        real3           lookfrom;           // camera location
+        real3           lookat;             // point camera is aimed at
+        real3           vup;                // camera up direction
+        real            aperture;           // lens aperture
+        real            focus_dist;
+        real            near;               // near clip plane distance (typical: 0.1)
+        real            far;                // far clip plane distance (typical: 10000)
+        real            vfov;               // vertical field of view
+    };
+
+    class Frame                             // one frame in an animation sequence
+    {
+    public:
+        real            time;               // in seconds (divide by Header.animation_speed)
+        uint            camera_i;           // index into cameras array (name = animation name + frame index)
+    };
+
+    class Animation
+    {
+    public:
+        uint            name_i;             // index in strings array (null-terminated strings)
+        uint            start_camera_i;     // index in cameras array of initial camera to use
+        uint            start_frame_i;      // index in animations array of first frame in animation sequence
+        uint            frame_cnt;          // number of frames in animation sequence
+        bool            is_looped;          // whether the animation sequence should be looped (default: false)
     };
 
     // structs
@@ -319,6 +424,7 @@ public:
     Header *            max;                // holds max lengths of currently allocated arrays 
 
     // arrays
+    char *              strings;
     Object *            objects;
     Polygon *           polygons;
     Vertex *            vertexes;
@@ -327,13 +433,23 @@ public:
     real2 *             texcoords;
     Material *          materials;
     Texture *           textures;
-    BVH_Node *          bvh_nodes;
     unsigned char *     texels;
-    char *              strings;
+    BVH_Node *          bvh_nodes;
+    Matrix *            matrixes;
+    Instance *          instances;
+    Light *             lights;
+    Camera *            cameras;
+    Frame *             frames;
+    Animation *         animations;
 
-    // maps
-    std::map<std::string, uint> name_to_mtl_i;
-    std::map<std::string, uint> name_to_tex_i;
+    // maps of names to array indexes
+    std::map<std::string, uint>    name_to_obj_i;
+    std::map<std::string, uint>    name_to_mtl_i;
+    std::map<std::string, uint>    name_to_tex_i;
+    std::map<std::string, uint>    name_to_light_i;
+    std::map<std::string, Model *> name_to_model;               // file path name to instanced Model
+    std::map<std::string, uint>    name_to_camera_i;
+    std::map<std::string, uint>    name_to_animation_i;
 
     // debug flags
     static bool         debug_hit;
@@ -393,10 +509,12 @@ private:
     char *              obj_end;
     uint                line_num;
 
-    bool load_obj( std::string dir_path, std::string obj_file );
-    bool load_mtl( std::string dir_path, std::string mtl_file, bool replacing=false );
-    bool load_tex( std::string dir_path, char *& tex_name, Texture *& texture );
-    bool open_and_read( std::string dir_path, std::string file_name, char *& start, char *& end );
+    bool load_fscene( std::string fscene_file, std::string dir_name );
+    bool load_obj( std::string obj_file, std::string dir_name );
+    bool load_mtl( std::string mtl_file, std::string dir_name, bool replacing=false );
+    bool load_tex( char *& tex_name, std::string dir_name, Texture *& texture );
+
+    bool open_and_read( std::string file_name, char *& start, char *& end );
 
     void skip_whitespace_to_eol( char *& xxx, char *& xxx_end );  // on this line only
     void skip_whitespace( char *& xxx, char *& xxx_end );
@@ -457,13 +575,6 @@ inline std::ostream& operator << ( std::ostream& os, const Model::AABB& box )
     return os;
 }
 
-inline std::ostream& operator << ( std::ostream& os, const Model::BVH_Node& bvh ) 
-{
-    os << "box=" << bvh.box << " left_is_leaf=" << bvh.left_is_leaf << " right_is_leaf=" << bvh.right_is_leaf <<
-         " left_i=" << bvh.left_i << " right_i=" << bvh.right_i;
-    return os;
-}
-
 inline std::ostream& operator << ( std::ostream& os, const Model::Polygon& poly ) 
 {
     os << "mtl_i=" << poly.mtl_i << " vtx_cnt=" << poly.vtx_cnt << " vtx_i=" << poly.vtx_i <<
@@ -501,7 +612,21 @@ inline std::ostream& operator << ( std::ostream& os, const Model::Texture& tex )
     return os;
 }
 
-Model::Model( std::string dir_path, std::string top_file, Model::MIPMAP_FILTER mipmap_filter, Model::BVH_TREE bvh_tree )
+inline std::ostream& operator << ( std::ostream& os, const Model::BVH_NODE_KIND& kind ) 
+{
+    os << ((kind == Model::BVH_NODE_KIND::BVH_NODE)  ? "BVH_NODE" :
+           (kind == Model::BVH_NODE_KIND::POLYGON)   ? "POLYGON"  : 
+           (kind == Model::BVH_NODE_KIND::INSTANCE)  ? "INSTANCE" : "<unknown>");
+    return os;
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::BVH_Node& bvh ) 
+{
+    os << "box=" << bvh.box << " left_kind=" << bvh.left_kind << " right_kind=" << bvh.right_kind << " left_i=" << bvh.left_i << " right_i=" << bvh.right_i;
+    return os;
+}
+
+Model::Model( std::string top_file, Model::MIPMAP_FILTER mipmap_filter, Model::BVH_TREE bvh_tree )
 {
     is_good = false;
     error_msg = "<unknown error>";
@@ -523,7 +648,7 @@ Model::Model( std::string dir_path, std::string top_file, Model::MIPMAP_FILTER m
     max = aligned_alloc<Header>( 1 );
     max->obj_cnt     =   128*1024;
     max->poly_cnt    =  1024*1024;
-    max->mtl_cnt     =       1024;
+    max->mtl_cnt     =       128;
 
     max->vtx_cnt     = 4*max->poly_cnt;
     max->pos_cnt     = max->vtx_cnt;
@@ -534,10 +659,17 @@ Model::Model( std::string dir_path, std::string top_file, Model::MIPMAP_FILTER m
     max->texel_cnt   = max->mtl_cnt * 128*1024;
     max->char_cnt    = max->obj_cnt * 128;
     max->bvh_node_cnt= max->poly_cnt / 2;
+    max->matrix_cnt  = 1;
+    max->inst_cnt    = 1;
+    max->light_cnt   = 1;
+    max->camera_cnt  = 1;
+    max->frame_cnt   = 1;
+    max->animation_cnt = 1;
 
     //------------------------------------------------------------
     // Allocate arrays
     //------------------------------------------------------------
+    strings         = aligned_alloc<char>(     max->char_cnt );
     objects         = aligned_alloc<Object>(   max->obj_cnt );
     polygons        = aligned_alloc<Polygon>(  max->poly_cnt );
     vertexes        = aligned_alloc<Vertex>(   max->vtx_cnt );
@@ -547,13 +679,29 @@ Model::Model( std::string dir_path, std::string top_file, Model::MIPMAP_FILTER m
     materials       = aligned_alloc<Material>( max->mtl_cnt );
     textures        = aligned_alloc<Texture>(  max->tex_cnt );
     texels          = aligned_alloc<unsigned char>( max->texel_cnt );
-    strings         = aligned_alloc<char>(     max->char_cnt );
     bvh_nodes       = aligned_alloc<BVH_Node>( max->bvh_node_cnt );
+    matrixes        = aligned_alloc<Matrix>(   max->matrix_cnt );
+    instances       = aligned_alloc<Instance>( max->inst_cnt );
+    lights          = aligned_alloc<Light>(    max->light_cnt );
+    cameras         = aligned_alloc<Camera>(   max->camera_cnt );
+    frames          = aligned_alloc<Frame>(    max->frame_cnt );
+    animations      = aligned_alloc<Animation>(max->animation_cnt );
 
     //------------------------------------------------------------
-    // Load .json or .obj depending on file extension
+    // Load .fscene or .obj depending on file ext_name
     //------------------------------------------------------------
-    if ( !load_obj( dir_path, top_file ) ) return;
+    std::string dir_name;
+    std::string base_name;
+    std::string ext_name;
+    dissect_path( top_file, dir_name, base_name, ext_name );
+    if ( ext_name == std::string( ".obj" ) || ext_name == std::string( ".OBJ" ) ) {
+        if ( !load_obj( top_file, dir_name ) ) return;
+    } else if ( ext_name == std::string( ".fscene" ) || ext_name == std::string( ".FSCENE" ) ) {
+        if ( !load_fscene( top_file, dir_name ) ) return;
+    } else {
+        error_msg = "unknown top file ext_name: " + ext_name;
+        return;
+    }
     is_good = true;
 
     //------------------------------------------------------------
@@ -562,18 +710,18 @@ Model::Model( std::string dir_path, std::string top_file, Model::MIPMAP_FILTER m
     if ( bvh_tree != BVH_TREE::NONE ) bvh_build( bvh_tree );
 }
 
-Model::Model( std::string file_path, bool is_compressed )
+Model::Model( std::string model_path, bool is_compressed )
 {
     is_good = false;
     mapped_region = nullptr;
     if ( !is_compressed ) {
-        read_uncompressed( file_path );
+        read_uncompressed( model_path );
         return;
     }
 
-    gzFile fd = gzopen( file_path.c_str(), "r" );
+    gzFile fd = gzopen( model_path.c_str(), "r" );
     if ( fd == Z_NULL ) {
-        "Could not gzopen() file " + file_path + " for reading - gzopen() error: " + strerror( errno );
+        "Could not gzopen() file " + model_path + " for reading - gzopen() error: " + strerror( errno );
         return;
     }
 
@@ -598,7 +746,7 @@ Model::Model( std::string file_path, bool is_compressed )
                 if ( _byte_cnt < _this_byte_cnt ) _this_byte_cnt = _byte_cnt; \
                 if ( gzread( fd, _addr, _this_byte_cnt ) <= 0 ) { \
                     gzclose( fd ); \
-                    error_msg = "could not gzread() file " + file_path + " - gzread() error: " + strerror( errno ); \
+                    error_msg = "could not gzread() file " + model_path + " - gzread() error: " + strerror( errno ); \
                     assert( 0 ); \
                     return; \
                 } \
@@ -616,17 +764,23 @@ Model::Model( std::string file_path, bool is_compressed )
     }
     max = aligned_alloc<Header>( 1 );
     memcpy( max, hdr, sizeof( Header ) );
-    _read( objects,     Object,   hdr->obj_cnt );
-    _read( polygons,    Polygon,  hdr->poly_cnt );
-    _read( vertexes,    Vertex,   hdr->vtx_cnt );
-    _read( positions,   real3,    hdr->pos_cnt );
-    _read( normals,     real3,    hdr->norm_cnt );
-    _read( texcoords,   real2,    hdr->texcoord_cnt );
-    _read( materials,   Material, hdr->mtl_cnt );
-    _read( textures,    Texture,  hdr->tex_cnt );
+    _read( strings,     char,          hdr->char_cnt );
+    _read( objects,     Object,        hdr->obj_cnt );
+    _read( polygons,    Polygon,       hdr->poly_cnt );
+    _read( vertexes,    Vertex,        hdr->vtx_cnt );
+    _read( positions,   real3,         hdr->pos_cnt );
+    _read( normals,     real3,         hdr->norm_cnt );
+    _read( texcoords,   real2,         hdr->texcoord_cnt );
+    _read( materials,   Material,      hdr->mtl_cnt );
+    _read( textures,    Texture,       hdr->tex_cnt );
     _read( texels,      unsigned char, hdr->texel_cnt );
-    _read( strings,     char,     hdr->char_cnt );
-    _read( bvh_nodes,   BVH_Node, hdr->bvh_node_cnt );
+    _read( bvh_nodes,   BVH_Node,      hdr->bvh_node_cnt );
+    _read( matrixes,    Matrix,        hdr->matrix_cnt );
+    _read( instances,   Instance,      hdr->inst_cnt );
+    _read( lights,      Light,         hdr->light_cnt );
+    _read( cameras,     Camera,        hdr->camera_cnt );
+    _read( frames,      Frame,         hdr->frame_cnt );
+    _read( animations,  Animation,     hdr->animation_cnt );
 
     gzclose( fd );
 
@@ -653,12 +807,12 @@ Model::~Model()
     }
 }
 
-bool Model::write( std::string file_path, bool is_compressed ) 
+bool Model::write( std::string model_path, bool is_compressed ) 
 {
-    if ( !is_compressed ) return write_uncompressed( file_path );
+    if ( !is_compressed ) return write_uncompressed( model_path );
 
-    gzFile fd = gzopen( file_path.c_str(), "w" );
-    rtn_assert( fd != Z_NULL, "could not gzopen() file " + file_path + " for writing - gzopen() error: " + strerror( errno ) );
+    gzFile fd = gzopen( model_path.c_str(), "w" );
+    rtn_assert( fd != Z_NULL, "could not gzopen() file " + model_path + " for writing - gzopen() error: " + strerror( errno ) );
 
     //------------------------------------------------------------
     // Write out header than individual arrays.
@@ -672,25 +826,31 @@ bool Model::write( std::string file_path, bool is_compressed )
             if ( _byte_cnt < _this_byte_cnt ) _this_byte_cnt = _byte_cnt; \
             if ( gzwrite( fd, _addr, _this_byte_cnt ) <= 0 ) { \
                 gzclose( fd ); \
-                rtn_assert( 0, "could not gzwrite() file " + file_path + " - gzwrite() error: " + strerror( errno ) ); \
+                rtn_assert( 0, "could not gzwrite() file " + model_path + " - gzwrite() error: " + strerror( errno ) ); \
             } \
             _byte_cnt -= _this_byte_cnt; \
             _addr     += _this_byte_cnt; \
         } \
     } \
 
-    _write( hdr,         1                 * sizeof(hdr[0]) );
-    _write( objects,     hdr->obj_cnt      * sizeof(objects[0]) );
-    _write( polygons,    hdr->poly_cnt     * sizeof(polygons[0]) );
-    _write( vertexes,    hdr->vtx_cnt      * sizeof(vertexes[0]) );
-    _write( positions,   hdr->pos_cnt      * sizeof(positions[0]) );
-    _write( normals,     hdr->norm_cnt     * sizeof(normals[0]) );
-    _write( texcoords,   hdr->texcoord_cnt * sizeof(texcoords[0]) );
-    _write( materials,   hdr->mtl_cnt      * sizeof(materials[0]) );
-    _write( textures,    hdr->tex_cnt      * sizeof(textures[0]) );
-    _write( texels,      hdr->texel_cnt    * sizeof(texels[0]) );
-    _write( strings,     hdr->char_cnt     * sizeof(strings[0]) );
-    _write( bvh_nodes,   hdr->bvh_node_cnt * sizeof(bvh_nodes[0]) );
+    _write( hdr,         1                  * sizeof(hdr[0]) );
+    _write( strings,     hdr->char_cnt      * sizeof(strings[0]) );
+    _write( objects,     hdr->obj_cnt       * sizeof(objects[0]) );
+    _write( polygons,    hdr->poly_cnt      * sizeof(polygons[0]) );
+    _write( vertexes,    hdr->vtx_cnt       * sizeof(vertexes[0]) );
+    _write( positions,   hdr->pos_cnt       * sizeof(positions[0]) );
+    _write( normals,     hdr->norm_cnt      * sizeof(normals[0]) );
+    _write( texcoords,   hdr->texcoord_cnt  * sizeof(texcoords[0]) );
+    _write( materials,   hdr->mtl_cnt       * sizeof(materials[0]) );
+    _write( textures,    hdr->tex_cnt       * sizeof(textures[0]) );
+    _write( texels,      hdr->texel_cnt     * sizeof(texels[0]) );
+    _write( bvh_nodes,   hdr->bvh_node_cnt  * sizeof(bvh_nodes[0]) );
+    _write( matrixes,    hdr->matrix_cnt    * sizeof(matrixes[0]) );
+    _write( instances,   hdr->inst_cnt      * sizeof(instances[0]) );
+    _write( lights,      hdr->light_cnt     * sizeof(lights[0]) );
+    _write( cameras,     hdr->camera_cnt    * sizeof(cameras[0]) );
+    _write( frames,      hdr->frame_cnt     * sizeof(frames[0]) );
+    _write( animations,  hdr->animation_cnt * sizeof(animations[0]) );
 
     gzclose( fd );
     return true;
@@ -698,7 +858,7 @@ bool Model::write( std::string file_path, bool is_compressed )
 
 bool Model::replace_materials( std::string mtl_file_path )
 {
-    return load_mtl( "", mtl_file_path, true );
+    return load_mtl( mtl_file_path, "", true );
 }
 
 // returns array of T on a page boundary
@@ -729,11 +889,11 @@ inline void Model::perhaps_realloc( T *& array, const Model::uint64& hdr_cnt, Mo
     }
 }
 
-bool Model::write_uncompressed( std::string file_path ) 
+bool Model::write_uncompressed( std::string model_path ) 
 {
-    int fd = open( file_path.c_str(), O_CREAT|O_WRONLY|O_TRUNC|O_SYNC|S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP );
+    int fd = open( model_path.c_str(), O_CREAT|O_WRONLY|O_TRUNC|O_SYNC|S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP );
     if ( fd < 0 ) std::cout << "open() for write error: " << strerror( errno ) << "\n";
-    rtn_assert( fd >= 0, "could not open() file " + file_path + " for writing - open() error: " + strerror( errno ) );
+    rtn_assert( fd >= 0, "could not open() file " + model_path + " for writing - open() error: " + strerror( errno ) );
 
     //------------------------------------------------------------
     // Write out header than individual arrays.
@@ -752,25 +912,31 @@ bool Model::write_uncompressed( std::string file_path )
             if ( _byte_cnt < _this_byte_cnt ) _this_byte_cnt = _byte_cnt; \
             if ( ::write( fd, _addr, _this_byte_cnt ) <= 0 ) { \
                 close( fd ); \
-                rtn_assert( 0, "could not write() file " + file_path + " - write() error: " + strerror( errno ) ); \
+                rtn_assert( 0, "could not write() file " + model_path + " - write() error: " + strerror( errno ) ); \
             } \
             _byte_cnt -= _this_byte_cnt; \
             _addr     += _this_byte_cnt; \
         } \
     } \
 
-    _uwrite( hdr,         1                 * sizeof(hdr[0]) );
-    _uwrite( objects,     hdr->obj_cnt      * sizeof(objects[0]) );
-    _uwrite( polygons,    hdr->poly_cnt     * sizeof(polygons[0]) );
-    _uwrite( vertexes,    hdr->vtx_cnt      * sizeof(vertexes[0]) );
-    _uwrite( positions,   hdr->pos_cnt      * sizeof(positions[0]) );
-    _uwrite( normals,     hdr->norm_cnt     * sizeof(normals[0]) );
-    _uwrite( texcoords,   hdr->texcoord_cnt * sizeof(texcoords[0]) );
-    _uwrite( materials,   hdr->mtl_cnt      * sizeof(materials[0]) );
-    _uwrite( textures,    hdr->tex_cnt      * sizeof(textures[0]) );
-    _uwrite( texels,      hdr->texel_cnt    * sizeof(texels[0]) );
-    _uwrite( strings,     hdr->char_cnt     * sizeof(strings[0]) );
-    _uwrite( bvh_nodes,   hdr->bvh_node_cnt * sizeof(bvh_nodes[0]) );
+    _uwrite( hdr,         1                  * sizeof(hdr[0]) );
+    _uwrite( strings,     hdr->char_cnt      * sizeof(strings[0]) );
+    _uwrite( objects,     hdr->obj_cnt       * sizeof(objects[0]) );
+    _uwrite( polygons,    hdr->poly_cnt      * sizeof(polygons[0]) );
+    _uwrite( vertexes,    hdr->vtx_cnt       * sizeof(vertexes[0]) );
+    _uwrite( positions,   hdr->pos_cnt       * sizeof(positions[0]) );
+    _uwrite( normals,     hdr->norm_cnt      * sizeof(normals[0]) );
+    _uwrite( texcoords,   hdr->texcoord_cnt  * sizeof(texcoords[0]) );
+    _uwrite( materials,   hdr->mtl_cnt       * sizeof(materials[0]) );
+    _uwrite( textures,    hdr->tex_cnt       * sizeof(textures[0]) );
+    _uwrite( texels,      hdr->texel_cnt     * sizeof(texels[0]) );
+    _uwrite( bvh_nodes,   hdr->bvh_node_cnt  * sizeof(bvh_nodes[0]) );
+    _uwrite( matrixes,    hdr->matrix_cnt    * sizeof(matrixes[0]) );
+    _uwrite( instances,   hdr->inst_cnt      * sizeof(instances[0]) );
+    _uwrite( lights,      hdr->light_cnt     * sizeof(lights[0]) );
+    _uwrite( cameras,     hdr->camera_cnt    * sizeof(cameras[0]) );
+    _uwrite( frames,      hdr->frame_cnt     * sizeof(frames[0]) );
+    _uwrite( animations,  hdr->animation_cnt * sizeof(animations[0]) );
 
     fsync( fd ); // flush
     close( fd );
@@ -784,11 +950,11 @@ bool Model::write_uncompressed( std::string file_path )
     return true;
 }
 
-bool Model::read_uncompressed( std::string file_path )
+bool Model::read_uncompressed( std::string model_path )
 {
     char * start;
     char * end;
-    if ( !open_and_read( "", file_path, start, end ) ) return false;
+    if ( !open_and_read( model_path, start, end ) ) return false;
     mapped_region = start;
 
     //------------------------------------------------------------
@@ -814,29 +980,43 @@ bool Model::read_uncompressed( std::string file_path )
     }
     max = aligned_alloc<Header>( 1 );
     memcpy( max, hdr, sizeof( Header ) );
-    _uread( objects,     Object,   hdr->obj_cnt );
-    _uread( polygons,    Polygon,  hdr->poly_cnt );
-    _uread( vertexes,    Vertex,   hdr->vtx_cnt );
-    _uread( positions,   real3,    hdr->pos_cnt );
-    _uread( normals,     real3,    hdr->norm_cnt );
-    _uread( texcoords,   real2,    hdr->texcoord_cnt );
-    _uread( materials,   Material, hdr->mtl_cnt );
-    _uread( textures,    Texture,  hdr->tex_cnt );
+    _uread( strings,     char,          hdr->char_cnt );
+    _uread( objects,     Object,        hdr->obj_cnt );
+    _uread( polygons,    Polygon,       hdr->poly_cnt );
+    _uread( vertexes,    Vertex,        hdr->vtx_cnt );
+    _uread( positions,   real3,         hdr->pos_cnt );
+    _uread( normals,     real3,         hdr->norm_cnt );
+    _uread( texcoords,   real2,         hdr->texcoord_cnt );
+    _uread( materials,   Material,      hdr->mtl_cnt );
+    _uread( textures,    Texture,       hdr->tex_cnt );
     _uread( texels,      unsigned char, hdr->texel_cnt );
-    _uread( strings,     char,     hdr->char_cnt );
-    _uread( bvh_nodes,   BVH_Node, hdr->bvh_node_cnt );
+    _uread( bvh_nodes,   BVH_Node,      hdr->bvh_node_cnt );
+    _uread( matrixes,    Matrix,        hdr->matrix_cnt );
+    _uread( instances,   Instance,      hdr->inst_cnt );
+    _uread( lights,      Light,         hdr->light_cnt );
+    _uread( cameras,     Camera,        hdr->camera_cnt );
+    _uread( frames,      Frame,         hdr->frame_cnt );
+    _uread( animations,  Animation,     hdr->animation_cnt );
 
     is_good = true;
 
     return true;
 }
 
-bool Model::load_obj( std::string dir_path, std::string obj_file )
+bool Model::load_fscene( std::string fscene_file, std::string dir_name )
 {
+    error_msg = "not implemented yet: " + fscene_file + " dir=" + dir_name;
+    return false;
+}
+
+bool Model::load_obj( std::string obj_file, std::string dir_name )
+{
+    (void)dir_name;
+
     //------------------------------------------------------------
     // Map in .obj file
     //------------------------------------------------------------
-    if ( !open_and_read( dir_path, obj_file, obj_start, obj_end ) ) return false;
+    if ( !open_and_read( obj_file, obj_start, obj_end ) ) return false;
     obj = obj_start;
     line_num = 1;
 
@@ -1022,7 +1202,7 @@ bool Model::load_obj( std::string dir_path, std::string obj_file )
 
             case CMD_MTLLIB:
                 if ( !parse_name( mtllib, obj, obj_end ) ) goto error;
-                if ( !load_mtl( dir_path, mtllib ) ) goto error;
+                if ( !load_mtl( mtllib, dir_name ) ) goto error;
                 break;
                 
             case CMD_USEMTL:
@@ -1049,14 +1229,15 @@ bool Model::load_obj( std::string dir_path, std::string obj_file )
         return false;
 }
 
-bool Model::load_mtl( std::string dir_path, std::string mtl_file, bool replacing )
+bool Model::load_mtl( std::string mtl_file, std::string dir_name, bool replacing )
 {
     //------------------------------------------------------------
     // Map in .obj file
     //------------------------------------------------------------
     char * mtl;
     char * mtl_end;
-    if ( !open_and_read( dir_path, mtl_file, mtl, mtl_end ) ) return false;
+    if ( dir_name != std::string( "" ) ) mtl_file = dir_name + "/" + mtl_file;
+    if ( !open_and_read( mtl_file, mtl, mtl_end ) ) return false;
 
     //------------------------------------------------------------
     // Parse .mtl file contents
@@ -1204,7 +1385,7 @@ bool Model::load_mtl( std::string dir_path, std::string mtl_file, bool replacing
                     } else {
                         // need to load it
                         //
-                        if ( !load_tex( dir_path, tex_name, texture ) ) return false;
+                        if ( !load_tex( tex_name, dir_name, texture ) ) return false;
                     }
                     texture->bump_multiplier = bump_multiplier;
 
@@ -1238,7 +1419,7 @@ bool Model::load_mtl( std::string dir_path, std::string mtl_file, bool replacing
 
 uint Model::debug_tex_i = 1; // uint(-1);
 
-bool Model::load_tex( std::string dir_path, char *& tex_name, Model::Texture *& texture )
+bool Model::load_tex( char *& tex_name, std::string dir_name, Model::Texture *& texture )
 {
     // allocate Texture structure
     //
@@ -1252,7 +1433,7 @@ bool Model::load_tex( std::string dir_path, char *& tex_name, Model::Texture *& 
     // change any '\' to '/'
     //
     std::string tex_name_s = std::string( tex_name );
-    if ( dir_path != "" ) tex_name_s = dir_path + "/" + tex_name_s;
+    if ( dir_name != "" ) tex_name_s = dir_name + "/" + tex_name_s;
     char * file_name = strdup( tex_name_s.c_str() );
     size_t len = strlen( file_name );
     for( size_t i = 0; i < len; i++ ) 
@@ -1338,12 +1519,47 @@ bool Model::load_tex( std::string dir_path, char *& tex_name, Model::Texture *& 
     return true;
 }
 
-bool Model::open_and_read( std::string dir_path, std::string file_name, char *& start, char *& end )
+void Model::dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ) 
 {
-    std::string file_path = (dir_path != "") ? (dir_path + "/" + file_name) : file_name;
+    // in case they are not found:
+    dir_name = "";
+    base_name = "";
+    ext_name = "";
+
+    // ext_name 
+    const int len = path.length();
+    int pos = len - 1;
+    for( ; pos >= 0; pos-- )
+    {
+        if ( path[pos] == '.' ) {
+            ext_name = path.substr( pos );
+            pos--;
+            break;
+        }
+    } 
+    if ( pos < 0 ) pos = len - 1;  // no ext_name, so reset for base_name
+    
+    // base_name
+    int base_len = 0;
+    for( ; pos >= 0; pos--, base_len++ )
+    {
+        if ( path[pos] == '/' ) {
+            if ( base_len != 0 ) base_name = path.substr( pos+1, base_len );
+            pos--;
+            break;
+        }
+    }
+    if ( pos < 0 ) pos = len - 1;  // no base_name, so reset for dir_name
+
+    // dir_name is whatever's left
+    if ( pos >= 0 ) dir_name = path.substr( 0, pos+1 );
+}
+
+bool Model::open_and_read( std::string file_path, char *& start, char *& end )
+{
     const char * fname = file_path.c_str();
     int fd = open( fname, O_RDONLY );
-    if ( fd < 0 ) std::cout << "open_and_read() error reading " << dir_path << "/" << file_name << ": " << strerror( errno ) << "\n";
+    if ( fd < 0 ) std::cout << "open_and_read() error reading " << file_path << ": " << strerror( errno ) << "\n";
     rtn_assert( fd >= 0, "could not open file " + file_path + " - open() error: " + strerror( errno ) );
 
     struct stat file_stat;
@@ -1974,8 +2190,8 @@ Model::uint Model::bvh_node( Model::uint poly_i, Model::uint n, Model::uint axis
     }
 
     if ( n == 1 || n == 2 ) {
-        node->left_is_leaf = true;
-        node->right_is_leaf = true;
+        node->left_kind = Model::BVH_NODE_KIND::POLYGON;
+        node->right_kind = Model::BVH_NODE_KIND::POLYGON;
         node->left_i  = poly_i;
         AABB new_box;
         polygons[poly_i+0].bounding_box( this, new_box );
@@ -1989,8 +2205,8 @@ Model::uint Model::bvh_node( Model::uint poly_i, Model::uint n, Model::uint axis
         }
 
     } else {
-        node->left_is_leaf = false;
-        node->right_is_leaf = false;
+        node->left_kind = Model::BVH_NODE_KIND::BVH_NODE;
+        node->right_kind = Model::BVH_NODE_KIND::BVH_NODE;
         real pivot = (node->box.min.c[axis] + node->box.max.c[axis]) * 0.5;
         uint m = bvh_qsplit( poly_i, n, pivot, axis );
         uint nm = m - poly_i;
@@ -2313,13 +2529,15 @@ inline bool Model::AABB::encloses( const AABB& other ) const
            max.c[2] >= other.max.c[2];
 }
 
-inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& direction, Model::real tmin, Model::real tmax ) const 
+inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& direction, const Model::real3& direction_inv, 
+                              Model::real tmin, Model::real tmax ) const 
 {
+    (void)direction;
     for( uint a = 0; a < 3; a++ ) 
     {
-        real dir = direction.c[a];
-        real v0 = (min.c[a] - origin.c[a]) / dir;
-        real v1 = (max.c[a] - origin.c[a]) / dir;
+        real dir_inv = direction_inv.c[a];
+        real v0 = (min.c[a] - origin.c[a]) * dir_inv;
+        real v1 = (max.c[a] - origin.c[a]) * dir_inv;
         tmin = std::max( tmin, std::min( v0, v1 ) );
         tmax = std::min( tmax, std::max( v0, v1 ) );
     }
@@ -2327,9 +2545,10 @@ inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& di
     return r;
 }
 
-inline bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, real t_min, real t_max, 
-                                 HitInfo& hit_info ) const
+inline bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
+                                 real t_min, real t_max, HitInfo& hit_info ) const
 {
+    (void)direction_inv;
     if ( vtx_cnt == 3 ) {
         // triangle - this code comes originally from Peter Shirley
         const Vertex * vertexes = &model->vertexes[vtx_i];
@@ -2391,8 +2610,8 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
                     hit_info.normal = normal;
                 }
 
-                real distance_squared = t*t / direction.length_sqr();
-                hit_info.solid_angle  = area / distance_squared;                                       // off by 2X, but...
+                real distance_squared_inv = direction.length_sqr() / t*t;
+                hit_info.solid_angle  = area * distance_squared_inv;                                   // off by 2X, but...
                 hit_info.solid_angle *= std::abs(0.5*(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1)); // correction for UV at corners as lengths
                 hit_info.u = alpha*u0 + gamma*u1 + beta*u2 ;
                 hit_info.v = alpha*v0 + gamma*v1 + beta*v2 ;
@@ -2403,6 +2622,26 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
     return false;
 }
 
+bool Model::Instance::bounding_box( const Model * model, AABB& box, real padding ) const
+{
+    (void)model;
+    (void)box;
+    (void)padding;
+    return false;
+}
+
+bool Model::Instance::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, real t_min, real t_max, HitInfo& hit_info )
+{
+    (void)model;
+    (void)origin;
+    (void)direction;
+    (void)direction_inv;
+    (void)t_min;
+    (void)t_max;
+    (void)hit_info;
+    return false;
+}
+
 inline bool Model::BVH_Node::bounding_box( const Model * model, Model::AABB& b ) const
 {
     (void)model;
@@ -2410,18 +2649,21 @@ inline bool Model::BVH_Node::bounding_box( const Model * model, Model::AABB& b )
     return true;
 }
 
-inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origin, const Model::real3& direction, 
+inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origin, 
+                                  const Model::real3& direction, const Model::real3& direction_inv,
                                   Model::real t_min, Model::real t_max, Model::HitInfo& hit_info ) const
 {
     bool r = false;
-    if ( box.hit( origin, direction, t_min, t_max ) ) {
+    if ( box.hit( origin, direction, direction_inv, t_min, t_max ) ) {
         HitInfo left_hit_info;
         HitInfo right_hit_info;
-        bool hit_left  = left_is_leaf  ? model->polygons[left_i].hit(   model, origin, direction, t_min, t_max, left_hit_info ) 
-                                       : model->bvh_nodes[left_i].hit(  model, origin, direction, t_min, t_max, left_hit_info );
-        bool hit_right = (left_i == right_i) ? false :  // lone leaf
-                         right_is_leaf ? model->polygons[right_i].hit(  model, origin, direction, t_min, t_max, right_hit_info )
-                                       : model->bvh_nodes[right_i].hit( model, origin, direction, t_min, t_max, right_hit_info );
+        bool hit_left  = (left_kind == BVH_NODE_KIND::POLYGON)   ? model->polygons[left_i].hit(    model, origin, direction, direction_inv, t_min, t_max, left_hit_info  ) :
+                         (left_kind == BVH_NODE_KIND::INSTANCE)  ? model->instances[left_i].hit(   model, origin, direction, direction_inv, t_min, t_max, left_hit_info  ) :
+                                                                   model->bvh_nodes[left_i].hit(   model, origin, direction, direction_inv, t_min, t_max, left_hit_info  );
+        bool hit_right = (left_i == right_i)                     ? false :   // lone leaf
+                         (right_kind == BVH_NODE_KIND::POLYGON)  ? model->polygons[right_i].hit(   model, origin, direction, direction_inv, t_min, t_max, right_hit_info ) :
+                         (right_kind == BVH_NODE_KIND::INSTANCE) ? model->instances[right_i].hit(  model, origin, direction, direction_inv, t_min, t_max, right_hit_info ) :
+                                                                   model->bvh_nodes[right_i].hit(  model, origin, direction, direction_inv, t_min, t_max, right_hit_info );
         if ( hit_left && (!hit_right || left_hit_info.t < right_hit_info.t) ) {
             hit_info = left_hit_info;
             r = true;

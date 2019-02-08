@@ -18,21 +18,14 @@ static inline void die( std::string msg )
 int main( int argc, const char * argv[] )
 {
     print( "" );
-    std::string dir_name;
-    std::string basename;
+    std::string file_name;
     if ( argc == 2 ) {
-        dir_name = std::string( argv[1] );
-        std::size_t pos = dir_name.find_last_of( "/" );
-        basename = dir_name.substr( pos+1 );
-        dir_name = dir_name.substr( 0, pos );
-    } else if ( argc == 3 ) {
-        dir_name = std::string( argv[1] );
-        basename = std::string( argv[2] );
-    } else if ( argc != 3 ) {
-        die( "usage: gen_prims <model_dir> <obj_file>" );
+        file_name = std::string( argv[1] );
+    } else {
+        die( "usage: gen_prims <top_file>" );
     }
-    std::cout << "Reading in " << dir_name << "/" << basename << "...\n";
-    Model * model = new Model( dir_name, basename, Model::MIPMAP_FILTER::BOX, Model::BVH_TREE::BINARY );
+    std::cout << "Reading in " << file_name << "...\n";
+    Model * model = new Model( file_name, Model::MIPMAP_FILTER::BOX, Model::BVH_TREE::BINARY );
     if ( !model->is_good ) die( model->error_msg );
 
     print( "obj_cnt:        " + std::to_string( model->hdr->obj_cnt ) );
@@ -49,19 +42,26 @@ int main( int argc, const char * argv[] )
     uint mb_cnt = model->hdr->byte_cnt / (1024 * 1024);
     print( "total_byte_cnt: " + std::to_string( model->hdr->byte_cnt ) + " (" + std::to_string( mb_cnt ) + " MB)" );
 
-    std::size_t pos = basename.find( "." );
-    basename = basename.substr( 0, pos );
-//    std::string name = dir_name + "/" + basename + ".model";
-    std::string name = dir_name + "/" + dir_name + ".model";
+    // construct name of .model file 
+    std::string dir_name;
+    std::string base_name;
+    std::string ext_name;
+    Model::dissect_path( file_name, dir_name, base_name, ext_name );
+    if ( dir_name == std::string( "" ) ) die( "top_file has no dir_name: " + file_name );
+    std::string dir_name2;
+    Model::dissect_path( dir_name, dir_name2, base_name, ext_name );
+    if ( dir_name2 == std::string( "" ) ) die( "something really bad happened: dir_name=" + dir_name + 
+                                               " dir_name2=" + dir_name2 + " base_name=" + base_name + " ext_name=" + ext_name );
+    std::string name = dir_name + "/" + dir_name2 + ".model";
 
     Model * model2;
     if ( 0 ) {
         std::string gz_name = name;
         print( "Writing compressed " + gz_name + "..." );
-        if ( !model->write( gz_name ) ) die( model->error_msg );
+        if ( !model->write( gz_name, true ) ) die( model->error_msg );
 
         print( "Reading compressed " + gz_name + "..." );
-        model2 = new Model( gz_name );
+        model2 = new Model( gz_name, true );
         if ( !model2->is_good ) die( model2->error_msg );
         if ( model2->hdr->obj_cnt != model->hdr->obj_cnt ||
              model2->hdr->poly_cnt != model->hdr->poly_cnt ||

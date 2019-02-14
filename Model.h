@@ -119,7 +119,8 @@ public:
         BINARY,                             // generate binary BVH tree
     };
 
-    Model( std::string top_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE, BVH_TREE bvh_tree=BVH_TREE::NONE );
+    Model( std::string top_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE, 
+                                 BVH_TREE bvh_tree=BVH_TREE::NONE, bool resolve_models=true );
     Model( std::string model_file, bool is_compressed );
     ~Model(); 
 
@@ -128,7 +129,7 @@ public:
 
     static void dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ); // utility
 
-    static const uint VERSION = 0xB0BA1f06; // current version is 6
+    static const uint VERSION = 0xB0BA1f07; // current version 
 
     bool                is_good;            // set to true if constructor succeeds
     std::string         error_msg;          // if !is_good
@@ -215,7 +216,12 @@ public:
 
         uint64      light_cnt;              // in lights array
         real        lighting_scale;         // not sure what this is yet (default: 1.0)
-        real        ambient_intensity;      // ambient light intensity (default: [0.1, 0.1, 0.1]
+        real3       ambient_intensity;      // ambient light intensity (default: [0.1, 0.1, 0.1]
+        real3       background_color;       // default is black, though irrelevant if there's a sky box
+        uint        sky_box_file_name_i;    // index in strings of sky box file name
+        real        env_map_intensity_scale;// name says it all
+        real        opacity_scale;          // not sure what this is for
+        real        shadow_caster_count;    // not sure what this is for
 
         uint64      camera_cnt;             // in cameras array
         uint64      initial_camera_i;       // initial active camera index (default: 0)
@@ -239,7 +245,7 @@ public:
         real        t;  
         real        u;
         real        v;
-        real        solid_angle;            // solid angle of hit surface (used by mip_level calculation)
+        real        frac_uv_cov;            // UV footprint of hit surface (used by mip_level calculation)
         real3       p;
         real3       normal;
     };
@@ -271,7 +277,8 @@ public:
         real        area;                   // surface area };
         
         bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
-        bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, real t_min, real t_max, HitInfo& hit_info ) const;
+        bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
+                  real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const;
     };
 
     class Vertex
@@ -284,6 +291,7 @@ public:
 
     // see https://www.fileformat.info/format/material/
     // we don't yet support advanced features of the spec
+    //
     class Material
     {
     public:
@@ -305,6 +313,8 @@ public:
         uint            map_Ns_i;           // specular highlight texture (multipled by Ns)
         uint            map_d_i;            // alpha texture (multiplied by d)
         uint            map_Bump_i;         // bump map texture
+
+        // TODO: add value() or color() routine to compute the color using all of these parameters
     };
 
     class Texture
@@ -335,13 +345,18 @@ public:
         uint            right_i;            // index into appropriate kind array for right subtree 
 
         bool bounding_box( const Model * model, AABB& b ) const;
-        bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, real t_min, real t_max, HitInfo& hit_info ) const;
+        bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
+                  real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const;
     };
 
     class Matrix                            // 4x4 transformation matrix used by Instance
     {
     public:
         real            m[4][4];
+
+        void   translate( const real3& translation );   // translate this matrix by a real3
+        void   scale(     const real3& scaling );       // scale this matrix by a real3
+        void   rotate(    const real3& rotation );      // rotate this matrix by a real3
 
         Matrix operator + ( const Matrix& m ) const;    // add two matrices
         Matrix operator - ( const Matrix& m ) const;    // subtract two matrices
@@ -350,7 +365,8 @@ public:
 
     enum class INSTANCE_KIND
     {
-        MODEL,                              // instance is another Model 
+        MODEL,                              // instance is another Model (by name)
+        MODEL_PTR,                          // instance is another Model (read in and with a resolved pointer)
         OBJECT,                             // instance is an Object within the current model
     };
 
@@ -358,20 +374,26 @@ public:
     {
     public:
         INSTANCE_KIND   kind;               // see above
+        uint            name_i;             // index in strings array of instance name
+        uint            model_name_i;       // index in strings array of name of instanced Model 
+        uint            model_file_name_i;  // index in strings array of file name of instanced Model 
         uint            matrix_i;           // index of Matrix in matrixes[] array (transformation matrix)
         union {
-            uint        model_name_i;       // index in strings array of file path name of Model
+            Model *     model_ptr;          // resolved Model pointer for MODEL_PTR
             uint        obj_i;              // index of Object in objects[] array
         } u;
 
         bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
-        bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, real t_min, real t_max, HitInfo& hit_info );
+        bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
+                  real solid_angle, real t_min, real t_max, HitInfo& hit_info );
     };
 
     enum class LIGHT_KIND
     {
         DIRECTIONAL,
         POINT,
+        SPHERICAL,
+        RECTANGULAR,
         PROBE,
     };
 
@@ -379,12 +401,16 @@ public:
     {
     public:
         uint            name_i;             // index in strings array (null-terminated strings)
+        uint            file_name_i;        // index in strings array of file name for light probe only
         LIGHT_KIND      kind;               // type of light
-        real3           intensity;
-        real3           direction;
-        real3           position;
+        real3           intensity;          // aka color
+        real3           direction;          // point and directional lights only
+        real3           position;           // point and spherical lights only
+        real3           extent;             // spherical (r, r, r) and rectangular (w, h, 0) lights only
         real            opening_angle;      // point lights only
         real            penumbra_angle;     // point lights only
+        uint            diffuse_sample_cnt; // applies to light probe only
+        uint            specular_sample_cnt;// ditto
     };
 
     class Camera
@@ -395,10 +421,11 @@ public:
         real3           lookat;             // point camera is aimed at
         real3           vup;                // camera up direction
         real            aperture;           // lens aperture
-        real            focus_dist;
+        real            focus_dist;         // aka focal_length
         real            near;               // near clip plane distance (typical: 0.1)
         real            far;                // far clip plane distance (typical: 10000)
         real            vfov;               // vertical field of view
+        real            aspect_ratio;       // aspect ratio
     };
 
     class Frame                             // one frame in an animation sequence
@@ -504,32 +531,40 @@ private:
         CMD_MAP_BUMP
     } mtl_cmd_t;
             
-    char *              obj;
-    char *              obj_start;
-    char *              obj_end;
-    uint                line_num;
+    char * fsc_start;
+    char * fsc_end;
+    char * fsc;
+    char * obj_start;
+    char * obj_end;
+    char * obj;
+    uint   line_num;
 
-    bool load_fscene( std::string fscene_file, std::string dir_name );
-    bool load_obj( std::string obj_file, std::string dir_name );
+    bool load_fsc( std::string fsc_file, std::string dir_name );        // .fscene 
+    bool load_obj( std::string obj_file, std::string dir_name );        // .obj
     bool load_mtl( std::string mtl_file, std::string dir_name, bool replacing=false );
     bool load_tex( char *& tex_name, std::string dir_name, Texture *& texture );
 
     bool open_and_read( std::string file_name, char *& start, char *& end );
 
-    void skip_whitespace_to_eol( char *& xxx, char *& xxx_end );  // on this line only
-    void skip_whitespace( char *& xxx, char *& xxx_end );
-    void skip_to_eol( char *& xxx, char *& xxx_end );
+    bool skip_whitespace_to_eol( char *& xxx, char *& xxx_end );  // on this line only
+    bool skip_whitespace( char *& xxx, char *& xxx_end );
+    bool skip_to_eol( char *& xxx, char *& xxx_end );
     bool eol( char *& xxx, char *& xxx_end );
-    bool expect_char( char ch, char *& xxx, char* xxx_end );
+    bool expect_char( char ch, char *& xxx, char* xxx_end, bool skip_whitespace_first=false );
     bool expect_cmd( const char * s, char *& xxx, char *& xxx_end );
+    bool parse_string( std::string& s, char *& xxx, char *& xxx_end );
+    bool parse_string_i( uint& s, char *& xxx, char *& xxx_end );
     bool parse_name( char *& name, char *& xxx, char *& xxx_end );
+    bool parse_id( std::string& id, char *& xxx, char *& xxx_end );
     bool parse_option_name( std::string& option_name, char *& xxx, char *& xxx_end );
     bool parse_obj_cmd( obj_cmd_t& cmd );
     bool parse_mtl_cmd( mtl_cmd_t& cmd, char *& mtl, char *& mtl_end );
-    bool parse_real3( real3& r3, char *& xxx, char *& xxx_end );
-    bool parse_real2( real2& r2, char *& xxx, char *& xxx_end );
-    bool parse_real( real& r, char *& xxx, char *& xxx_end );
+    bool parse_real3( real3& r3, char *& xxx, char *& xxx_end, bool has_brackets=false );
+    bool parse_real2( real2& r2, char *& xxx, char *& xxx_end, bool has_brackets=false );
+    bool parse_real( real& r, char *& xxx, char *& xxx_end, bool skip_whitespace_first=false );
     bool parse_int( int& i, char *& xxx, char *& xxx_end );
+    bool parse_uint( uint& u, char *& xxx, char *& xxx_end );
+    bool parse_bool( bool& b, char *& xxx, char *& xxx_end );
     std::string surrounding_lines( char *& xxx, char *& xxx_end );
 
     // BVH builder
@@ -555,6 +590,7 @@ private:
 // these are done as macros to avoid evaluating msg (it makes a big difference)
 #include <assert.h>
 #define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << msg << "\n"; assert( false ); return false; }
+#define fsc_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << msg << "\n"; assert( false ); goto error;   }
 #define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << msg << "\n"; assert( false ); goto error;   }
 
 inline std::istream& operator >> ( std::istream& is, Model::real3& v ) 
@@ -626,11 +662,14 @@ inline std::ostream& operator << ( std::ostream& os, const Model::BVH_Node& bvh 
     return os;
 }
 
-Model::Model( std::string top_file, Model::MIPMAP_FILTER mipmap_filter, Model::BVH_TREE bvh_tree )
+Model::Model( std::string top_file, Model::MIPMAP_FILTER mipmap_filter, Model::BVH_TREE bvh_tree, bool resolve_models )
 {
     is_good = false;
     error_msg = "<unknown error>";
     mapped_region = nullptr;
+    fsc = nullptr;
+    obj = nullptr;
+    line_num = 1;
 
     hdr = aligned_alloc<Header>( 1 );
     memset( hdr, 0, sizeof( Header ) );
@@ -639,8 +678,14 @@ Model::Model( std::string top_file, Model::MIPMAP_FILTER mipmap_filter, Model::B
     hdr->norm_cnt = 1;
     hdr->texcoord_cnt = 1;
     hdr->mipmap_filter = mipmap_filter;
-    hdr->bvh_node_cnt = 0;
-    hdr->bvh_root_i = 0;
+    hdr->lighting_scale = 1.0;
+    hdr->ambient_intensity = real3( 0.1, 0.1, 0.1 );
+    hdr->sky_box_file_name_i = uint(-1);
+    hdr->env_map_intensity_scale = 1.0;
+    hdr->opacity_scale = 1.0;
+    hdr->initial_camera_i = uint(-1);
+    hdr->animation_speed = 1.0;
+    hdr->background_color = real3( 0, 0, 0 );
 
     //------------------------------------------------------------
     // Initial lengths of arrays are large in virtual memory
@@ -697,17 +742,61 @@ Model::Model( std::string top_file, Model::MIPMAP_FILTER mipmap_filter, Model::B
     if ( ext_name == std::string( ".obj" ) || ext_name == std::string( ".OBJ" ) ) {
         if ( !load_obj( top_file, dir_name ) ) return;
     } else if ( ext_name == std::string( ".fscene" ) || ext_name == std::string( ".FSCENE" ) ) {
-        if ( !load_fscene( top_file, dir_name ) ) return;
+        if ( !load_fsc( top_file, dir_name ) ) return;
     } else {
         error_msg = "unknown top file ext_name: " + ext_name;
         return;
     }
-    is_good = true;
+
+    if ( resolve_models ) {
+        //------------------------------------------------------------
+        // Resolve Model Pointers in MODEL Instances
+        //------------------------------------------------------------
+        for( uint i = 0; i < hdr->inst_cnt; i++ )
+        {
+            Instance * instance = &instances[i];
+            if ( instance->kind == INSTANCE_KIND::MODEL ) {
+                const char * model_file_name = &strings[instance->model_file_name_i];
+                std::string file_name = model_file_name;
+                Model * model = new Model( file_name, false );
+                if ( !model->is_good ) {
+                    error_msg = model->error_msg;
+                    return;
+                }
+                instance->u.model_ptr = model;
+                instance->kind = INSTANCE_KIND::MODEL_PTR;
+            }
+        }
+    }
 
     //------------------------------------------------------------
     // Optionally build BVH
     //------------------------------------------------------------
     if ( bvh_tree != BVH_TREE::NONE ) bvh_build( bvh_tree );
+
+    //------------------------------------------------------------
+    // Add up byte count.
+    //------------------------------------------------------------
+    hdr->byte_cnt = uint64( 1                 ) * sizeof( hdr ) +
+                    uint64( hdr->obj_cnt      ) * sizeof( objects[0] ) +
+                    uint64( hdr->poly_cnt     ) * sizeof( polygons[0] ) +
+                    uint64( hdr->vtx_cnt      ) * sizeof( vertexes[0] ) +
+                    uint64( hdr->pos_cnt      ) * sizeof( positions[0] ) +
+                    uint64( hdr->norm_cnt     ) * sizeof( normals[0] ) +
+                    uint64( hdr->texcoord_cnt ) * sizeof( texcoords[0] ) +
+                    uint64( hdr->mtl_cnt      ) * sizeof( materials[0] ) +
+                    uint64( hdr->tex_cnt      ) * sizeof( textures[0] ) +
+                    uint64( hdr->texel_cnt    ) * sizeof( texels[0] ) +
+                    uint64( hdr->char_cnt     ) * sizeof( strings[0] ) + 
+                    uint64( hdr->bvh_node_cnt ) * sizeof( bvh_nodes[0] ) +
+                    uint64( hdr->matrix_cnt   ) * sizeof( matrixes[0] ) +
+                    uint64( hdr->inst_cnt     ) * sizeof( instances[0] ) +
+                    uint64( hdr->light_cnt    ) * sizeof( lights[0] ) +
+                    uint64( hdr->camera_cnt   ) * sizeof( cameras[0] ) +
+                    uint64( hdr->frame_cnt    ) * sizeof( frames[0] ) +
+                    uint64( hdr->animation_cnt) * sizeof( animations[0] );
+
+    is_good = true;
 }
 
 Model::Model( std::string model_path, bool is_compressed )
@@ -758,7 +847,7 @@ Model::Model( std::string model_path, bool is_compressed )
     _read( hdr,         Header,   1 );
     if ( hdr->version != VERSION ) {
         gzclose( fd );
-        error_msg = "hdr->version does not match VERSION";
+        error_msg = "hdr->version does not match VERSION=" + std::to_string(VERSION) + ", got " + std::to_string(hdr->version);
         assert( 0 ); \
         return;
     }
@@ -976,7 +1065,7 @@ bool Model::read_uncompressed( std::string model_path )
 
     _uread( hdr,         Header,   1 );
     if ( hdr->version != VERSION ) {
-        rtn_assert( 0, "hdr->version does not match VERSION" );
+        rtn_assert( 0, "hdr->version does not match VERSION=" + std::to_string(VERSION) + ", got " + std::to_string(hdr->version) );
     }
     max = aligned_alloc<Header>( 1 );
     memcpy( max, hdr, sizeof( Header ) );
@@ -1003,10 +1092,727 @@ bool Model::read_uncompressed( std::string model_path )
     return true;
 }
 
-bool Model::load_fscene( std::string fscene_file, std::string dir_name )
+bool Model::load_fsc( std::string fsc_file, std::string dir_name )
 {
-    error_msg = "not implemented yet: " + fscene_file + " dir=" + dir_name;
-    return false;
+    (void)dir_name;
+
+    //------------------------------------------------------------
+    // Map in .fscene file
+    //------------------------------------------------------------
+    line_num = 1;
+    fsc = nullptr;
+    uint initial_camera_name_i = uint(-1);
+    if ( !open_and_read( fsc_file, fsc_start, fsc_end ) ) goto error;
+    fsc = fsc_start;
+
+    //------------------------------------------------------------
+    // Parse top dictionary.
+    //------------------------------------------------------------
+    if ( !expect_char( '{', fsc, fsc_end, true ) ) goto error;
+    for( ;; )
+    {
+        skip_whitespace( fsc, fsc_end );
+        fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+        if ( *fsc == '}' ) {
+            if ( !expect_char( '}', fsc, fsc_end ) ) goto error;
+            skip_whitespace( fsc, fsc_end );
+            fsc_assert( fsc == fsc_end, "unexpected characters at end of " + fsc_file );
+            if ( initial_camera_name_i == uint(-1) ) {
+                hdr->initial_camera_i = uint(-1);
+            } else {
+                auto it = name_to_camera_i.find( std::string( &strings[initial_camera_name_i] ) );
+                fsc_assert( it != name_to_camera_i.end(), "could not find initial camera: " + std::string( &strings[initial_camera_name_i] ) );
+                hdr->initial_camera_i = it->second;
+            }
+            return true;
+        }
+
+        uint field_i;
+        if ( !parse_string_i( field_i, fsc, fsc_end ) ) goto error;
+        const char * field = &strings[field_i];
+        if ( !expect_char( ':', fsc, fsc_end, true ) ) goto error;
+
+        if ( strcmp( field, "version" ) == 0 ) {
+            real version;
+            if ( !parse_real( version, fsc, fsc_end, true ) ) goto error;
+            fsc_assert( version == 2, fsc_file + " version != 2" );
+
+        } else if ( strcmp( field, "camera_speed" ) == 0 ) {
+            if ( !parse_real( hdr->animation_speed, fsc, fsc_end, true ) ) goto error;
+
+        } else if ( strcmp( field, "lighting_scale" ) == 0 ) {
+            if ( !parse_real( hdr->lighting_scale, fsc, fsc_end, true ) ) goto error;
+
+        } else if ( strcmp( field, "active_camera" ) == 0 ) {
+            if ( !parse_string_i( initial_camera_name_i, fsc, fsc_end ) ) goto error;
+
+        } else if ( strcmp( field, "ambient_intensity" ) == 0 ) {
+            if ( !parse_real3( hdr->ambient_intensity, fsc, fsc_end, true ) ) goto error;
+
+        } else if ( strcmp( field, "user_defined" ) == 0 ) {
+            if ( !expect_char( '{', fsc, fsc_end, true ) ) goto error;
+            for( ;; )
+            {
+                skip_whitespace( fsc, fsc_end );
+                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                if ( *fsc == '}' ) {
+                    if ( !expect_char( '}', fsc, fsc_end ) ) goto error;
+                    break;
+                } 
+
+                if ( !parse_string_i( field_i, fsc, fsc_end ) ) goto error;
+                field = &strings[field_i];
+                if ( !expect_char( ':', fsc, fsc_end, true ) ) goto error;
+
+                if ( strcmp( field, "sky_box" ) == 0 ) {
+                    if ( !parse_string_i( hdr->sky_box_file_name_i, fsc, fsc_end ) ) goto error;
+                
+                } else if ( strcmp( field, "env_map_intensity_scale" ) == 0 ) {
+                    if ( !parse_real( hdr->env_map_intensity_scale, fsc, fsc_end, true ) ) goto error;
+
+                } else if ( strcmp( field, "opacity_scale" ) == 0 ) {
+                    if ( !parse_real( hdr->opacity_scale, fsc, fsc_end, true ) ) goto error;
+
+                } else if ( strcmp( field, "shadow_caster_count" ) == 0 ) {
+                    if ( !parse_real( hdr->shadow_caster_count, fsc, fsc_end, true ) ) goto error;
+
+                } else if ( strcmp( field, "background_color" ) == 0 ) {
+                    if ( !parse_real3( hdr->background_color, fsc, fsc_end, true ) ) goto error;
+
+                } else {
+                    fsc_assert( 0, "unexpected user_defined field '" + std::string(field) + "' in " + fsc_file );
+                }
+
+                skip_whitespace( fsc, fsc_end );
+                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+            }
+
+        } else if ( strcmp( field, "models" ) == 0 ) {
+            if ( !expect_char( '[', fsc, fsc_end, true ) ) goto error;
+            uint model_file_name_i = uint(-1);
+            uint model_name_i = uint(-1);
+            for( ;; )
+            {
+                skip_whitespace( fsc, fsc_end );
+                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                if ( *fsc == ']' ) {
+                    if ( !expect_char( ']', fsc, fsc_end ) ) goto error;
+                    break;
+                }
+                if ( !expect_char( '{', fsc, fsc_end ) ) goto error;
+
+                for( ;; ) 
+                {
+                    skip_whitespace( fsc, fsc_end );
+                    fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                    if ( *fsc == '}' ) {
+                        if ( !expect_char( '}', fsc, fsc_end ) ) goto error;
+                        break;
+                    }
+
+                    uint model_field_i;
+                    if ( !parse_string_i( model_field_i, fsc, fsc_end ) ) goto error;
+                    const char * model_field = &strings[model_field_i];
+                    if ( !expect_char( ':', fsc, fsc_end, true ) ) goto error;
+
+                    if ( strcmp( model_field, "file" ) == 0 ) {
+                        if ( !parse_string_i( model_file_name_i, fsc, fsc_end ) ) goto error;
+
+                    } else if ( strcmp( model_field, "name" ) == 0 ) {
+                        if ( !parse_string_i( model_name_i, fsc, fsc_end ) ) goto error;
+
+                    } else if ( strcmp( model_field, "instances" ) == 0 ) {
+                        if ( !expect_char( '[', fsc, fsc_end, true ) ) goto error;
+                        for( ;; ) 
+                        {
+                            skip_whitespace( fsc, fsc_end );
+                            fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                            if ( *fsc == ']' ) {
+                                if ( !expect_char( ']', fsc, fsc_end ) ) goto error;
+                                break;
+                            }
+                            if ( !expect_char( '{', fsc, fsc_end ) ) goto error;
+
+                            // Instance
+                            perhaps_realloc<Instance>( instances, hdr->inst_cnt, max->inst_cnt, 1 );
+                            Instance * instance = &instances[hdr->inst_cnt++];
+                            instance->kind = INSTANCE_KIND::MODEL;
+                            instance->name_i = uint(-1);
+                            instance->model_name_i = model_name_i;
+                            instance->model_file_name_i = model_file_name_i;
+
+                            // Matrix - start with identity
+                            perhaps_realloc<Matrix>( matrixes, hdr->matrix_cnt, max->matrix_cnt, 1 );
+                            instance->matrix_i = hdr->matrix_cnt;
+                            Matrix * matrix = &matrixes[hdr->matrix_cnt++];
+                            for( uint i = 0; i < 4; i++ ) 
+                            {
+                                for( uint j = 0; j < 4; j++ )
+                                {
+                                    matrix->m[i][j] = (i == j) ? 1.0 : 0.0;
+                                }
+                            }
+
+                            for( ;; ) 
+                            {
+                                skip_whitespace( fsc, fsc_end );
+                                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                                if ( *fsc == '}' ) {
+                                    if ( !expect_char( '}', fsc, fsc_end ) ) goto error;
+                                    break;
+                                }
+
+                                uint instance_field_i;
+                                if ( !parse_string_i( instance_field_i, fsc, fsc_end ) ) goto error;
+                                const char * instance_field = &strings[instance_field_i];
+                                if ( !expect_char( ':', fsc, fsc_end, true ) ) goto error;
+
+                                if ( strcmp( instance_field, "name" ) == 0 ) {
+                                    if ( !parse_string_i( instance->name_i, fsc, fsc_end ) ) goto error;
+
+                                } else if ( strcmp( instance_field, "translation" ) == 0 ) {
+                                    real3 translation;
+                                    if ( !parse_real3( translation, fsc, fsc_end, true ) ) goto error;
+                                    matrix->translate( translation );
+
+                                } else if ( strcmp( instance_field, "scaling" ) == 0 ) {
+                                    real3 scaling;
+                                    if ( !parse_real3( scaling, fsc, fsc_end, true ) ) goto error;
+                                    matrix->scale( scaling );
+
+                                } else if ( strcmp( instance_field, "rotation" ) == 0 ) {
+                                    real3 rotation;
+                                    if ( !parse_real3( rotation, fsc, fsc_end, true ) ) goto error;
+                                    matrix->rotate( rotation );
+
+                                } else {
+                                    fsc_assert( 0, "unexpected instance field '" + std::string(instance_field) + "' in " + fsc_file );
+                                }
+
+                                skip_whitespace( fsc, fsc_end );
+                                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                                if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+                            }
+
+                            skip_whitespace( fsc, fsc_end );
+                            fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                            if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+                        }
+
+                    } else {
+                        fsc_assert( 0, "unexpected model field '" + std::string(model_field) + "' in " + fsc_file );
+                    }
+
+                    skip_whitespace( fsc, fsc_end );
+                    fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                    if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+                }
+
+                skip_whitespace( fsc, fsc_end );
+                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+            }
+
+        } else if ( strcmp( field, "lights" ) == 0 ) {
+            if ( !expect_char( '[', fsc, fsc_end, true ) ) goto error;
+            for( ;; )
+            {
+                skip_whitespace( fsc, fsc_end );
+                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                if ( *fsc == ']' ) {
+                    if ( !expect_char( ']', fsc, fsc_end ) ) goto error;
+                    break;
+                }
+                if ( !expect_char( '{', fsc, fsc_end ) ) goto error;
+
+                // Light
+                perhaps_realloc<Light>( lights, hdr->light_cnt, max->light_cnt, 1 );
+                uint light_i = hdr->light_cnt;
+                Light * light = &lights[hdr->light_cnt++];
+                light->name_i = uint(-1);
+                light->file_name_i = uint(-1);
+                light->kind = LIGHT_KIND::DIRECTIONAL;
+                for( uint i = 0; i < 3; i++ )
+                {
+                    light->intensity.c[i] = 0.0;
+                    light->direction.c[i] = 0.0;
+                    light->position.c[i]  = 0.0;
+                    light->extent.c[i]    = 0.0;
+                }
+                light->opening_angle = 0.0;
+                light->penumbra_angle = 0.0;
+                light->diffuse_sample_cnt = 0;
+                light->specular_sample_cnt = 0;
+
+                for( ;; ) 
+                {
+                    skip_whitespace( fsc, fsc_end );
+                    fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                    if ( *fsc == '}' ) {
+                        if ( !expect_char( '}', fsc, fsc_end ) ) goto error;
+                        break;
+                    }
+
+                    uint light_field_i;
+                    if ( !parse_string_i( light_field_i, fsc, fsc_end ) ) goto error;
+                    const char * light_field = &strings[light_field_i];
+                    if ( !expect_char( ':', fsc, fsc_end, true ) ) goto error;
+
+                    if ( strcmp( light_field, "name" ) == 0 ) {
+                        if ( !parse_string_i( light->name_i, fsc, fsc_end ) ) goto error;
+                        std::string name = &strings[light->name_i];
+                        name_to_light_i[name] = light_i;
+
+                    } else if ( strcmp( light_field, "type" ) == 0 ) {
+                        uint type_name_i;
+                        if ( !parse_string_i( type_name_i, fsc, fsc_end ) ) goto error;
+                        const char * type_name = &strings[type_name_i];
+                        if ( strcmp( type_name, "dir_light" ) == 0 ) {
+                            light->kind = LIGHT_KIND::DIRECTIONAL;
+                        } else if ( strcmp( type_name, "point_light" ) == 0 ) {
+                            light->kind = LIGHT_KIND::POINT;
+                        } else if ( strcmp( type_name, "spherical_light" ) == 0 ) {
+                            light->kind = LIGHT_KIND::SPHERICAL;
+                        } else if ( strcmp( type_name, "rectangular_Light" ) == 0 ) {
+                            light->kind = LIGHT_KIND::RECTANGULAR;
+                        } else {
+                            fsc_assert( 0, "unexpected light type: " + std::string(type_name) );
+                        }
+
+                    } else if ( strcmp( light_field, "intensity" ) == 0 ) {
+                        if ( !parse_real3( light->intensity, fsc, fsc_end, true ) ) goto error;
+
+                    } else if ( strcmp( light_field, "direction" ) == 0 ) {
+                        if ( !parse_real3( light->direction, fsc, fsc_end, true ) ) goto error;
+
+                    } else if ( strcmp( light_field, "pos" ) == 0 ) {
+                        if ( !parse_real3( light->position, fsc, fsc_end, true ) ) goto error;
+
+                    } else if ( strcmp( light_field, "radius" ) == 0 ) {
+                        real radius;
+                        if ( !parse_real( radius, fsc, fsc_end ) ) goto error;
+                        light->extent.c[0] = radius;
+                        light->extent.c[1] = radius;
+                        light->extent.c[2] = radius;
+
+                    } else if ( strcmp( light_field, "extent" ) == 0 ) {
+                        if ( !parse_real3( light->extent, fsc, fsc_end ) ) goto error;
+
+                    } else if ( strcmp( light_field, "opening_angle" ) == 0 ) {
+                        if ( !parse_real( light->opening_angle, fsc, fsc_end, true ) ) goto error;
+
+                    } else if ( strcmp( light_field, "penumbra_angle" ) == 0 ) {
+                        if ( !parse_real( light->penumbra_angle, fsc, fsc_end, true ) ) goto error;
+
+                    } else {
+                        fsc_assert( 0, "unexpected light field '" + std::string(light_field) + "' in " + fsc_file );
+                    }
+
+                    skip_whitespace( fsc, fsc_end );
+                    fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                    if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+                }
+
+                skip_whitespace( fsc, fsc_end );
+                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+            }
+
+        } else if ( strcmp( field, "light_probes" ) == 0 ) {
+            if ( !expect_char( '[', fsc, fsc_end, true ) ) goto error;
+            for( ;; )
+            {
+                skip_whitespace( fsc, fsc_end );
+                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                if ( *fsc == ']' ) {
+                    if ( !expect_char( ']', fsc, fsc_end ) ) goto error;
+                    break;
+                }
+                if ( !expect_char( '{', fsc, fsc_end ) ) goto error;
+
+                // Light
+                perhaps_realloc<Light>( lights, hdr->light_cnt, max->light_cnt, 1 );
+                uint light_i = hdr->light_cnt;
+                Light * light = &lights[hdr->light_cnt++];
+                light->name_i = uint(-1);
+                light->file_name_i = uint(-1);
+                light->kind = LIGHT_KIND::PROBE;
+                for( uint i = 0; i < 3; i++ )
+                {
+                    light->intensity.c[i] = 0.0;
+                    light->direction.c[i] = 0.0;
+                    light->position.c[i]  = 0.0;
+                    light->extent.c[i]  = 0.0;
+                }
+                light->opening_angle = 0.0;
+                light->penumbra_angle = 0.0;
+                light->diffuse_sample_cnt = 0;
+                light->specular_sample_cnt = 0;
+
+                for( ;; ) 
+                {
+                    skip_whitespace( fsc, fsc_end );
+                    fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                    if ( *fsc == '}' ) {
+                        if ( !expect_char( '}', fsc, fsc_end ) ) goto error;
+                        break;
+                    }
+
+                    uint light_field_i;
+                    if ( !parse_string_i( light_field_i, fsc, fsc_end ) ) goto error;
+                    const char * light_field = &strings[light_field_i];
+                    if ( !expect_char( ':', fsc, fsc_end, true ) ) goto error;
+
+                    if ( strcmp( light_field, "name" ) == 0 ) {
+                        if ( !parse_string_i( light->name_i, fsc, fsc_end ) ) goto error;
+                        std::string name = &strings[light->name_i];
+                        name_to_light_i[name] = light_i;
+
+                    } else if ( strcmp( light_field, "file" ) == 0 ) {
+                        if ( !parse_string_i( light->file_name_i, fsc, fsc_end ) ) goto error;
+
+                    } else if ( strcmp( light_field, "intensity" ) == 0 ) {
+                        if ( !parse_real3( light->intensity, fsc, fsc_end, true ) ) goto error;
+
+                    } else if ( strcmp( light_field, "direction" ) == 0 ) {
+                        if ( !parse_real3( light->direction, fsc, fsc_end, true ) ) goto error;
+
+                    } else if ( strcmp( light_field, "pos" ) == 0 ) {
+                        if ( !parse_real3( light->position, fsc, fsc_end, true ) ) goto error;
+
+                    } else if ( strcmp( light_field, "opening_angle" ) == 0 ) {
+                        if ( !parse_real( light->opening_angle, fsc, fsc_end, true ) ) goto error;
+
+                    } else if ( strcmp( light_field, "penumbra_angle" ) == 0 ) {
+                        if ( !parse_real( light->penumbra_angle, fsc, fsc_end, true ) ) goto error;
+
+                    } else if ( strcmp( light_field, "diff_samples" ) == 0 ) {
+                        if ( !parse_uint( light->diffuse_sample_cnt, fsc, fsc_end ) ) goto error;
+
+                    } else if ( strcmp( light_field, "spec_samples" ) == 0 ) {
+                        if ( !parse_uint( light->specular_sample_cnt, fsc, fsc_end ) ) goto error;
+
+                    } else {
+                        fsc_assert( 0, "unexpected light probe field '" + std::string(light_field) + "' in " + fsc_file );
+                    }
+
+                    skip_whitespace( fsc, fsc_end );
+                    fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                    if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+                }
+
+                skip_whitespace( fsc, fsc_end );
+                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+            }
+
+        } else if ( strcmp( field, "cameras" ) == 0 ) {
+            if ( !expect_char( '[', fsc, fsc_end, true ) ) goto error;
+            for( ;; )
+            {
+                skip_whitespace( fsc, fsc_end );
+                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                if ( *fsc == ']' ) {
+                    if ( !expect_char( ']', fsc, fsc_end ) ) goto error;
+                    break;
+                }
+                if ( !expect_char( '{', fsc, fsc_end ) ) goto error;
+
+                // Camera
+                perhaps_realloc<Camera>( cameras, hdr->camera_cnt, max->camera_cnt, 1 );
+                uint camera_i = hdr->camera_cnt;
+                Camera * camera = &cameras[hdr->camera_cnt++];
+                camera->name_i = uint(-1);
+                for( uint i = 0; i < 3; i++ )
+                {
+                    camera->lookfrom.c[i] = 0.0;
+                    camera->lookat.c[i] = 0.0;
+                    camera->vup.c[i]  = 0.0;
+                }
+                camera->aperture = 0.0;
+                camera->focus_dist = 21.0;
+                camera->near = 0.1;
+                camera->far = 10000.0;
+                camera->aspect_ratio = 1.0;
+
+                for( ;; ) 
+                {
+                    skip_whitespace( fsc, fsc_end );
+                    fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                    if ( *fsc == '}' ) {
+                        if ( !expect_char( '}', fsc, fsc_end ) ) goto error;
+                        break;
+                    }
+
+                    uint camera_field_i;
+                    if ( !parse_string_i( camera_field_i, fsc, fsc_end ) ) goto error;
+                    const char * camera_field = &strings[camera_field_i];
+                    if ( !expect_char( ':', fsc, fsc_end, true) ) goto error;
+
+                    if ( strcmp( camera_field, "name" ) == 0 ) {
+                        if ( !parse_string_i( camera->name_i, fsc, fsc_end ) ) goto error;
+                        std::string name = &strings[camera->name_i];
+                        name_to_camera_i[name] = camera_i;
+
+                    } else if ( strcmp( camera_field, "pos" ) == 0 ) {
+                        if ( !parse_real3( camera->lookfrom, fsc, fsc_end, true ) ) goto error;
+
+                    } else if ( strcmp( camera_field, "target" ) == 0 ) {
+                        if ( !parse_real3( camera->lookat, fsc, fsc_end, true ) ) goto error;
+
+                    } else if ( strcmp( camera_field, "up" ) == 0 ) {
+                        if ( !parse_real3( camera->vup, fsc, fsc_end, true ) ) goto error;
+
+                    } else if ( strcmp( camera_field, "aperture" ) == 0 ) {
+                        if ( !parse_real( camera->aperture, fsc, fsc_end, true ) ) goto error;
+
+                    } else if ( strcmp( camera_field, "focal_length" ) == 0 ) {
+                        if ( !parse_real( camera->focus_dist, fsc, fsc_end, true ) ) goto error;
+
+                    } else if ( strcmp( camera_field, "depth_range" ) == 0 ) {
+                        real2 near_far;
+                        if ( !parse_real2( near_far, fsc, fsc_end, true ) ) goto error;
+                        camera->near = near_far.c[0];
+                        camera->far  = near_far.c[1];
+
+                    } else if ( strcmp( camera_field, "vfov" ) == 0 ) {
+                        if ( !parse_real( camera->vfov, fsc, fsc_end, true ) ) goto error;
+
+                    } else if ( strcmp( camera_field, "aspect_ratio" ) == 0 ) {
+                        if ( !parse_real( camera->aspect_ratio, fsc, fsc_end, true ) ) goto error;
+
+                    } else {
+                        fsc_assert( 0, "unexpected camera field '" + std::string(camera_field) + "' in " + fsc_file );
+                    }
+
+                    skip_whitespace( fsc, fsc_end );
+                    fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                    if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+                }
+
+                skip_whitespace( fsc, fsc_end );
+                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+            }
+
+        } else if ( strcmp( field, "paths" ) == 0 ) {
+            if ( !expect_char( '[', fsc, fsc_end, true ) ) goto error;
+            for( ;; )
+            {
+                skip_whitespace( fsc, fsc_end );
+                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                if ( *fsc == ']' ) {
+                    if ( !expect_char( ']', fsc, fsc_end ) ) goto error;
+                    break;
+                }
+                if ( !expect_char( '{', fsc, fsc_end ) ) goto error;
+
+                // Animation
+                perhaps_realloc<Animation>( animations, hdr->animation_cnt, max->animation_cnt, 1 );
+                uint animation_i = hdr->animation_cnt;
+                Animation * animation = &animations[hdr->animation_cnt++];
+                animation->name_i = uint(-1);
+                animation->start_camera_i = uint(-1);
+                animation->start_frame_i = hdr->frame_cnt;
+                animation->frame_cnt = 0;
+                animation->is_looped = false;
+
+                for( ;; ) 
+                {
+                    skip_whitespace( fsc, fsc_end );
+                    fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                    if ( *fsc == '}' ) {
+                        if ( !expect_char( '}', fsc, fsc_end ) ) goto error;
+                        break;
+                    }
+
+                    uint animation_field_i;
+                    if ( !parse_string_i( animation_field_i, fsc, fsc_end ) ) goto error;
+                    const char * animation_field = &strings[animation_field_i];
+                    if ( !expect_char( ':', fsc, fsc_end, true ) ) goto error;
+
+                    if ( strcmp( animation_field, "name" ) == 0 ) {
+                        if ( !parse_string_i( animation->name_i, fsc, fsc_end ) ) goto error;
+                        std::string name = &strings[animation->name_i];
+                        name_to_animation_i[name] = animation_i;
+
+                    } else if ( strcmp( animation_field, "loop" ) == 0 ) {
+                        if ( !parse_bool( animation->is_looped, fsc, fsc_end ) ) goto error;
+
+                    } else if ( strcmp( animation_field, "attached_objects" ) == 0 ) {
+                        skip_whitespace( fsc, fsc_end );
+                        if ( !expect_char( '[', fsc, fsc_end ) ) goto error;
+                        for( ;; ) 
+                        {
+                            skip_whitespace( fsc, fsc_end );
+                            fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                            if ( *fsc == ']' ) {
+                                if ( !expect_char( ']', fsc, fsc_end ) ) goto error;
+                                break;
+                            }
+                            if ( !expect_char( '{', fsc, fsc_end ) ) goto error;
+
+                            for( ;; ) 
+                            {
+                                skip_whitespace( fsc, fsc_end );
+                                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                                if ( *fsc == '}' ) {
+                                    if ( !expect_char( '}', fsc, fsc_end ) ) goto error;
+                                    break;
+                                }
+
+                                uint attached_field_i;
+                                if ( !parse_string_i( attached_field_i, fsc, fsc_end ) ) goto error;
+                                const char * attached_field = &strings[attached_field_i];
+                                if ( !expect_char( ':', fsc, fsc_end, true ) ) goto error;
+
+                                if ( strcmp( attached_field, "type" ) == 0 ) {
+                                    uint type_i;
+                                    if ( !parse_string_i( type_i, fsc, fsc_end ) ) goto error;
+                                    const char * type = &strings[type_i];
+                                    fsc_assert( strcmp( type, "camera" ) == 0, "attached_objects type must be camera for now" );
+
+                                } else if ( strcmp( attached_field, "name" ) == 0 ) {
+                                    if ( !parse_string_i( animation->start_camera_i, fsc, fsc_end ) ) goto error;
+                                
+                                } else {
+                                    fsc_assert( 0, "unexpected attached_objects field '" + std::string(attached_field) + "' in " + fsc_file );
+                                }
+
+                                skip_whitespace( fsc, fsc_end );
+                                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                                if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+                            }
+
+                            skip_whitespace( fsc, fsc_end );
+                            fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                            if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+                        }
+
+                    } else if ( strcmp( animation_field, "frames" ) == 0 ) {
+                        skip_whitespace( fsc, fsc_end );
+                        if ( !expect_char( '[', fsc, fsc_end ) ) goto error;
+                        for( ;; ) 
+                        {
+                            skip_whitespace( fsc, fsc_end );
+                            fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                            if ( *fsc == ']' ) {
+                                if ( !expect_char( ']', fsc, fsc_end ) ) goto error;
+                                break;
+                            }
+                            if ( !expect_char( '{', fsc, fsc_end ) ) goto error;
+
+                            // Frame
+                            perhaps_realloc<Frame>( frames, hdr->frame_cnt, max->frame_cnt, 1 );
+                            Frame * frame = &frames[hdr->frame_cnt++];
+                            frame->time = 0.0;
+                            frame->camera_i = hdr->camera_cnt++;
+
+                            // Camera
+                            perhaps_realloc<Camera>( cameras, hdr->camera_cnt, max->camera_cnt, 1 );
+                            Camera * camera = &cameras[frame->camera_i];
+                            std::string camera_name = &strings[animation->name_i];
+                            camera_name += "_" + std::to_string( animation->frame_cnt - 1 );
+                            uint cn_len = camera_name.length();
+                            perhaps_realloc( strings, hdr->char_cnt, max->char_cnt, cn_len+1 );
+                            char * to_cn = &strings[hdr->char_cnt];
+                            hdr->char_cnt += cn_len + 1;
+                            memcpy( to_cn, camera_name.c_str(), cn_len+1 );
+                            for( uint i = 0; i < 3; i++ )
+                            {
+                                camera->lookfrom.c[i] = 0.0;
+                                camera->lookat.c[i] = 0.0;
+                                camera->vup.c[i]  = 0.0;
+                            }
+                            camera->aperture = -1.0;
+                            camera->focus_dist = -1.0;
+                            camera->near = -1.0;
+                            camera->far = -1.0;
+                            camera->aspect_ratio = -1.0;
+
+                            for( ;; ) 
+                            {
+                                skip_whitespace( fsc, fsc_end );
+                                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                                if ( *fsc == '}' ) {
+                                    if ( !expect_char( '}', fsc, fsc_end ) ) goto error;
+                                    break;
+                                }
+
+                                uint frame_field_i;
+                                if ( !parse_string_i( frame_field_i, fsc, fsc_end ) ) goto error;
+                                const char * frame_field = &strings[frame_field_i];
+                                if ( !expect_char( ':', fsc, fsc_end, true ) ) goto error;
+
+                                if ( strcmp( frame_field, "time" ) == 0 ) {
+                                    if ( !parse_real( frame->time, fsc, fsc_end, true ) ) goto error;
+
+                                } else if ( strcmp( frame_field, "pos" ) == 0 ) {
+                                    if ( !parse_real3( camera->lookfrom, fsc, fsc_end, true ) ) goto error;
+
+                                } else if ( strcmp( frame_field, "target" ) == 0 ) {
+                                    if ( !parse_real3( camera->lookat, fsc, fsc_end, true ) ) goto error;
+
+                                } else if ( strcmp( frame_field, "up" ) == 0 ) {
+                                    if ( !parse_real3( camera->vup, fsc, fsc_end, true ) ) goto error;
+
+                                } else if ( strcmp( frame_field, "aperture" ) == 0 ) {
+                                    if ( !parse_real( camera->aperture, fsc, fsc_end, true ) ) goto error;
+
+                                } else if ( strcmp( frame_field, "focal_length" ) == 0 ) {
+                                    if ( !parse_real( camera->focus_dist, fsc, fsc_end, true ) ) goto error;
+
+                                } else if ( strcmp( frame_field, "depth_range" ) == 0 ) {
+                                    real2 near_far;
+                                    if ( !parse_real2( near_far, fsc, fsc_end, true ) ) goto error;
+                                    camera->near = near_far.c[0];
+                                    camera->far  = near_far.c[1];
+
+                                } else if ( strcmp( frame_field, "aspect_ratio" ) == 0 ) {
+                                    if ( !parse_real( camera->aspect_ratio, fsc, fsc_end, true ) ) goto error;
+
+                                } else {
+                                    fsc_assert( 0, "unexpected frame field '" + std::string(frame_field) + "' in " + fsc_file );
+                                }
+
+                                skip_whitespace( fsc, fsc_end );
+                                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                                if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+                            }
+
+                            skip_whitespace( fsc, fsc_end );
+                            fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                            if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+                        }
+
+                    } else {
+                        fsc_assert( 0, "unexpected frame field '" + std::string(animation_field) + "' in " + fsc_file );
+                    }
+
+                    skip_whitespace( fsc, fsc_end );
+                    fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                    if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+                }
+
+                skip_whitespace( fsc, fsc_end );
+                fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+            }
+
+        } else {
+            fsc_assert( 0, "unexpected fscene field '" + std::string(field) + "' in " + fsc_file );
+        }
+
+        skip_whitespace( fsc, fsc_end );
+        fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+        if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+    }
+
+    error:
+        error_msg += " (at line " + std::to_string( line_num ) + " of " + fsc_file + ")";
+        assert( 0 );
+        return false;
 }
 
 bool Model::load_obj( std::string obj_file, std::string dir_name )
@@ -1016,9 +1822,9 @@ bool Model::load_obj( std::string obj_file, std::string dir_name )
     //------------------------------------------------------------
     // Map in .obj file
     //------------------------------------------------------------
+    line_num = 1;
     if ( !open_and_read( obj_file, obj_start, obj_end ) ) return false;
     obj = obj_start;
-    line_num = 1;
 
     //------------------------------------------------------------
     // Parse .obj file contents
@@ -1036,22 +1842,7 @@ bool Model::load_obj( std::string obj_file, std::string dir_name )
     for( ;; ) 
     {
         skip_whitespace( obj, obj_end );
-        if ( obj == obj_end ) {
-            // done, no errors
-            hdr->byte_cnt = uint64( 1                 ) * sizeof( hdr ) +
-                            uint64( hdr->obj_cnt      ) * sizeof( objects[0] ) +
-                            uint64( hdr->poly_cnt     ) * sizeof( polygons[0] ) +
-                            uint64( hdr->vtx_cnt      ) * sizeof( vertexes[0] ) +
-                            uint64( hdr->pos_cnt      ) * sizeof( positions[0] ) +
-                            uint64( hdr->norm_cnt     ) * sizeof( normals[0] ) +
-                            uint64( hdr->texcoord_cnt ) * sizeof( texcoords[0] ) +
-                            uint64( hdr->mtl_cnt      ) * sizeof( materials[0] ) +
-                            uint64( hdr->tex_cnt      ) * sizeof( textures[0] ) +
-                            uint64( hdr->texel_cnt    ) * sizeof( texels[0] ) +
-                            uint64( hdr->char_cnt     ) * sizeof( strings[0] ) + 
-                            uint64( hdr->bvh_node_cnt ) * sizeof( bvh_nodes[0] );
-            return true;
-        }
+        if ( obj == obj_end ) return true;
 
         obj_cmd_t cmd;
         if ( !parse_obj_cmd( cmd ) ) break;
@@ -1335,6 +2126,7 @@ bool Model::load_mtl( std::string mtl_file, std::string dir_name, bool replacing
             case CMD_TR:
                 rtn_assert( material != nullptr, "no material defined" );
                 if ( !parse_real( material->Tr, mtl, mtl_end ) ) return false;
+                material->d = 1.0 - material->Tr;
                 break;
 
             case CMD_NS:
@@ -1594,45 +2386,47 @@ bool Model::open_and_read( std::string file_path, char *& start, char *& end )
     return true;
 }
 
-inline void Model::skip_whitespace( char *& xxx, char *& xxx_end )
+inline bool Model::skip_whitespace( char *& xxx, char *& xxx_end )
 {
     bool in_comment = false;
     for( ;; )
     {
-        if ( xxx == xxx_end ) return;
+        if ( xxx == xxx_end ) break;
 
         char ch = *xxx;
         if ( ch == '#' ) in_comment = true;
         if ( !in_comment && ch != ' ' && ch != '\n' && ch != '\r' && ch != '\t' ) break;
 
         if ( ch == '\n' || ch == '\r' ) {
-            if ( ch == '\n' && xxx == obj ) line_num++;
+            if ( ch == '\n' && (xxx == fsc || xxx == obj) ) line_num++;
             in_comment = false;
         }
         xxx++;
     }
+    return true;
 }
 
-inline void Model::skip_whitespace_to_eol( char *& xxx, char *& xxx_end )
+inline bool Model::skip_whitespace_to_eol( char *& xxx, char *& xxx_end )
 {
     bool in_comment = false;
     for( ;; )
     {
-        if ( xxx == xxx_end ) return;
+        if ( xxx == xxx_end ) break;
 
         char ch = *xxx;
         if ( ch == '#' ) in_comment = true;
         if ( !in_comment && ch != ' ' && ch != '\n' && ch != '\r' && ch != '\t' ) break;
 
         if ( ch == '\n' || ch == '\r' ) {
-            if ( ch == '\n' && xxx == obj ) line_num++;
+            if ( ch == '\n' && (xxx == fsc || xxx == obj) ) line_num++;
             break;
         }
         xxx++;
     }
+    return true;
 }
 
-inline void Model::skip_to_eol( char *& xxx, char *& xxx_end )
+inline bool Model::skip_to_eol( char *& xxx, char *& xxx_end )
 {
     if ( !eol( xxx, xxx_end ) ) {
         while( xxx != xxx_end )
@@ -1642,6 +2436,7 @@ inline void Model::skip_to_eol( char *& xxx, char *& xxx_end )
             xxx++;
         }
     }
+    return true;
 }
 
 inline bool Model::eol( char *& xxx, char *& xxx_end )
@@ -1650,7 +2445,7 @@ inline bool Model::eol( char *& xxx, char *& xxx_end )
 
     if ( xxx == xxx_end || *xxx == '\n' || *xxx == '\r' ) {
         if ( xxx != xxx_end ) {
-            if ( *xxx == '\n' && xxx == obj ) line_num++;
+            if ( *xxx == '\n' && (xxx == fsc || xxx == obj) ) line_num++;
             xxx++;
         }
         dprint( "at eol" );
@@ -1661,10 +2456,11 @@ inline bool Model::eol( char *& xxx, char *& xxx_end )
     }
 }
 
-inline bool Model::expect_char( char ch, char *& xxx, char* xxx_end )
+inline bool Model::expect_char( char ch, char *& xxx, char* xxx_end, bool skip_whitespace_first )
 {
+    if ( skip_whitespace_first ) skip_whitespace( xxx, xxx_end );
     rtn_assert( xxx != xxx_end, "premature end of file" );
-    rtn_assert( *xxx == ch, "unexpected character: " + std::string( 1, *xxx ) );
+    rtn_assert( *xxx == ch, "expected character '" + std::string(1, ch) + "' got '" + std::string( 1, *xxx ) + "' " + surrounding_lines( xxx, xxx_end ) );
     xxx++;
     return true;
 }
@@ -1696,6 +2492,36 @@ inline bool Model::expect_cmd( const char * s, char *& xxx, char *& xxx_end )
     }
 
     return s_ch1 == '\0';
+}
+
+inline bool Model::parse_string( std::string& s, char *& xxx, char *& xxx_end )
+{
+    if ( !expect_char( '"', xxx, xxx_end, true ) ) return false;
+    s = "";
+    for( ;; ) 
+    {
+        rtn_assert( xxx != xxx_end, "no terminating \" for string" );
+        if ( *xxx == '"' ) {
+            xxx++;
+            return true;
+        }
+        s += *xxx;
+        xxx++;
+    }
+}
+
+inline bool Model::parse_string_i( uint& s_i, char *& xxx, char *& xxx_end )
+{
+    std::string s;
+    if ( !parse_string( s, xxx, xxx_end ) ) return false;
+
+    uint s_len = s.length();
+    perhaps_realloc( strings, hdr->char_cnt, max->char_cnt, s_len+1 );
+    s_i = hdr->char_cnt;
+    char * to_s = &strings[hdr->char_cnt];
+    hdr->char_cnt += s_len + 1;
+    memcpy( to_s, s.c_str(), s_len+1 );
+    return true;
 }
 
 inline bool Model::parse_name( char *& name, char *& xxx, char *& xxx_end )
@@ -1733,6 +2559,23 @@ inline bool Model::parse_name( char *& name, char *& xxx, char *& xxx_end )
     }
 
     rtn_assert( 0, "could not parse name: " + surrounding_lines( xxx, xxx_end ) );
+}
+
+inline bool Model::parse_id( std::string& id, char *& xxx, char *& xxx_end )
+{
+    skip_whitespace( xxx, xxx_end );
+
+    id = "";
+    while( xxx != xxx_end )
+    {
+        char ch = *xxx;
+        if ( !( ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (id != "" && ch >= '0' && ch <= '9')) ) break;
+
+        id += std::string( 1, ch );
+        xxx++;
+    }
+
+    return true;
 }
 
 inline bool Model::parse_option_name( std::string& option_name, char *& xxx, char *& xxx_end )
@@ -2007,21 +2850,29 @@ inline bool Model::parse_mtl_cmd( mtl_cmd_t& cmd, char *& mtl, char *& mtl_end )
     }
 }
 
-inline bool Model::parse_real3( Model::real3& r3, char *& xxx, char *& xxx_end )
+inline bool Model::parse_real3( Model::real3& r3, char *& xxx, char *& xxx_end, bool has_brackets )
 {
-    return parse_real( r3.c[0], xxx, xxx_end ) && 
-           parse_real( r3.c[1], xxx, xxx_end ) && 
-           parse_real( r3.c[2], xxx, xxx_end );
+    return (!has_brackets || expect_char( '[', xxx, xxx_end, true )) &&
+           parse_real( r3.c[0], xxx, xxx_end, has_brackets ) && 
+           (!has_brackets || expect_char( ',', xxx, xxx_end, true )) &&
+           parse_real( r3.c[1], xxx, xxx_end, has_brackets ) && 
+           (!has_brackets || expect_char( ',', xxx, xxx_end, true )) &&
+           parse_real( r3.c[2], xxx, xxx_end, has_brackets ) &&
+           (!has_brackets || expect_char( ']', xxx, xxx_end, true ));
 }
 
-inline bool Model::parse_real2( Model::real2& r2, char *& xxx, char *& xxx_end )
+inline bool Model::parse_real2( Model::real2& r2, char *& xxx, char *& xxx_end, bool has_brackets )
 {
-    return parse_real( r2.c[0], xxx, xxx_end ) && 
-           parse_real( r2.c[1], xxx, xxx_end );
+    return (!has_brackets || expect_char( '[', xxx, xxx_end, true )) &&
+           parse_real( r2.c[0], xxx, xxx_end, has_brackets ) && 
+           (!has_brackets || expect_char( ',', xxx, xxx_end, true )) &&
+           parse_real( r2.c[1], xxx, xxx_end, has_brackets ) &&
+           (!has_brackets || expect_char( ']', xxx, xxx_end, true ));
 }
 
-inline bool Model::parse_real( Model::real& r, char *& xxx, char *& xxx_end )
+inline bool Model::parse_real( Model::real& r, char *& xxx, char *& xxx_end, bool skip_whitespace_first )
 {
+    if ( skip_whitespace_first ) skip_whitespace( xxx, xxx_end );   // can span lines unlike below
     bool vld = false;
     bool is_neg = false;
     bool in_frac = false;
@@ -2087,7 +2938,7 @@ inline bool Model::parse_real( Model::real& r, char *& xxx, char *& xxx_end )
     if ( is_neg ) r = -r;
     if ( e10 != 0 ) r *= pow( 10.0, e10 );
     dprint( "real=" + std::to_string( r ) );
-    rtn_assert( vld, "unable to parse real in " + std::string( ((xxx == obj) ? ".obj" : ".mtl") ) + " file " + surrounding_lines( xxx, xxx_end ) );
+    rtn_assert( vld, "unable to parse real in " + std::string( ((xxx == fsc) ? ".fscene" : (xxx == obj) ? ".obj" : ".mtl") ) + " file " + surrounding_lines( xxx, xxx_end ) );
     return vld;
 }
 
@@ -2116,7 +2967,24 @@ inline bool Model::parse_int( int& i, char *& xxx, char *& xxx_end )
     }
 
     if ( is_neg ) i = -i;
-    rtn_assert( vld, "unable to parse int" );
+    rtn_assert( vld, "unable to parse int in " + std::string( ((xxx == fsc) ? ".fscene" : (xxx == obj) ? ".obj" : ".mtl") ) + " file " + surrounding_lines( xxx, xxx_end ) );
+    return true;
+}
+
+inline bool Model::parse_uint( uint& u, char *& xxx, char *& xxx_end )
+{
+    int i;
+    if ( !parse_int( i, xxx, xxx_end ) ) return false;
+    rtn_assert( i >= 0, "parse_uint encountered negative integer" );
+    u = i;
+    return true;
+}
+
+inline bool Model::parse_bool( bool& b, char *& xxx, char *& xxx_end )
+{
+    std::string id;
+    if ( !parse_id( id , xxx, xxx_end ) ) return false;
+    b = id == std::string( "true" );
     return true;
 }
 
@@ -2124,7 +2992,7 @@ std::string Model::surrounding_lines( char *& xxx, char *& xxx_end )
 {
     uint eol_cnt = 0;
     std::string s = "";
-    while( eol_cnt != 2 && xxx != xxx_end )
+    while( eol_cnt != 10 && xxx != xxx_end )
     {
         s += std::string( 1, *xxx ) ;
         if ( *xxx == '\n' ) eol_cnt++;
@@ -2150,7 +3018,9 @@ inline Model::AABB::AABB( const Model::real3& p0, const Model::real3& p1, const 
 void Model::bvh_build( Model::BVH_TREE bvh_tree )
 {
     (void)bvh_tree;
-    hdr->bvh_root_i = bvh_node( 0, hdr->poly_cnt, 1 );
+    if ( hdr->poly_cnt != 0 ) {
+        hdr->bvh_root_i = bvh_node( 0, hdr->poly_cnt, 1 );
+    }
 }
 
 inline Model::uint Model::bvh_qsplit( Model::uint poly_i, Model::uint n, Model::real pivot, Model::uint axis )
@@ -2476,6 +3346,66 @@ inline Model::real2& Model::real2::operator /= ( const Model::real s )
     return *this;
 }
 
+inline void Model::Matrix::translate( const real3& translation )
+{
+    m[0][3] += translation.c[0];
+    m[1][3] += translation.c[1];
+    m[2][3] += translation.c[2];
+}
+
+inline void Model::Matrix::scale( const real3& scaling )
+{
+    m[0][0] *= scaling.c[0];
+    m[1][1] *= scaling.c[1];
+    m[2][2] *= scaling.c[2];
+}
+
+inline void Model::Matrix::rotate( const real3& rotation )
+{
+    (void)rotation;
+    // TODO
+}
+
+inline Model::Matrix Model::Matrix::operator + ( const Matrix& m ) const
+{
+    Matrix n;
+    for( uint i = 0; i < 4; i++ )
+    {
+        for( uint j = 0; j < 4; j++ )
+        {
+            n.m[i][j] = this->m[i][j] + m.m[i][j];
+        }
+    }
+    return n;
+}
+
+inline Model::Matrix Model::Matrix::operator - ( const Matrix& m ) const
+{
+    Matrix r;
+    for( uint i = 0; i < 4; i++ )
+    {
+        for( uint j = 0; j < 4; j++ )
+        {
+            r.m[i][j] = this->m[i][j] - m.m[i][j];
+        }
+    }
+    return r;
+}
+
+inline Model::real3 Model::Matrix::operator * ( const real3& v ) const
+{
+    real3 r;
+    for( uint i = 0; i < 3; i++ )
+    {
+        r.c[i] = 0.0;
+        for( uint j = 0; j < 3; j++ )
+        {
+            r.c[i] += m[i][j] * v.c[j];
+        }
+    }
+    return r;
+}
+
 bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real padding ) const 
 {
     const Vertex * vertexes = &model->vertexes[vtx_i];
@@ -2546,7 +3476,7 @@ inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& di
 }
 
 inline bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
-                                 real t_min, real t_max, HitInfo& hit_info ) const
+                                 real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const
 {
     (void)direction_inv;
     if ( vtx_cnt == 3 ) {
@@ -2610,11 +3540,14 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
                     hit_info.normal = normal;
                 }
 
-                real distance_squared_inv = direction.length_sqr() / t*t;
-                hit_info.solid_angle  = area * distance_squared_inv;                                   // off by 2X, but...
-                hit_info.solid_angle *= std::abs(0.5*(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1)); // correction for UV at corners as lengths
+                real distance_squared = t*t / direction.length_sqr();
+                real ray_footprint_area_on_triangle = solid_angle*distance_squared;
+                real twice_uv_area_of_triangle = std::abs(0.5*(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1));
+                hit_info.frac_uv_cov = ray_footprint_area_on_triangle * twice_uv_area_of_triangle / (2.0*area);
+
                 hit_info.u = alpha*u0 + gamma*u1 + beta*u2 ;
                 hit_info.v = alpha*v0 + gamma*v1 + beta*v2 ;
+
                 return true;
              }
         }
@@ -2630,12 +3563,14 @@ bool Model::Instance::bounding_box( const Model * model, AABB& box, real padding
     return false;
 }
 
-bool Model::Instance::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, real t_min, real t_max, HitInfo& hit_info )
+bool Model::Instance::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
+                           real solid_angle, real t_min, real t_max, HitInfo& hit_info )
 {
     (void)model;
     (void)origin;
     (void)direction;
     (void)direction_inv;
+    (void)solid_angle;
     (void)t_min;
     (void)t_max;
     (void)hit_info;
@@ -2651,19 +3586,25 @@ inline bool Model::BVH_Node::bounding_box( const Model * model, Model::AABB& b )
 
 inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origin, 
                                   const Model::real3& direction, const Model::real3& direction_inv,
-                                  Model::real t_min, Model::real t_max, Model::HitInfo& hit_info ) const
+                                  Model::real solid_angle, Model::real t_min, Model::real t_max, Model::HitInfo& hit_info ) const
 {
     bool r = false;
     if ( box.hit( origin, direction, direction_inv, t_min, t_max ) ) {
         HitInfo left_hit_info;
         HitInfo right_hit_info;
-        bool hit_left  = (left_kind == BVH_NODE_KIND::POLYGON)   ? model->polygons[left_i].hit(    model, origin, direction, direction_inv, t_min, t_max, left_hit_info  ) :
-                         (left_kind == BVH_NODE_KIND::INSTANCE)  ? model->instances[left_i].hit(   model, origin, direction, direction_inv, t_min, t_max, left_hit_info  ) :
-                                                                   model->bvh_nodes[left_i].hit(   model, origin, direction, direction_inv, t_min, t_max, left_hit_info  );
+        bool hit_left  = (left_kind == BVH_NODE_KIND::POLYGON)   ? model->polygons[left_i].hit(    model, origin, direction, direction_inv,   
+                                                                                                   solid_angle, t_min, t_max, left_hit_info  ) :
+                         (left_kind == BVH_NODE_KIND::INSTANCE)  ? model->instances[left_i].hit(   model, origin, direction, direction_inv, 
+                                                                                                   solid_angle, t_min, t_max, left_hit_info  ) :
+                                                                   model->bvh_nodes[left_i].hit(   model, origin, direction, direction_inv, 
+                                                                                                   solid_angle, t_min, t_max, left_hit_info  );
         bool hit_right = (left_i == right_i)                     ? false :   // lone leaf
-                         (right_kind == BVH_NODE_KIND::POLYGON)  ? model->polygons[right_i].hit(   model, origin, direction, direction_inv, t_min, t_max, right_hit_info ) :
-                         (right_kind == BVH_NODE_KIND::INSTANCE) ? model->instances[right_i].hit(  model, origin, direction, direction_inv, t_min, t_max, right_hit_info ) :
-                                                                   model->bvh_nodes[right_i].hit(  model, origin, direction, direction_inv, t_min, t_max, right_hit_info );
+                         (right_kind == BVH_NODE_KIND::POLYGON)  ? model->polygons[right_i].hit(   model, origin, direction, direction_inv, 
+                                                                                                   solid_angle, t_min, t_max, right_hit_info ) :
+                         (right_kind == BVH_NODE_KIND::INSTANCE) ? model->instances[right_i].hit(  model, origin, direction, direction_inv, 
+                                                                                                   solid_angle, t_min, t_max, right_hit_info ) :
+                                                                   model->bvh_nodes[right_i].hit(  model, origin, direction, direction_inv, 
+                                                                                                   solid_angle, t_min, t_max, right_hit_info );
         if ( hit_left && (!hit_right || left_hit_info.t < right_hit_info.t) ) {
             hit_info = left_hit_info;
             r = true;

@@ -218,7 +218,7 @@ public:
         real        lighting_scale;         // not sure what this is yet (default: 1.0)
         real3       ambient_intensity;      // ambient light intensity (default: [0.1, 0.1, 0.1]
         real3       background_color;       // default is black, though irrelevant if there's a sky box
-        uint        sky_box_file_name_i;    // index in strings of sky box file name
+        uint        sky_box_tex_i;          // index in textures array of sky box texture
         real        env_map_intensity_scale;// name says it all
         real        opacity_scale;          // not sure what this is for
         real        shadow_caster_count;    // not sure what this is for
@@ -229,6 +229,10 @@ public:
         uint64      animation_cnt;          // in animations array
         real        animation_speed;        // divide frame time by this to get real time (default: 1.0)
     };
+
+    // TODO: this is a temporary location for these user_defined variables; they will move into Header on next re-gen
+        real        tone_white;             // tone mapping white parameter
+        real        tone_key;               // tone mapping key parameter
 
     class Object
     {
@@ -542,7 +546,7 @@ private:
     bool load_fsc( std::string fsc_file, std::string dir_name );        // .fscene 
     bool load_obj( std::string obj_file, std::string dir_name );        // .obj
     bool load_mtl( std::string mtl_file, std::string dir_name, bool replacing=false );
-    bool load_tex( char *& tex_name, std::string dir_name, Texture *& texture );
+    bool load_tex( const char * tex_name, std::string dir_name, Texture *& texture );
 
     bool open_and_read( std::string file_name, char *& start, char *& end );
 
@@ -680,7 +684,7 @@ Model::Model( std::string top_file, Model::MIPMAP_FILTER mipmap_filter, Model::B
     hdr->mipmap_filter = mipmap_filter;
     hdr->lighting_scale = 1.0;
     hdr->ambient_intensity = real3( 0.1, 0.1, 0.1 );
-    hdr->sky_box_file_name_i = uint(-1);
+    hdr->sky_box_tex_i = uint(-1);
     hdr->env_map_intensity_scale = 1.0;
     hdr->opacity_scale = 1.0;
     hdr->initial_camera_i = uint(-1);
@@ -1094,6 +1098,8 @@ bool Model::read_uncompressed( std::string model_path )
 
 bool Model::load_fsc( std::string fsc_file, std::string dir_name )
 {
+    tone_key = real(0.2);
+    tone_white = real(3.0);
     (void)dir_name;
 
     //------------------------------------------------------------
@@ -1165,7 +1171,11 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
                 if ( !expect_char( ':', fsc, fsc_end, true ) ) goto error;
 
                 if ( strcmp( field, "sky_box" ) == 0 ) {
-                    if ( !parse_string_i( hdr->sky_box_file_name_i, fsc, fsc_end ) ) goto error;
+                    uint name_i;
+                    Texture * texture;
+                    if ( !parse_string_i( name_i, fsc, fsc_end ) ) goto error;
+                    if ( !load_tex( &strings[name_i], dir_name, texture ) ) goto error;
+                    hdr->sky_box_tex_i = texture - textures;
                 
                 } else if ( strcmp( field, "env_map_intensity_scale" ) == 0 ) {
                     if ( !parse_real( hdr->env_map_intensity_scale, fsc, fsc_end, true ) ) goto error;
@@ -1178,6 +1188,12 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
 
                 } else if ( strcmp( field, "background_color" ) == 0 ) {
                     if ( !parse_real3( hdr->background_color, fsc, fsc_end, true ) ) goto error;
+
+                } else if ( strcmp( field, "tone_white" ) == 0 ) {
+                    if ( !parse_real( tone_white, fsc, fsc_end, true ) ) goto error;
+
+                } else if ( strcmp( field, "tone_key" ) == 0 ) {
+                    if ( !parse_real( tone_key, fsc, fsc_end, true ) ) goto error;
 
                 } else {
                     fsc_assert( 0, "unexpected user_defined field '" + std::string(field) + "' in " + fsc_file );
@@ -2091,6 +2107,8 @@ bool Model::load_mtl( std::string mtl_file, std::string dir_name, bool replacing
                         material->map_Kd_i = uint(-1);
                         material->map_Ke_i = uint(-1);
                         material->map_Ks_i = uint(-1);
+                        material->map_Ns_i = uint(-1);
+                        material->map_d_i  = uint(-1);
                         material->map_Bump_i = uint(-1);
                         name_to_mtl_i[ mtl_name ] = mtl_i;
                         dprint( "  added " + std::string( mtl_name ) );
@@ -2211,7 +2229,7 @@ bool Model::load_mtl( std::string mtl_file, std::string dir_name, bool replacing
 
 uint Model::debug_tex_i = 1; // uint(-1);
 
-bool Model::load_tex( char *& tex_name, std::string dir_name, Model::Texture *& texture )
+bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Texture *& texture )
 {
     // allocate Texture structure
     //
@@ -3531,7 +3549,6 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
                 }
                 hit_info.poly_i = this - model->polygons;
                 hit_info.t = t;
-                hit_info.p = p;
 
                 if ( vertexes[0].vn_i != uint(-1) ) {
                     hit_info.normal = n0*alpha + n1*gamma + n2*beta;
@@ -3539,6 +3556,7 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
                 } else {
                     hit_info.normal = normal;
                 }
+                hit_info.p = p + 0.1*hit_info.normal;;
 
                 real distance_squared = t*t / direction.length_sqr();
                 real ray_footprint_area_on_triangle = solid_angle*distance_squared;

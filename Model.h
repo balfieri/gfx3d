@@ -134,6 +134,33 @@ public:
     bool                is_good;            // set to true if constructor succeeds
     std::string         error_msg;          // if !is_good
 
+    class real4
+    {
+    public:
+        real c[4];
+        
+        real4( void ) {}
+        real4( real c0, real c1, real c2, real c3 ) { c[0] = c0; c[1] = c1; c[2] = c2; c[3] = c3; }
+
+        real   dot( const real4 &v2 ) const;
+        real   length( void ) const;
+        real   length_sqr( void ) const ;
+        real4& normalize( void );
+        real4  normalized( void ) const;
+        real4  operator + ( const real4& v ) const;
+        real4  operator - ( const real4& v ) const;
+        real4  operator * ( const real4& v ) const;
+        real4  operator * ( real s ) const;
+        real4  operator / ( const real4& v ) const;
+        real4  operator / ( real s ) const;
+        real4& operator += ( const real4 &v2 );
+        real4& operator -= ( const real4 &v2 );
+        real4& operator *= ( const real4 &v2 );
+        real4& operator *= ( const real s );
+        real4& operator /= ( const real4 &v2 );
+        real4& operator /= ( const real s );
+    };
+
     class real3
     {
     public:
@@ -245,13 +272,14 @@ public:
     class HitInfo
     {
     public:
-        uint        poly_i;
-        real        t;  
-        real        u;
-        real        v;
-        real        frac_uv_cov;            // UV footprint of hit surface (used by mip_level calculation)
-        real3       p;
-        real3       normal;
+        uint            poly_i;
+        real            t;  
+        real            u;
+        real            v;
+        real            frac_uv_cov;            // UV footprint of hit surface (used by mip_level calculation)
+        real3           p;
+        real3           normal;
+        const Model *   model;              // model of owning BVH
     };
 
     class AABB                              // axis aligned bounding box
@@ -358,13 +386,29 @@ public:
     public:
         real            m[4][4];
 
+        void   identity(  void );                       // make this the identity matrix
         void   translate( const real3& translation );   // translate this matrix by a real3
         void   scale(     const real3& scaling );       // scale this matrix by a real3
-        void   rotate(    const real3& rotation );      // rotate this matrix by a real3
+        void   rotate_xz( double radians );             // rotate by radians in xz plane (yaw)
+        void   rotate_yz( double radians );             // rotate by radians in yz plane (pitch)
+        void   rotate_xy( double radians );             // rotate by radians in xy plane (roll)
 
         Matrix operator + ( const Matrix& m ) const;    // add two matrices
         Matrix operator - ( const Matrix& m ) const;    // subtract two matrices
-        real3  operator * ( const real3& v ) const;     // multiply this matrix by vector, returning vector
+        void   multiply(    double s );                 // multiply this matrix by scalar
+
+        real4  row( uint r ) const;                     // returns row r as a vector
+        real4  column( uint c ) const;                  // returns column c as a vector
+        void   transform( const real4& v, real4& r ) const; // multiply this matrix (lhs) by vector, returning vector r without div by w
+        void   transform( const real3& v, real3& r, bool div_by_w=false ) const; // multiply this matrix (lhs) by vector, returning vector r
+        void   transform( const Matrix& m, Matrix& r ) const; // multiply this matrix (lhs) by matrix m, returning matrix r
+        void   transpose( Matrix& mt ) const;           // return the transpose this matrix 
+        void   invert( Matrix& minv ) const;            // return the inversion this matrix
+        void   invert_affine( Matrix& minv ) const;     // same but faster because assumes an affine transform
+        void   adjoint( Matrix& M ) const;              // used by invert()
+        double determinant( void ) const;               // returns the determinant (as double for high-precision) 
+        void   cofactor( Matrix& C ) const;             // used by adjoint() and determinant() 
+        double subdeterminant( uint exclude_row, uint exclude_col ) const; // used by cofactor() 
     };
 
     enum class INSTANCE_KIND
@@ -382,6 +426,9 @@ public:
         uint            model_name_i;       // index in strings array of name of instanced Model 
         uint            model_file_name_i;  // index in strings array of file name of instanced Model 
         uint            matrix_i;           // index of Matrix in matrixes[] array (transformation matrix)
+        uint            matrix_inv_i;       // index of inverted Matrix in matrixes[] array (inverse transformation matrix)
+        uint            matrix_inv_trans_i; // index of transposed inverted Matrix in matrixes[] array (used for transforming normals)
+        AABB            box;                // bounding box in global world space, not instance space
         union {
             Model *     model_ptr;          // resolved Model pointer for MODEL_PTR
             uint        obj_i;              // index of Object in objects[] array
@@ -573,8 +620,8 @@ private:
 
     // BVH builder
     void bvh_build( BVH_TREE bvh_tree );
-    uint bvh_qsplit( uint poly_i, uint n, real pivot, uint axis );
-    uint bvh_node( uint poly_i, uint n, uint axis );
+    uint bvh_qsplit( bool for_polys, uint poly_i, uint n, real pivot, uint axis );
+    uint bvh_node( bool for_polys, uint i, uint n, uint axis );
 
     // allocates an array of T on a page boundary
     template<typename T>
@@ -755,26 +802,55 @@ Model::Model( std::string top_file, Model::MIPMAP_FILTER mipmap_filter, Model::B
     if ( resolve_models ) {
         //------------------------------------------------------------
         // Resolve Model Pointers in MODEL Instances
+        // Do this only for unique models.
         //------------------------------------------------------------
+        uint     unique_cnt = 0;
+        uint *   unique_name_i = new uint[ hdr->inst_cnt ];
+        Model ** uniques       = new Model*[ hdr->inst_cnt ];
+
         for( uint i = 0; i < hdr->inst_cnt; i++ )
         {
             Instance * instance = &instances[i];
             if ( instance->kind == INSTANCE_KIND::MODEL ) {
-                const char * model_file_name = &strings[instance->model_file_name_i];
-                std::string file_name = model_file_name;
-                Model * model = new Model( file_name, false );
-                if ( !model->is_good ) {
-                    error_msg = model->error_msg;
-                    return;
+                uint u;
+                for( u = 0; u < unique_cnt; u++ )
+                {
+                    if ( unique_name_i[u] == instance->model_file_name_i ) break;
                 }
+
+                Model * model;
+                if ( u == unique_cnt ) {
+                    // read in model for the first time
+                    const char * model_file_name = &strings[instance->model_file_name_i];
+                    std::string file_name = model_file_name;
+                    model = new Model( file_name, false );
+                    if ( !model->is_good ) {
+                        error_msg = model->error_msg;
+                        return;
+                    }
+                    unique_name_i[u] = instance->model_file_name_i;
+                    uniques[u]       = model;
+                    unique_cnt++;
+                } else {
+                    // model already read in
+                    model = uniques[u];
+                }
+
                 instance->u.model_ptr = model;
                 instance->kind = INSTANCE_KIND::MODEL_PTR;
+
+                // also transform target model's bbox to global world space and save
+                // here in the instance->box.
+                Matrix * M = &matrixes[instance->matrix_i];
+                AABB *   t_box = &model->bvh_nodes[model->hdr->bvh_root_i].box;
+                M->transform( t_box->min, instance->box.min );
+                M->transform( t_box->max, instance->box.max );
             }
         }
     }
 
     //------------------------------------------------------------
-    // Optionally build BVH
+    // Optionally build BVH around Instances and/or Polygons
     //------------------------------------------------------------
     if ( bvh_tree != BVH_TREE::NONE ) bvh_build( bvh_tree );
 
@@ -1258,10 +1334,14 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
                             instance->model_name_i = model_name_i;
                             instance->model_file_name_i = model_file_name_i;
 
-                            // Matrix - start with identity
-                            perhaps_realloc<Matrix>( matrixes, hdr->matrix_cnt, max->matrix_cnt, 1 );
-                            instance->matrix_i = hdr->matrix_cnt;
-                            Matrix * matrix = &matrixes[hdr->matrix_cnt++];
+                            // Matrix - start with identity, then compute the transpose and inverse matrices
+                            perhaps_realloc<Matrix>( matrixes, hdr->matrix_cnt, max->matrix_cnt, 3 );
+                            instance->matrix_i           = hdr->matrix_cnt + 0;
+                            instance->matrix_inv_i       = hdr->matrix_cnt + 1;
+                            instance->matrix_inv_trans_i = hdr->matrix_cnt + 2;
+                            Matrix * matrix              = &matrixes[hdr->matrix_cnt++];
+                            Matrix * matrix_inv          = &matrixes[hdr->matrix_cnt++];
+                            Matrix * matrix_inv_trans    = &matrixes[hdr->matrix_cnt++];
                             for( uint i = 0; i < 4; i++ ) 
                             {
                                 for( uint j = 0; j < 4; j++ )
@@ -1270,6 +1350,9 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
                                 }
                             }
 
+                            real3 translation = real3( 0.0, 0.0, 0.0 );
+                            real3 rotation    = real3( 0.0, 0.0, 0.0 );
+                            real3 scaling     = real3( 1.0, 1.0, 1.0 );
                             for( ;; ) 
                             {
                                 skip_whitespace( fsc, fsc_end );
@@ -1288,19 +1371,14 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
                                     if ( !parse_string_i( instance->name_i, fsc, fsc_end ) ) goto error;
 
                                 } else if ( strcmp( instance_field, "translation" ) == 0 ) {
-                                    real3 translation;
                                     if ( !parse_real3( translation, fsc, fsc_end, true ) ) goto error;
-                                    matrix->translate( translation );
-
-                                } else if ( strcmp( instance_field, "scaling" ) == 0 ) {
-                                    real3 scaling;
-                                    if ( !parse_real3( scaling, fsc, fsc_end, true ) ) goto error;
-                                    matrix->scale( scaling );
 
                                 } else if ( strcmp( instance_field, "rotation" ) == 0 ) {
-                                    real3 rotation;
                                     if ( !parse_real3( rotation, fsc, fsc_end, true ) ) goto error;
-                                    matrix->rotate( rotation );
+
+                                } else if ( strcmp( instance_field, "scaling" ) == 0 ) {
+                                    if ( !parse_real3( scaling, fsc, fsc_end, true ) ) goto error;
+                                    matrix->scale( scaling );
 
                                 } else {
                                     fsc_assert( 0, "unexpected instance field '" + std::string(instance_field) + "' in " + fsc_file );
@@ -1310,6 +1388,19 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
                                 fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
                                 if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
                             }
+
+                            // apply in reverse-TRS order
+                            // rotation angles represent yaw (y-axis), pitch (x-axis), roll (z-axis), and order
+                            // doesn't matter there
+                            matrix->scale( scaling );
+                            matrix->rotate_xz( rotation.c[0] * M_PI/180.0 );
+                            matrix->rotate_yz( rotation.c[1] * M_PI/180.0 );
+                            matrix->rotate_xy( rotation.c[2] * M_PI/180.0 );
+                            matrix->translate( translation );
+
+                            // pre-compute inv and inv_trans matrixes
+                            matrix->invert( *matrix_inv );
+                            matrix_inv->transpose( *matrix_inv_trans );
 
                             skip_whitespace( fsc, fsc_end );
                             fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
@@ -3037,69 +3128,97 @@ void Model::bvh_build( Model::BVH_TREE bvh_tree )
 {
     (void)bvh_tree;
     if ( hdr->poly_cnt != 0 ) {
-        hdr->bvh_root_i = bvh_node( 0, hdr->poly_cnt, 1 );
+        assert( hdr->inst_cnt == 0 );
+        hdr->bvh_root_i = bvh_node( true, 0, hdr->poly_cnt, 1 );
+    } else {
+        assert( hdr->inst_cnt != 0 && hdr->poly_cnt == 0 );
+        hdr->bvh_root_i = bvh_node( false, 0, hdr->inst_cnt, 1 );
     }
 }
 
-inline Model::uint Model::bvh_qsplit( Model::uint poly_i, Model::uint n, Model::real pivot, Model::uint axis )
+inline Model::uint Model::bvh_qsplit( bool for_polys, Model::uint first, Model::uint n, Model::real pivot, Model::uint axis )
 {
-   uint m = poly_i;
+   uint m = first;
 
-   for( uint i = poly_i; i < (poly_i+n); i++ )
+   for( uint i = first; i < (first+n); i++ )
    {
        AABB box;
        polygons[i].bounding_box( this, box );
        real centroid = (box.min.c[axis] + box.max.c[axis]) * 0.5;
        if ( centroid < pivot ) {
-           Polygon temp = polygons[i];
-           polygons[i]  = polygons[m];
-           polygons[m]  = temp;
+           if ( for_polys ) {
+               Polygon temp = polygons[i];
+               polygons[i]  = polygons[m];
+               polygons[m]  = temp;
+           } else {
+               Instance temp = instances[i];
+               instances[i]  = instances[m];
+               instances[m]  = temp;
+           }
            m++;
        }
     }
 
-    assert( m >= poly_i && m <= (poly_i+n)  );
-    if ( m == poly_i || m == (poly_i+n) ) m = poly_i + n/2;
+    assert( m >= first && m <= (first+n)  );
+    if ( m == first || m == (first +n) ) m = first + n/2;
     return m;
 }
 
-Model::uint Model::bvh_node( Model::uint poly_i, Model::uint n, Model::uint axis ) 
+Model::uint Model::bvh_node( bool for_polys, Model::uint first, Model::uint n, Model::uint axis ) 
 {
     perhaps_realloc( bvh_nodes, hdr->bvh_node_cnt, max->bvh_node_cnt, 1 );
     uint bvh_i = hdr->bvh_node_cnt++;
     BVH_Node * node = &bvh_nodes[bvh_i];
 
-    polygons[poly_i].bounding_box( this, node->box );
+    if ( for_polys ) {
+        polygons[first].bounding_box( this, node->box );
+    } else {
+        instances[first].bounding_box( this, node->box );
+    }
     for( uint i = 1; i < n; i++ )
     {
         AABB new_box;
-        polygons[poly_i+i].bounding_box( this, new_box );
+        if ( for_polys ) {
+            polygons[first+i].bounding_box( this, new_box );
+        } else {
+            instances[first+i].bounding_box( this, new_box );
+        }
         node->box.expand( new_box );
     }
 
     if ( n == 1 || n == 2 ) {
-        node->left_kind = Model::BVH_NODE_KIND::POLYGON;
-        node->right_kind = Model::BVH_NODE_KIND::POLYGON;
-        node->left_i  = poly_i;
+        node->left_i = first;
         AABB new_box;
-        polygons[poly_i+0].bounding_box( this, new_box );
+        if ( for_polys ) {
+            node->left_kind  = Model::BVH_NODE_KIND::POLYGON;
+            node->right_kind = Model::BVH_NODE_KIND::POLYGON;
+            polygons[first+0].bounding_box( this, new_box );
+        } else {
+            node->left_kind  = Model::BVH_NODE_KIND::INSTANCE;
+            node->right_kind = Model::BVH_NODE_KIND::INSTANCE;
+            instances[first+0].bounding_box( this, new_box );
+        }
         assert( node->box.encloses( new_box ) );
         if ( n == 2 ) {
-            polygons[poly_i+1].bounding_box( this, new_box );
+            if ( for_polys ) {
+                polygons[first+1].bounding_box( this, new_box );
+            } else {
+                instances[first+1].bounding_box( this, new_box );
+            }
             assert( node->box.encloses( new_box ) );
-            node->right_i = poly_i + 1;
+            node->right_i = first + 1;
         } else {
-            node->right_i = poly_i;
+            node->right_i = first;
         }
 
     } else {
         node->left_kind = Model::BVH_NODE_KIND::BVH_NODE;
         node->right_kind = Model::BVH_NODE_KIND::BVH_NODE;
         real pivot = (node->box.min.c[axis] + node->box.max.c[axis]) * 0.5;
-        uint m = bvh_qsplit( poly_i, n, pivot, axis );
-        uint nm = m - poly_i;
-        uint left_i  = bvh_node( poly_i, nm,   (axis + 1) % 3 );
-        uint right_i = bvh_node(      m, n-nm, (axis + 1) % 3 );
+        uint m = bvh_qsplit( for_polys, first, n, pivot, axis );
+        uint nm = m - first;
+        uint left_i  = bvh_node( for_polys, first, nm,   (axis + 1) % 3 );
+        uint right_i = bvh_node( for_polys, m,     n-nm, (axis + 1) % 3 );
         node = &bvh_nodes[bvh_i];  // could change after previous calls
         node->left_i  = left_i;
         node->right_i = right_i;
@@ -3108,6 +3227,152 @@ Model::uint Model::bvh_node( Model::uint poly_i, Model::uint n, Model::uint axis
 
     return bvh_i;
 }
+
+inline Model::real Model::real4::dot( const Model::real4 &v2 ) const
+{
+    return c[0] * v2.c[0] + c[1] * v2.c[1] + c[2] * v2.c[2] + c[3] * v2.c[3];
+}
+
+inline Model::real Model::real4::length( void ) const
+{ 
+    return std::sqrt( c[0]*c[0] + c[1]*c[1] + c[2]*c[2] + c[3]*c[3] ); 
+}
+
+inline Model::real Model::real4::length_sqr( void ) const 
+{ 
+    return c[0]*c[0] + c[1]*c[1] + c[2]*c[2] + c[3]*c[3];
+}
+
+inline Model::real4& Model::real4::normalize( void )
+{
+    *this /= length();
+    return *this;
+}
+
+inline Model::real4 Model::real4::normalized( void ) const
+{
+    return *this / length();
+}
+
+inline Model::real4 Model::real4::operator + ( const Model::real4& v2 ) const
+{
+    real4 r;
+    r.c[0] = c[0] + v2.c[0];
+    r.c[1] = c[1] + v2.c[1];
+    r.c[2] = c[2] + v2.c[2];
+    r.c[3] = c[3] + v2.c[3];
+    return r;
+}
+
+inline Model::real4 Model::real4::operator - ( const Model::real4& v2 ) const
+{
+    real4 r;
+    r.c[0] = c[0] - v2.c[0];
+    r.c[1] = c[1] - v2.c[1];
+    r.c[2] = c[2] - v2.c[2];
+    r.c[3] = c[3] - v2.c[3];
+    return r;
+}
+
+inline Model::real4 Model::real4::operator * ( const Model::real4& v2 ) const
+{
+    real4 r;
+    r.c[0] = c[0] * v2.c[0];
+    r.c[1] = c[1] * v2.c[1];
+    r.c[2] = c[2] * v2.c[2];
+    r.c[3] = c[3] * v2.c[3];
+    return r;
+}
+
+inline Model::real4 operator * ( Model::real s, const Model::real4& v ) 
+{
+    return Model::real4( s*v.c[0], s*v.c[1], s*v.c[2], s*v.c[3] );
+}
+
+inline Model::real4 Model::real4::operator * ( Model::real s ) const
+{
+    real4 r;
+    r.c[0] = c[0] * s;
+    r.c[1] = c[1] * s;
+    r.c[2] = c[2] * s;
+    r.c[3] = c[3] * s;
+    return r;
+}
+
+inline Model::real4 Model::real4::operator / ( const Model::real4& v2 ) const
+{
+    real4 r;
+    r.c[0] = c[0] / v2.c[0];
+    r.c[1] = c[1] / v2.c[1];
+    r.c[2] = c[2] / v2.c[2];
+    r.c[3] = c[3] / v2.c[3];
+    return r;
+}
+
+inline Model::real4 Model::real4::operator / ( Model::real s ) const
+{
+    real4 r;
+    r.c[0] = c[0] / s;
+    r.c[1] = c[1] / s;
+    r.c[2] = c[2] / s;
+    r.c[3] = c[3] / s;
+    return r;
+}
+
+inline Model::real4& Model::real4::operator += ( const Model::real4 &v2 )
+{
+    c[0] += v2.c[0];
+    c[1] += v2.c[1];
+    c[2] += v2.c[2];
+    c[3] += v2.c[3];
+    return *this;
+}
+
+inline Model::real4& Model::real4::operator -= ( const Model::real4 &v2 )
+{
+    c[0] -= v2.c[0];
+    c[1] -= v2.c[1];
+    c[2] -= v2.c[2];
+    c[3] -= v2.c[3];
+    return *this;
+}
+
+inline Model::real4& Model::real4::operator *= ( const Model::real4 &v2 )
+{
+    c[0] *= v2.c[0];
+    c[1] *= v2.c[1];
+    c[2] *= v2.c[2];
+    c[3] *= v2.c[3];
+    return *this;
+}
+
+inline Model::real4& Model::real4::operator *= ( const Model::real s )
+{
+    c[0] *= s;
+    c[1] *= s;
+    c[2] *= s;
+    c[3] *= s;
+    return *this;
+}
+
+inline Model::real4& Model::real4::operator /= ( const Model::real4 &v2 )
+{
+    c[0] /= v2.c[0];
+    c[1] /= v2.c[1];
+    c[2] /= v2.c[2];
+    c[3] /= v2.c[3];
+    return *this;
+}
+
+inline Model::real4& Model::real4::operator /= ( const Model::real s )
+{
+    c[0] /= s;
+    c[1] /= s;
+    c[2] /= s;
+    c[3] /= s;
+    return *this;
+}
+
 inline Model::real Model::real3::dot( const Model::real3 &v2 ) const
 {
     return c[0] * v2.c[0] + c[1] * v2.c[1] + c[2] * v2.c[2];
@@ -3364,6 +3629,17 @@ inline Model::real2& Model::real2::operator /= ( const Model::real s )
     return *this;
 }
 
+inline void Model::Matrix::identity( void )
+{
+    for( uint i = 0; i < 4; i++ )
+    {
+        for( uint j = 0; j < 4; j++ )
+        {
+            m[i][j] = (i == j) ? 1 : 0;
+        }
+    }
+}
+
 inline void Model::Matrix::translate( const real3& translation )
 {
     m[0][3] += translation.c[0];
@@ -3378,23 +3654,62 @@ inline void Model::Matrix::scale( const real3& scaling )
     m[2][2] *= scaling.c[2];
 }
 
-inline void Model::Matrix::rotate( const real3& rotation )
+void Model::Matrix::rotate_xy( double radians )
 {
-    (void)rotation;
-    // TODO
+    if ( radians == 0.0 ) return;
+    double c = cos( radians );
+    double s = sin( radians );
+    Matrix mr;
+    mr.identity();
+    mr.m[0][0] = c;
+    mr.m[0][1] = s;
+    mr.m[1][0] = -s;
+    mr.m[1][1] = c;
+    Matrix r = *this;
+    mr.transform( r, *this );
+}
+
+void Model::Matrix::rotate_xz( double radians )
+{
+    if ( radians == 0.0 ) return;
+    double c = cos( radians );
+    double s = sin( radians );
+    Matrix mr;
+    mr.identity();
+    mr.m[0][0] = c;
+    mr.m[0][2] = s;
+    mr.m[2][0] = -s;
+    mr.m[2][2] = c;
+    Matrix r = *this;
+    mr.transform( r, *this );
+}
+
+void Model::Matrix::rotate_yz( double radians )
+{
+    if ( radians == 0.0 ) return;
+    double c = cos( radians );
+    double s = sin( radians );
+    Matrix mr;
+    mr.identity();
+    mr.m[1][1] = c;
+    mr.m[1][2] = -s;
+    mr.m[2][1] = s;
+    mr.m[2][2] = c;
+    Matrix r = *this;
+    mr.transform( r, *this );
 }
 
 inline Model::Matrix Model::Matrix::operator + ( const Matrix& m ) const
 {
-    Matrix n;
+    Matrix r;
     for( uint i = 0; i < 4; i++ )
     {
         for( uint j = 0; j < 4; j++ )
         {
-            n.m[i][j] = this->m[i][j] + m.m[i][j];
+            r.m[i][j] = this->m[i][j] + m.m[i][j];
         }
     }
-    return n;
+    return r;
 }
 
 inline Model::Matrix Model::Matrix::operator - ( const Matrix& m ) const
@@ -3410,18 +3725,250 @@ inline Model::Matrix Model::Matrix::operator - ( const Matrix& m ) const
     return r;
 }
 
-inline Model::real3 Model::Matrix::operator * ( const real3& v ) const
+inline void Model::Matrix::multiply( double s ) 
 {
-    real3 r;
-    for( uint i = 0; i < 3; i++ )
+    for( uint i = 0; i < 4; i++ )
     {
-        r.c[i] = 0.0;
-        for( uint j = 0; j < 3; j++ )
+        for( uint j = 0; j < 4; j++ )
         {
-            r.c[i] += m[i][j] * v.c[j];
+            m[i][j] *= s;
         }
     }
-    return r;
+}
+
+void Model::Matrix::transform( const real4& v, real4& r ) const
+{
+    for( uint i = 0; i < 4; i++ )
+    {
+        double sum = 0.0;               // use higher-precision here
+        for( uint j = 0; j < 4; j++ )
+        {
+            double partial = m[i][j];
+            partial *= v.c[j];
+            sum += partial;
+        }
+        r.c[i] = sum;
+    }
+}
+
+void Model::Matrix::transform( const real3& v, real3& r, bool div_by_w ) const
+{
+    if ( div_by_w ) {
+        real4 v4 = real4( v.c[0], v.c[1], v.c[2], 1.0 );
+        real4 r4;
+        transform( v4, r4 );
+        r.c[0] = r4.c[0];
+        r.c[1] = r4.c[1];
+        r.c[2] = r4.c[2];
+        r /= r4.c[3];                   // w
+    } else {
+        for( uint i = 0; i < 3; i++ )
+        {
+            double sum = 0.0;               // use higher-precision here
+            for( uint j = 0; j < 3; j++ )
+            {
+                double partial = m[i][j];
+                partial *= v.c[j];
+                sum += partial;
+            }
+            r.c[i] = sum;
+        }
+    }
+}
+
+Model::real4 Model::Matrix::row( uint r ) const
+{
+    real4 v;
+    for( uint32_t c = 0; c < 4; c++ ) 
+    {
+        v.c[c] = m[r][c];
+    }
+    return v;
+}
+
+Model::real4 Model::Matrix::column( uint c ) const
+{
+    real4 v;
+    for( uint32_t r = 0; r < 4; r++ ) 
+    {
+        v.c[r] = m[r][c];
+    }
+    return v;
+}
+
+void Model::Matrix::transform( const Matrix& M2, Matrix& M3 ) const
+{
+    for( uint r = 0; r < 4; r++ )
+    {
+        for( uint c = 0; c < 4; c++ )
+        {
+            double sum = 0.0;
+            for( int k = 0; k < 4; k++ )
+            {
+                double partial = m[r][k];
+                partial *= M2.m[k][c];
+                sum += partial;
+            }
+            M3.m[r][c] = sum;
+        }
+    }
+}
+
+void Model::Matrix::transpose( Model::Matrix& mt ) const
+{
+    for( int i = 0; i < 4; i++ )
+    {
+        for( int j = 0; j < 4; j++ )
+        {
+            mt.m[j][i] = m[i][j];
+        }
+    }
+}
+
+//---------------------------------------------------------------
+// Invert a 4x4 Matrix that is known to be an affine transformation.
+// This is simpler and faster, but does not work for perspective matrices and other cases.
+//---------------------------------------------------------------
+void Model::Matrix::invert_affine( Model::Matrix& minv ) const
+{
+    double i00 = m[0][0];
+    double i01 = m[0][1];
+    double i02 = m[0][2];
+    double i03 = m[0][3];
+    double i10 = m[1][0];
+    double i11 = m[1][1];
+    double i12 = m[1][2];
+    double i13 = m[1][3];
+    double i20 = m[2][0];
+    double i21 = m[2][1];
+    double i22 = m[2][2];
+    double i23 = m[2][3];
+    double i30 = m[3][0];
+    double i31 = m[3][1];
+    double i32 = m[3][2];
+    double i33 = m[3][3];
+
+    double s0  = i00 * i11 - i10 * i01;
+    double s1  = i00 * i12 - i10 * i02;
+    double s2  = i00 * i13 - i10 * i03;
+    double s3  = i01 * i12 - i11 * i02;
+    double s4  = i01 * i13 - i11 * i03;
+    double s5  = i02 * i13 - i12 * i03;
+
+    double c5  = i22 * i33 - i32 * i23;
+    double c4  = i21 * i33 - i31 * i23;
+    double c3  = i21 * i32 - i31 * i22;
+    double c2  = i20 * i33 - i30 * i23;
+    double c1  = i20 * i32 - i30 * i22;
+    double c0  = i20 * i31 - i30 * i21;
+
+    double invdet  = 1 / ( s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0 );
+
+    minv.m[0][0] = (i11 * c5 - i12 * c4 + i13 * c3) * invdet;
+    minv.m[0][1] = (-i01 * c5 + i02 * c4 - i03 * c3) * invdet;
+    minv.m[0][2] = (i31 * s5 - i32 * s4 + i33 * s3) * invdet;
+    minv.m[0][3] = (-i21 * s5 + i22 * s4 - i23 * s3) * invdet;
+
+    minv.m[1][0] = (-i10 * c5 + i12 * c2 - i13 * c1) * invdet;
+    minv.m[1][1] = (i00 * c5 - i02 * c2 + i03 * c1) * invdet;
+    minv.m[1][2] = (-i30 * s5 + i32 * s2 - i33 * s1) * invdet;
+    minv.m[1][3] = (i20 * s5 - i22 * s2 + i23 * s1) * invdet;
+
+    minv.m[2][0] = (i10 * c4 - i11 * c2 + i13 * c0) * invdet;
+    minv.m[2][1] = (-i00 * c4 + i01 * c2 - i03 * c0) * invdet;
+    minv.m[2][2] = (i30 * s4 - i31 * s2 + i33 * s0) * invdet;
+    minv.m[2][3] = (-i20 * s4 + i21 * s2 - i23 * s0) * invdet;
+
+    minv.m[3][0] = (-i10 * c3 + i11 * c1 - i12 * c0) * invdet;
+    minv.m[3][1] = (i00 * c3 - i01 * c1 + i02 * c0) * invdet;
+    minv.m[3][2] = (-i30 * s3 + i31 * s1 - i32 * s0) * invdet;
+    minv.m[3][3] = (i20 * s3 - i21 * s1 + i22 * s0) * invdet;
+}
+
+//---------------------------------------------------------------
+// This is a more complex invert() but works for all types of matrices.
+//---------------------------------------------------------------
+void Model::Matrix::invert( Model::Matrix& minv ) const 
+{
+    // Inverse = adjoint / determinant
+    adjoint( minv );
+
+    // Determinant is the dot product of the first row and the first row
+    // of cofactors (i.e. the first col of the adjoint matrix)
+    real4 col0 = minv.column( 0 );
+    real4 row0 = minv.row( 0 );
+    double det = col0.dot( row0 );
+    minv.multiply( 1.0/det );
+}
+
+void Model::Matrix::adjoint( Model::Matrix& M ) const 
+{
+    Matrix Mt;     
+    cofactor( Mt );
+    Mt.transpose( M );
+}
+
+double Model::Matrix::determinant( void ) const 
+{
+    // Determinant is the dot product of the first row and the first row
+    // of cofactors (i.e. the first col of the adjoint matrix)
+    Matrix C;
+    cofactor( C );
+    real4 row0 = row( 0 );
+    return row0.dot( row0 );
+}
+
+void Model::Matrix::cofactor( Model::Matrix& C ) const 
+{
+    // We'll use i to incrementally compute -1 ^ (r+c)
+    int32_t i = 1;
+
+    for( uint r = 0; r < 4; r++ ) 
+    {
+        for( uint c = 0; c < 4; c++ ) 
+        {
+            // Compute the determinant of the 3x3 submatrix
+            double det = subdeterminant( r, c );
+            C.m[r][c] = double(i) * det;
+            i = -i;
+        }
+        i = -i;
+    }
+}
+
+double Model::Matrix::subdeterminant( uint exclude_row, uint exclude_col ) const 
+{
+    // Compute non-excluded row and column indices
+    uint _row[3];
+    uint _col[3];
+
+    for( uint i = 0; i < 3; i++ ) 
+    {
+        _row[i] = i;
+        _col[i] = i;
+
+        if( i >= exclude_row ) _row[i]++;
+        if( i >= exclude_col ) _col[i]++;
+    }
+
+    // Compute the first row of cofactors 
+    double cofactor00 =
+      double(m[_row[1]][_col[1]]) * double(m[_row[2]][_col[2]]) -
+      double(m[_row[1]][_col[2]]) * double(m[_row[2]][_col[1]]);
+
+    double cofactor10 =
+      double(m[_row[1]][_col[2]]) * double(m[_row[2]][_col[0]]) -
+      double(m[_row[1]][_col[0]]) * double(m[_row[2]][_col[2]]);
+
+    double cofactor20 =
+      double(m[_row[1]][_col[0]]) * double(m[_row[2]][_col[1]]) -
+      double(m[_row[1]][_col[1]]) * double(m[_row[2]][_col[0]]);
+
+    // Product of the first row and the cofactors along the first row
+    return
+      double(m[_row[0]][_col[0]]) * cofactor00 +
+      double(m[_row[0]][_col[1]]) * cofactor10 +
+      double(m[_row[0]][_col[2]]) * cofactor20;
 }
 
 bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real padding ) const 
@@ -3566,6 +4113,8 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
                 hit_info.u = alpha*u0 + gamma*u1 + beta*u2 ;
                 hit_info.v = alpha*v0 + gamma*v1 + beta*v2 ;
 
+                hit_info.model = model;
+
                 return true;
              }
         }
@@ -3573,26 +4122,44 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
     return false;
 }
 
-bool Model::Instance::bounding_box( const Model * model, AABB& box, real padding ) const
+bool Model::Instance::bounding_box( const Model * model, AABB& b, real padding ) const
 {
     (void)model;
-    (void)box;
-    (void)padding;
-    return false;
+    b = box;
+    b.pad( padding );
+    return true;
 }
 
 bool Model::Instance::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
                            real solid_angle, real t_min, real t_max, HitInfo& hit_info )
 {
-    (void)model;
-    (void)origin;
-    (void)direction;
-    (void)direction_inv;
-    (void)solid_angle;
-    (void)t_min;
-    (void)t_max;
-    (void)hit_info;
-    return false;
+    assert( kind == INSTANCE_KIND::MODEL_PTR );
+
+    //-----------------------------------------------------------
+    // Use inverse matrix to transform origin, direction, and direction_inv into target model's space.
+    // Then call model's root BVH hit node.
+    //-----------------------------------------------------------
+    Model  *   t_model         = u.model_ptr;
+    Matrix *   M_inv           = &model->matrixes[matrix_inv_i];
+    real3      t_origin, t_direction, t_direction_inv;
+    M_inv->transform( origin, t_origin );
+    M_inv->transform( direction, t_direction );
+    M_inv->transform( direction_inv, t_direction_inv );
+
+    BVH_Node * t_bvh = &t_model->bvh_nodes[t_model->hdr->bvh_root_i];
+    if ( !t_bvh->hit( t_model, t_origin, t_direction, t_direction_inv, solid_angle, t_min, t_max, hit_info ) ) return false;
+
+    //-----------------------------------------------------------
+    // Use matrix to transform hit_info.p back to global world space.
+    // Use transposed inverse matrix to transform hit_info.normal correctly (ask Pete Shirley).
+    //-----------------------------------------------------------
+    Matrix * M           = &model->matrixes[matrix_i];
+    Matrix * M_inv_trans = &model->matrixes[matrix_inv_trans_i];
+    real3 p = hit_info.p;
+    real3 normal = hit_info.normal;
+    M->transform( p, hit_info.p );
+    M_inv_trans->transform( normal, hit_info.normal );
+    return true;
 }
 
 inline bool Model::BVH_Node::bounding_box( const Model * model, Model::AABB& b ) const

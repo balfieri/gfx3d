@@ -279,6 +279,8 @@ public:
         real            frac_uv_cov;            // UV footprint of hit surface (used by mip_level calculation)
         real3           p;
         real3           normal;
+        real3           tangent;
+        real3           bitangent;
         const Model *   model;              // model of owning BVH
     };
 
@@ -4041,7 +4043,7 @@ inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& di
 }
 
 inline bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
-                                 real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const
+        real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const
 {
     (void)direction_inv;
     if ( vtx_cnt == 3 ) {
@@ -4057,20 +4059,20 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
         real d = direction.dot( normal );
         real t = (p0 - origin).dot( normal ) / d;
         if ( t > t_min && t < t_max ) {
-             // compute barycentrics, see if it's in triangle
-             const real3& p1 = positions[vertexes[1].v_i];
-             const real3& p2 = positions[vertexes[2].v_i];
-             const real3 p = origin + direction*t;
-             // careful about order!
-             const real3 p_m_p0  = p  - p0;
-             const real3 p1_m_p0 = p1 - p0;
-             const real3 p2_m_p0 = p2 - p0;
-             real area1 = p1_m_p0.cross( p_m_p0 ).dot( normal );
-             real area2 = p_m_p0.cross( p2_m_p0 ).dot( normal );
-             real area_2x = area * 2.0;
-             real beta    = area1/area_2x;
-             real gamma   = area2/area_2x;
-             if ( beta >= 0.0 && gamma >= 0.0 && (beta + gamma) <= 1.0 ) {
+            // compute barycentrics, see if it's in triangle
+            const real3& p1 = positions[vertexes[1].v_i];
+            const real3& p2 = positions[vertexes[2].v_i];
+            const real3 p = origin + direction*t;
+            // careful about order!
+            const real3 p_m_p0  = p  - p0;
+            const real3 p1_m_p0 = p1 - p0;
+            const real3 p2_m_p0 = p2 - p0;
+            real area1 = p1_m_p0.cross( p_m_p0 ).dot( normal );
+            real area2 = p_m_p0.cross( p2_m_p0 ).dot( normal );
+            real area_2x = area * 2.0;
+            real beta    = area1/area_2x;
+            real gamma   = area2/area_2x;
+            if ( beta >= 0.0 && gamma >= 0.0 && (beta + gamma) <= 1.0 ) {
                 real alpha = 1.0 - beta - gamma;
 
                 const real3 * normals   = model->normals;
@@ -4103,20 +4105,97 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
                 } else {
                     hit_info.normal = normal;
                 }
-                hit_info.p = p + 0.1*hit_info.normal;;
+                // epsilon to get it off the polygon
+                // may cause trouble in two-sided... move to shader?
+            //    hit_info.p = p + 0.01*hit_info.normal;;
+                hit_info.p = p;
 
                 real distance_squared = t*t / direction.length_sqr();
                 real ray_footprint_area_on_triangle = solid_angle*distance_squared;
                 real twice_uv_area_of_triangle = std::abs(0.5*(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1));
                 hit_info.frac_uv_cov = ray_footprint_area_on_triangle * twice_uv_area_of_triangle / (2.0*area);
 
+
                 hit_info.u = alpha*u0 + gamma*u1 + beta*u2 ;
                 hit_info.v = alpha*v0 + gamma*v1 + beta*v2 ;
+
+                real3 deltaPos1 = p1-p0;
+                real3 deltaPos2 = p2-p0;
+
+                real deltaU1 = u1-u0;
+                real deltaU2 = u2-u0;
+                real deltaV1 = v1-v0;
+                real deltaV2 = v2-v0;
+
+                real r = 1.0 / (deltaU1 * deltaV2 - deltaV1 * deltaU2);
+                hit_info.tangent = (deltaPos1 * deltaV2   - deltaPos2 * deltaV1)*r;
+                hit_info.bitangent = (deltaPos2 * deltaU1   - deltaPos1 * deltaU2)*r;
+
+                if (mtl_i != uint(-1) && model->materials[mtl_i].map_d_i != uint(-1)) {
+                    // code slightly modified from texture.h   We only need one compoent
+                    // From there, the first texel will be at &texels[texel_i]. 
+                    // Pull out the map_d_i.  If it's -1, there's no alpha texture.  Also use that to get to the Texture using model->textures[map_d_i].
+                    uint texel_i = model->textures[model->materials[mtl_i].map_d_i].texel_i; 
+                    unsigned char *mdata = &(model->texels[texel_i]);
+                    int nx = model->textures[model->materials[mtl_i].map_d_i].width;
+                    int ny = model->textures[model->materials[mtl_i].map_d_i].height;
+                    int mx = nx;
+                    int my = ny;
+                    real u = hit_info.u;
+                    real v = hit_info.v;
+                    real sqrt_nx_ny = std::sqrt(nx*ny);
+                    real width_of_footprint = std::sqrt(hit_info.frac_uv_cov) * sqrt_nx_ny;
+                    real mip_level = std::log2( width_of_footprint );
+                    int nchan = model->textures->nchan;
+                    for (int imip_level = mip_level; imip_level > 0 && !(mx == 1 && my == 1); imip_level--)
+                    {
+                        // find the proper mip texture
+                        mdata += nchan * mx * my;
+                        if ( mx != 1 ) mx >>= 1;
+                        if ( my != 1 ) my >>= 1;
+                    }
+                    if (std::isnan(u)) {
+                        u = 0.0;
+                    }
+                    if (std::isnan(v)) {
+                        v = 0.0;
+                    }
+                    if (u < 0.0) {
+                        int64_t i = u;
+                        u -= i-1;
+                    }
+                    if (v < 0.0) {
+                        int64_t i = v;
+                        v -= i-1;
+                    }
+                    if (u >= 1.0) {
+                        int64_t i = u;
+                        u -= i;
+                    }
+                    if (v >= 1.0) {
+                        int64_t i = v;
+                        v -= i;
+                    }
+                    int i = (    u)*real(mx);
+                    int j = (1.0-v)*real(my);
+                    /*
+                    if (i >= mx) i -= mx;
+                    if (j >= my) j -= my;
+                    */
+                    while (i >= mx) i -= mx;
+                    while (j >= my) j -= my;
+
+                    float opacity = float(mdata[nchan*i + nchan*mx*j+0]) / 255.0;
+
+                    if (float(uniform()) > opacity) {
+                        return false;
+                    }
+                }
 
                 hit_info.model = model;
 
                 return true;
-             }
+            }
         }
     }
     return false;

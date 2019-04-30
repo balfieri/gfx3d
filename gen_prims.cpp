@@ -1,5 +1,7 @@
 // gen_prims.cpp - generates prims from .obj format models
 //
+static inline float uniform()  { return 0.0; }    // TODO: temporary
+
 #include "Model.h"
 #include <iostream>
 #include <stdlib.h>

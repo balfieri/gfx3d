@@ -1176,8 +1176,8 @@ bool Model::read_uncompressed( std::string model_path )
 
 bool Model::load_fsc( std::string fsc_file, std::string dir_name )
 {
-    tone_key = real(0.2);
-    tone_white = real(3.0);
+    tone_key = 0.2;
+    tone_white = 3.0;
     (void)dir_name;
 
     //------------------------------------------------------------
@@ -4035,10 +4035,10 @@ inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& di
         real dir_inv = direction_inv.c[a];
         real v0 = (min.c[a] - origin.c[a]) * dir_inv;
         real v1 = (max.c[a] - origin.c[a]) * dir_inv;
-        tmin = std::max( tmin, std::min( v0, v1 ) );
-        tmax = std::min( tmax, std::max( v0, v1 ) );
+        tmin = std::fmax( tmin, std::fmin( v0, v1 ) );
+        tmax = std::fmin( tmax, std::fmax( v0, v1 ) );
     }
-    bool r = tmax >= std::max( tmin, real(0.0) );
+    bool r = tmax >= std::fmax( tmin, real(0.0) );
     return r;
 }
 

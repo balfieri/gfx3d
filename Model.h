@@ -257,9 +257,10 @@ public:
         real        animation_speed;        // divide frame time by this to get real time (default: 1.0)
     };
 
-    // TODO: this is a temporary location for these user_defined variables; they will move into Header on next re-gen
+    // TODO: this is a temporary location for these user_defined variables; they will move into headers on next re-gen
         real        tone_white;             // tone mapping white parameter
         real        tone_key;               // tone mapping key parameter
+        bool        tex_specular_is_orm;    // specular texture components mean: occlusion, roughness, metalness
 
     class Object
     {
@@ -1178,6 +1179,7 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
 {
     tone_key = 0.2;
     tone_white = 3.0;
+    tex_specular_is_orm = false;
     (void)dir_name;
 
     //------------------------------------------------------------
@@ -1272,6 +1274,9 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
 
                 } else if ( strcmp( field, "tone_key" ) == 0 ) {
                     if ( !parse_real( tone_key, fsc, fsc_end, true ) ) goto error;
+
+                } else if ( strcmp( field, "tex_specular_is_orm" ) == 0 ) {
+                    if ( !parse_bool( tex_specular_is_orm, fsc, fsc_end ) ) goto error;
 
                 } else {
                     fsc_assert( 0, "unexpected user_defined field '" + std::string(field) + "' in " + fsc_file );

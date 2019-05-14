@@ -103,6 +103,7 @@
 class Model
 {
 public:
+    typedef int32_t  _int;                  // by default, we use 32-bit signed integers
     typedef uint32_t uint;                  // by default, we use 32-bit indexes for geometry
     typedef uint64_t uint64;                // by default, we use 64-bit indexes for texels
     typedef float    real;
@@ -129,7 +130,7 @@ public:
 
     static void dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ); // utility
 
-    static const uint VERSION = 0xB0BA1f07; // current version 
+    static const uint VERSION = 0xB0BA1f08; // current version 
 
     bool                is_good;            // set to true if constructor succeeds
     std::string         error_msg;          // if !is_good
@@ -361,6 +362,8 @@ public:
         uint            nchan;              // number of channels (typically 3 or 4)
         uint64          texel_i;            // index into texels array of first texel
         real            bump_multiplier;    // should be for bump maps only but also used with other textures
+        real3           offset;             // uvw offset of texture map on surface (w is 0 for 2D textures)
+        real3           scale;              // uvw scale  of texture map on surface (w is 0 for 2D textures)
     };
 
     enum class BVH_NODE_KIND
@@ -616,7 +619,7 @@ private:
     bool parse_real3( real3& r3, char *& xxx, char *& xxx_end, bool has_brackets=false );
     bool parse_real2( real2& r2, char *& xxx, char *& xxx_end, bool has_brackets=false );
     bool parse_real( real& r, char *& xxx, char *& xxx_end, bool skip_whitespace_first=false );
-    bool parse_int( int& i, char *& xxx, char *& xxx_end );
+    bool parse_int( _int& i, char *& xxx, char *& xxx_end );
     bool parse_uint( uint& u, char *& xxx, char *& xxx_end );
     bool parse_bool( bool& b, char *& xxx, char *& xxx_end );
     std::string surrounding_lines( char *& xxx, char *& xxx_end );
@@ -930,7 +933,8 @@ Model::Model( std::string model_path, bool is_compressed )
     _read( hdr,         Header,   1 );
     if ( hdr->version != VERSION ) {
         gzclose( fd );
-        error_msg = "hdr->version does not match VERSION=" + std::to_string(VERSION) + ", got " + std::to_string(hdr->version);
+        error_msg = "hdr->version does not match current VERSION " + std::to_string(VERSION) + ", got " + std::to_string(hdr->version) + 
+                    "; please re-generate (or re-download) your .model files"; 
         assert( 0 ); \
         return;
     }
@@ -1148,7 +1152,8 @@ bool Model::read_uncompressed( std::string model_path )
 
     _uread( hdr,         Header,   1 );
     if ( hdr->version != VERSION ) {
-        rtn_assert( 0, "hdr->version does not match VERSION=" + std::to_string(VERSION) + ", got " + std::to_string(hdr->version) );
+        rtn_assert( 0, "hdr->version does not match current VERSION " + std::to_string(VERSION) + ", got " + 
+                       std::to_string(hdr->version) + "; please re-generate (or re-download) your .model files" );  
     }
     max = aligned_alloc<Header>( 1 );
     memcpy( max, hdr, sizeof( Header ) );
@@ -2013,14 +2018,14 @@ bool Model::load_obj( std::string obj_file, std::string dir_name )
                     perhaps_realloc<Vertex>( vertexes, hdr->vtx_cnt, max->vtx_cnt, 1 );
                     vertex = &vertexes[ hdr->vtx_cnt++ ];
 
-                    int v_i;
+                    _int v_i;
                     if ( !parse_int( v_i, obj, obj_end ) )   goto error;
                     dprint( "v_i=" + std::to_string( v_i ) );
                     vertex->v_i = (v_i >= 0)  ? v_i : (hdr->pos_cnt + v_i);
 
                     if ( obj != obj_end && *obj == '/' ) {
                         if ( !expect_char( '/', obj, obj_end ) ) goto error;
-                        int vt_i;
+                        _int vt_i;
                         if ( obj != obj_end && *obj == '/' ) {
                             if ( !expect_char( '/', obj, obj_end ) ) goto error;
                             vertex->vt_i = uint(-1);
@@ -2032,7 +2037,7 @@ bool Model::load_obj( std::string obj_file, std::string dir_name )
 
                         if ( obj != obj_end && *obj == '/' ) {
                             if ( !expect_char( '/', obj, obj_end ) ) goto error;
-                            int vn_i;
+                            _int vn_i;
                             if ( !parse_int( vn_i, obj, obj_end ) )  goto error;
                             dprint( "vn_i=" + std::to_string( vn_i ) );
                             vertex->vn_i = (vn_i >= 0) ? vn_i : (hdr->norm_cnt + vn_i);
@@ -2159,6 +2164,8 @@ bool Model::load_mtl( std::string mtl_file, std::string dir_name, bool replacing
     Texture *   texture  = nullptr;
     std::string option_name;
     real        bump_multiplier;
+    real3       tex_offset;
+    real3       tex_scale;
 
     for( ;; ) 
     {
@@ -2276,10 +2283,16 @@ bool Model::load_mtl( std::string mtl_file, std::string dir_name, bool replacing
                 
                 if ( !replacing ) {
                     bump_multiplier = 1.0;
+                    tex_offset = real3( 0, 0, 0 );
+                    tex_scale  = real3( 1, 1, 1 );
                     while( parse_option_name( option_name, mtl, mtl_end ) )
                     {
                         if ( option_name == std::string("-bm") ) {
                             if ( !parse_real( bump_multiplier, mtl, mtl_end ) ) return false;
+                        } else if ( option_name == std::string("-o") ) {
+                            if ( !parse_real3( tex_offset, mtl, mtl_end ) ) return false;
+                        } else if ( option_name == std::string("-s") ) {
+                            if ( !parse_real3( tex_scale, mtl, mtl_end ) ) return false;
                         } else {
                             rtn_assert( 0, "unknown texture map option: " + option_name );
                         }
@@ -2296,6 +2309,8 @@ bool Model::load_mtl( std::string mtl_file, std::string dir_name, bool replacing
                         if ( !load_tex( tex_name, dir_name, texture ) ) return false;
                     }
                     texture->bump_multiplier = bump_multiplier;
+                    texture->offset          = tex_offset;
+                    texture->scale           = tex_scale;
 
                     tex_i = texture - textures;
 
@@ -2989,15 +3004,9 @@ inline bool Model::parse_real2( Model::real2& r2, char *& xxx, char *& xxx_end, 
 inline bool Model::parse_real( Model::real& r, char *& xxx, char *& xxx_end, bool skip_whitespace_first )
 {
     if ( skip_whitespace_first ) skip_whitespace( xxx, xxx_end );   // can span lines unlike below
-    bool vld = false;
-    bool is_neg = false;
+    std::string s = "";
     bool in_frac = false;
     bool has_exp = false;
-    uint u = 0;     // integer part
-    uint f = 0;     // frac part before divide
-    int e10 = 0;
-    double f_factor = 1.0;
-    dprint( "parse_real *xxx=" + std::string( 1, *xxx ) );
     while( xxx != xxx_end && (*xxx == ' ' || *xxx == '\t') ) xxx++;  // skip leading spaces
 
     while( xxx != xxx_end )
@@ -3017,12 +3026,13 @@ inline bool Model::parse_real( Model::real& r, char *& xxx, char *& xxx_end, boo
         }
 
         if ( ch == '-' && !in_frac ) {
-            is_neg = true;
+            s += "-";
             xxx++;
             continue;
         }
 
         if ( ch == '.' && !in_frac ) {
+            s += ".";
             in_frac = true;
             xxx++;
             continue;
@@ -3031,34 +3041,28 @@ inline bool Model::parse_real( Model::real& r, char *& xxx, char *& xxx_end, boo
         if ( ch == 'e' || ch == 'E' ) {
             rtn_assert( !has_exp, "real has more than one 'e' exponent" );
             has_exp = true;
+            s += std::string( 1, ch );
             xxx++;
+            _int e10;
             if ( !parse_int( e10, xxx, xxx_end ) ) return false;
+            s += std::to_string( e10 );
             continue;
         }
 
         if ( ch < '0' || ch > '9' ) break;
 
-        uint digit = ch - '0';
-        if ( in_frac ) {
-            f = 10*f + digit;
-            f_factor *= 10.0;
-        } else {
-            u = 10*u + digit;
-        }
-
-        vld = true;
+        s += std::string( 1, ch );
         xxx++;
     }
 
-    r = double(u) + f/f_factor;
-    if ( is_neg ) r = -r;
-    if ( e10 != 0 ) r *= pow( 10.0, e10 );
+    rtn_assert( s.length() != 0, "unable to parse real in file " + surrounding_lines( xxx, xxx_end ) );
+
+    r = std::atof( s.c_str() );
     dprint( "real=" + std::to_string( r ) );
-    rtn_assert( vld, "unable to parse real in " + std::string( ((xxx == fsc) ? ".fscene" : (xxx == obj) ? ".obj" : ".mtl") ) + " file " + surrounding_lines( xxx, xxx_end ) );
-    return vld;
+    return true;
 }
 
-inline bool Model::parse_int( int& i, char *& xxx, char *& xxx_end )
+inline bool Model::parse_int( _int& i, char *& xxx, char *& xxx_end )
 {
     bool vld = false;
     i = 0;
@@ -3089,7 +3093,7 @@ inline bool Model::parse_int( int& i, char *& xxx, char *& xxx_end )
 
 inline bool Model::parse_uint( uint& u, char *& xxx, char *& xxx_end )
 {
-    int i;
+    _int i;
     if ( !parse_int( i, xxx, xxx_end ) ) return false;
     rtn_assert( i >= 0, "parse_uint encountered negative integer" );
     u = i;

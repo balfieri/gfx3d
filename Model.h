@@ -130,7 +130,7 @@ public:
 
     static void dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ); // utility
 
-    static const uint VERSION = 0xB0BA1f08; // current version 
+    static const uint VERSION = 0xB0BA1f09; // current version 
 
     bool                is_good;            // set to true if constructor succeeds
     std::string         error_msg;          // if !is_good
@@ -226,6 +226,7 @@ public:
 
         uint64      obj_cnt;                // in objects array  
         uint64      poly_cnt;               // in polygons array 
+        uint64      emissive_poly_cnt;      // in emissive_polygons[] array
         uint64      vtx_cnt;                // in vertexes array
         uint64      pos_cnt;                // in positions array
         uint64      norm_cnt;               // in normals array
@@ -246,10 +247,13 @@ public:
         real        lighting_scale;         // not sure what this is yet (default: 1.0)
         real3       ambient_intensity;      // ambient light intensity (default: [0.1, 0.1, 0.1]
         real3       background_color;       // default is black, though irrelevant if there's a sky box
+        bool        tex_specular_is_orm;    // specular texture components mean: occlusion, roughness, metalness
         uint        sky_box_tex_i;          // index in textures array of sky box texture
         real        env_map_intensity_scale;// name says it all
         real        opacity_scale;          // not sure what this is for
         real        shadow_caster_count;    // not sure what this is for
+        real        tone_white;             // tone mapping white parameter
+        real        tone_key;               // tone mapping key parameter
 
         uint64      camera_cnt;             // in cameras array
         uint64      initial_camera_i;       // initial active camera index (default: 0)
@@ -257,11 +261,6 @@ public:
         uint64      animation_cnt;          // in animations array
         real        animation_speed;        // divide frame time by this to get real time (default: 1.0)
     };
-
-    // TODO: this is a temporary location for these user_defined variables; they will move into headers on next re-gen
-        real        tone_white;             // tone mapping white parameter
-        real        tone_key;               // tone mapping key parameter
-        bool        tex_specular_is_orm;    // specular texture components mean: occlusion, roughness, metalness
 
     class Object
     {
@@ -350,7 +349,7 @@ public:
         uint            map_d_i;            // alpha texture (multiplied by d)
         uint            map_Bump_i;         // bump map texture
 
-        // TODO: add value() or color() routine to compute the color using all of these parameters
+        inline bool is_emissive( void ) { return Ke.c[0] != 0.0 || Ke.c[1] != 0.0 || Ke.c[2] != 0.0; }
     };
 
     class Texture
@@ -511,6 +510,7 @@ public:
     char *              strings;
     Object *            objects;
     Polygon *           polygons;
+    uint *              emissive_polygons;  
     Vertex *            vertexes;
     real3 *             positions;
     real3 *             normals;
@@ -748,46 +748,47 @@ Model::Model( std::string top_file, Model::MIPMAP_FILTER mipmap_filter, Model::B
     // Initial lengths of arrays are large in virtual memory
     //------------------------------------------------------------
     max = aligned_alloc<Header>( 1 );
-    max->obj_cnt     =   128*1024;
-    max->poly_cnt    =  1024*1024;
-    max->mtl_cnt     =       128;
-
-    max->vtx_cnt     = 4*max->poly_cnt;
-    max->pos_cnt     = max->vtx_cnt;
-    max->norm_cnt    = max->vtx_cnt;
-    max->texcoord_cnt= max->vtx_cnt;
-    max->mipmap_filter= mipmap_filter;
-    max->tex_cnt     = max->mtl_cnt;
-    max->texel_cnt   = max->mtl_cnt * 128*1024;
-    max->char_cnt    = max->obj_cnt * 128;
-    max->bvh_node_cnt= max->poly_cnt / 2;
-    max->matrix_cnt  = 1;
-    max->inst_cnt    = 1;
-    max->light_cnt   = 1;
-    max->camera_cnt  = 1;
-    max->frame_cnt   = 1;
-    max->animation_cnt = 1;
+    max->obj_cnt           = 128*1024;
+    max->poly_cnt          = 1024*1024;
+    max->emissive_poly_cnt = 16;
+    max->mtl_cnt           = 128;
+    max->vtx_cnt     	   = 4*max->poly_cnt;
+    max->pos_cnt     	   = max->vtx_cnt;
+    max->norm_cnt    	   = max->vtx_cnt;
+    max->texcoord_cnt	   = max->vtx_cnt;
+    max->mipmap_filter	   = mipmap_filter;
+    max->tex_cnt     	   = max->mtl_cnt;
+    max->texel_cnt   	   = max->mtl_cnt * 128*1024;
+    max->char_cnt    	   = max->obj_cnt * 128;
+    max->bvh_node_cnt	   = max->poly_cnt / 2;
+    max->matrix_cnt  	   = 1;
+    max->inst_cnt    	   = 1;
+    max->light_cnt   	   = 1;
+    max->camera_cnt  	   = 1;
+    max->frame_cnt   	   = 1;
+    max->animation_cnt 	   = 1;
 
     //------------------------------------------------------------
     // Allocate arrays
     //------------------------------------------------------------
-    strings         = aligned_alloc<char>(     max->char_cnt );
-    objects         = aligned_alloc<Object>(   max->obj_cnt );
-    polygons        = aligned_alloc<Polygon>(  max->poly_cnt );
-    vertexes        = aligned_alloc<Vertex>(   max->vtx_cnt );
-    positions       = aligned_alloc<real3>(    max->pos_cnt );
-    normals         = aligned_alloc<real3>(    max->norm_cnt );
-    texcoords       = aligned_alloc<real2>(    max->texcoord_cnt );
-    materials       = aligned_alloc<Material>( max->mtl_cnt );
-    textures        = aligned_alloc<Texture>(  max->tex_cnt );
-    texels          = aligned_alloc<unsigned char>( max->texel_cnt );
-    bvh_nodes       = aligned_alloc<BVH_Node>( max->bvh_node_cnt );
-    matrixes        = aligned_alloc<Matrix>(   max->matrix_cnt );
-    instances       = aligned_alloc<Instance>( max->inst_cnt );
-    lights          = aligned_alloc<Light>(    max->light_cnt );
-    cameras         = aligned_alloc<Camera>(   max->camera_cnt );
-    frames          = aligned_alloc<Frame>(    max->frame_cnt );
-    animations      = aligned_alloc<Animation>(max->animation_cnt );
+    strings           = aligned_alloc<char>(     max->char_cnt );
+    objects           = aligned_alloc<Object>(   max->obj_cnt );
+    polygons          = aligned_alloc<Polygon>(  max->poly_cnt );
+    emissive_polygons = aligned_alloc<uint>(     max->emissive_poly_cnt );
+    vertexes          = aligned_alloc<Vertex>(   max->vtx_cnt );
+    positions         = aligned_alloc<real3>(    max->pos_cnt );
+    normals           = aligned_alloc<real3>(    max->norm_cnt );
+    texcoords         = aligned_alloc<real2>(    max->texcoord_cnt );
+    materials         = aligned_alloc<Material>( max->mtl_cnt );
+    textures          = aligned_alloc<Texture>(  max->tex_cnt );
+    texels            = aligned_alloc<unsigned char>( max->texel_cnt );
+    bvh_nodes         = aligned_alloc<BVH_Node>( max->bvh_node_cnt );
+    matrixes          = aligned_alloc<Matrix>(   max->matrix_cnt );
+    instances         = aligned_alloc<Instance>( max->inst_cnt );
+    lights            = aligned_alloc<Light>(    max->light_cnt );
+    cameras           = aligned_alloc<Camera>(   max->camera_cnt );
+    frames            = aligned_alloc<Frame>(    max->frame_cnt );
+    animations        = aligned_alloc<Animation>(max->animation_cnt );
 
     //------------------------------------------------------------
     // Load .fscene or .obj depending on file ext_name
@@ -863,24 +864,25 @@ Model::Model( std::string top_file, Model::MIPMAP_FILTER mipmap_filter, Model::B
     //------------------------------------------------------------
     // Add up byte count.
     //------------------------------------------------------------
-    hdr->byte_cnt = uint64( 1                 ) * sizeof( hdr ) +
-                    uint64( hdr->obj_cnt      ) * sizeof( objects[0] ) +
-                    uint64( hdr->poly_cnt     ) * sizeof( polygons[0] ) +
-                    uint64( hdr->vtx_cnt      ) * sizeof( vertexes[0] ) +
-                    uint64( hdr->pos_cnt      ) * sizeof( positions[0] ) +
-                    uint64( hdr->norm_cnt     ) * sizeof( normals[0] ) +
-                    uint64( hdr->texcoord_cnt ) * sizeof( texcoords[0] ) +
-                    uint64( hdr->mtl_cnt      ) * sizeof( materials[0] ) +
-                    uint64( hdr->tex_cnt      ) * sizeof( textures[0] ) +
-                    uint64( hdr->texel_cnt    ) * sizeof( texels[0] ) +
-                    uint64( hdr->char_cnt     ) * sizeof( strings[0] ) + 
-                    uint64( hdr->bvh_node_cnt ) * sizeof( bvh_nodes[0] ) +
-                    uint64( hdr->matrix_cnt   ) * sizeof( matrixes[0] ) +
-                    uint64( hdr->inst_cnt     ) * sizeof( instances[0] ) +
-                    uint64( hdr->light_cnt    ) * sizeof( lights[0] ) +
-                    uint64( hdr->camera_cnt   ) * sizeof( cameras[0] ) +
-                    uint64( hdr->frame_cnt    ) * sizeof( frames[0] ) +
-                    uint64( hdr->animation_cnt) * sizeof( animations[0] );
+    hdr->byte_cnt = uint64( 1                         ) * sizeof( hdr ) +
+                    uint64( hdr->obj_cnt              ) * sizeof( objects[0] ) +
+                    uint64( hdr->poly_cnt             ) * sizeof( polygons[0] ) +
+                    uint64( hdr->emissive_poly_cnt    ) * sizeof( emissive_polygons[0] ) +
+                    uint64( hdr->vtx_cnt              ) * sizeof( vertexes[0] ) +
+                    uint64( hdr->pos_cnt              ) * sizeof( positions[0] ) +
+                    uint64( hdr->norm_cnt             ) * sizeof( normals[0] ) +
+                    uint64( hdr->texcoord_cnt         ) * sizeof( texcoords[0] ) +
+                    uint64( hdr->mtl_cnt              ) * sizeof( materials[0] ) +
+                    uint64( hdr->tex_cnt              ) * sizeof( textures[0] ) +
+                    uint64( hdr->texel_cnt            ) * sizeof( texels[0] ) +
+                    uint64( hdr->char_cnt             ) * sizeof( strings[0] ) + 
+                    uint64( hdr->bvh_node_cnt         ) * sizeof( bvh_nodes[0] ) +
+                    uint64( hdr->matrix_cnt           ) * sizeof( matrixes[0] ) +
+                    uint64( hdr->inst_cnt             ) * sizeof( instances[0] ) +
+                    uint64( hdr->light_cnt            ) * sizeof( lights[0] ) +
+                    uint64( hdr->camera_cnt           ) * sizeof( cameras[0] ) +
+                    uint64( hdr->frame_cnt            ) * sizeof( frames[0] ) +
+                    uint64( hdr->animation_cnt        ) * sizeof( animations[0] );
 
     is_good = true;
 }
@@ -940,23 +942,24 @@ Model::Model( std::string model_path, bool is_compressed )
     }
     max = aligned_alloc<Header>( 1 );
     memcpy( max, hdr, sizeof( Header ) );
-    _read( strings,     char,          hdr->char_cnt );
-    _read( objects,     Object,        hdr->obj_cnt );
-    _read( polygons,    Polygon,       hdr->poly_cnt );
-    _read( vertexes,    Vertex,        hdr->vtx_cnt );
-    _read( positions,   real3,         hdr->pos_cnt );
-    _read( normals,     real3,         hdr->norm_cnt );
-    _read( texcoords,   real2,         hdr->texcoord_cnt );
-    _read( materials,   Material,      hdr->mtl_cnt );
-    _read( textures,    Texture,       hdr->tex_cnt );
-    _read( texels,      unsigned char, hdr->texel_cnt );
-    _read( bvh_nodes,   BVH_Node,      hdr->bvh_node_cnt );
-    _read( matrixes,    Matrix,        hdr->matrix_cnt );
-    _read( instances,   Instance,      hdr->inst_cnt );
-    _read( lights,      Light,         hdr->light_cnt );
-    _read( cameras,     Camera,        hdr->camera_cnt );
-    _read( frames,      Frame,         hdr->frame_cnt );
-    _read( animations,  Animation,     hdr->animation_cnt );
+    _read( strings,             char,          hdr->char_cnt );
+    _read( objects,             Object,        hdr->obj_cnt );
+    _read( polygons,            Polygon,       hdr->poly_cnt );
+    _read( emissive_polygons,   uint,          hdr->emissive_poly_cnt );
+    _read( vertexes,            Vertex,        hdr->vtx_cnt );
+    _read( positions,           real3,         hdr->pos_cnt );
+    _read( normals,             real3,         hdr->norm_cnt );
+    _read( texcoords,           real2,         hdr->texcoord_cnt );
+    _read( materials,           Material,      hdr->mtl_cnt );
+    _read( textures,            Texture,       hdr->tex_cnt );
+    _read( texels,              unsigned char, hdr->texel_cnt );
+    _read( bvh_nodes,           BVH_Node,      hdr->bvh_node_cnt );
+    _read( matrixes,            Matrix,        hdr->matrix_cnt );
+    _read( instances,           Instance,      hdr->inst_cnt );
+    _read( lights,              Light,         hdr->light_cnt );
+    _read( cameras,             Camera,        hdr->camera_cnt );
+    _read( frames,              Frame,         hdr->frame_cnt );
+    _read( animations,          Animation,     hdr->animation_cnt );
 
     gzclose( fd );
 
@@ -969,8 +972,10 @@ Model::~Model()
         delete mapped_region;
         mapped_region = nullptr;
     } else {
+        delete strings;
         delete objects;
         delete polygons;
+        delete emissive_polygons;
         delete vertexes;
         delete positions;
         delete normals;
@@ -978,8 +983,13 @@ Model::~Model()
         delete materials;
         delete textures;
         delete texels;
-        delete strings;
         delete bvh_nodes;
+        delete matrixes;
+        delete instances;
+        delete lights;
+        delete cameras;
+        delete frames;
+        delete animations;
     }
 }
 
@@ -1009,24 +1019,25 @@ bool Model::write( std::string model_path, bool is_compressed )
         } \
     } \
 
-    _write( hdr,         1                  * sizeof(hdr[0]) );
-    _write( strings,     hdr->char_cnt      * sizeof(strings[0]) );
-    _write( objects,     hdr->obj_cnt       * sizeof(objects[0]) );
-    _write( polygons,    hdr->poly_cnt      * sizeof(polygons[0]) );
-    _write( vertexes,    hdr->vtx_cnt       * sizeof(vertexes[0]) );
-    _write( positions,   hdr->pos_cnt       * sizeof(positions[0]) );
-    _write( normals,     hdr->norm_cnt      * sizeof(normals[0]) );
-    _write( texcoords,   hdr->texcoord_cnt  * sizeof(texcoords[0]) );
-    _write( materials,   hdr->mtl_cnt       * sizeof(materials[0]) );
-    _write( textures,    hdr->tex_cnt       * sizeof(textures[0]) );
-    _write( texels,      hdr->texel_cnt     * sizeof(texels[0]) );
-    _write( bvh_nodes,   hdr->bvh_node_cnt  * sizeof(bvh_nodes[0]) );
-    _write( matrixes,    hdr->matrix_cnt    * sizeof(matrixes[0]) );
-    _write( instances,   hdr->inst_cnt      * sizeof(instances[0]) );
-    _write( lights,      hdr->light_cnt     * sizeof(lights[0]) );
-    _write( cameras,     hdr->camera_cnt    * sizeof(cameras[0]) );
-    _write( frames,      hdr->frame_cnt     * sizeof(frames[0]) );
-    _write( animations,  hdr->animation_cnt * sizeof(animations[0]) );
+    _write( hdr,                1                       * sizeof(hdr[0]) );
+    _write( strings,            hdr->char_cnt           * sizeof(strings[0]) );
+    _write( objects,            hdr->obj_cnt            * sizeof(objects[0]) );
+    _write( polygons,           hdr->poly_cnt           * sizeof(polygons[0]) );
+    _write( emissive_polygons,  hdr->emissive_poly_cnt  * sizeof(emissive_polygons[0]) );
+    _write( vertexes,           hdr->vtx_cnt            * sizeof(vertexes[0]) );
+    _write( positions,          hdr->pos_cnt            * sizeof(positions[0]) );
+    _write( normals,            hdr->norm_cnt           * sizeof(normals[0]) );
+    _write( texcoords,          hdr->texcoord_cnt       * sizeof(texcoords[0]) );
+    _write( materials,   	hdr->mtl_cnt       	* sizeof(materials[0]) );
+    _write( textures,    	hdr->tex_cnt       	* sizeof(textures[0]) );
+    _write( texels,      	hdr->texel_cnt     	* sizeof(texels[0]) );
+    _write( bvh_nodes,   	hdr->bvh_node_cnt  	* sizeof(bvh_nodes[0]) );
+    _write( matrixes,    	hdr->matrix_cnt    	* sizeof(matrixes[0]) );
+    _write( instances,   	hdr->inst_cnt      	* sizeof(instances[0]) );
+    _write( lights,      	hdr->light_cnt     	* sizeof(lights[0]) );
+    _write( cameras,     	hdr->camera_cnt    	* sizeof(cameras[0]) );
+    _write( frames,      	hdr->frame_cnt     	* sizeof(frames[0]) );
+    _write( animations,  	hdr->animation_cnt 	* sizeof(animations[0]) );
 
     gzclose( fd );
     return true;
@@ -1095,24 +1106,25 @@ bool Model::write_uncompressed( std::string model_path )
         } \
     } \
 
-    _uwrite( hdr,         1                  * sizeof(hdr[0]) );
-    _uwrite( strings,     hdr->char_cnt      * sizeof(strings[0]) );
-    _uwrite( objects,     hdr->obj_cnt       * sizeof(objects[0]) );
-    _uwrite( polygons,    hdr->poly_cnt      * sizeof(polygons[0]) );
-    _uwrite( vertexes,    hdr->vtx_cnt       * sizeof(vertexes[0]) );
-    _uwrite( positions,   hdr->pos_cnt       * sizeof(positions[0]) );
-    _uwrite( normals,     hdr->norm_cnt      * sizeof(normals[0]) );
-    _uwrite( texcoords,   hdr->texcoord_cnt  * sizeof(texcoords[0]) );
-    _uwrite( materials,   hdr->mtl_cnt       * sizeof(materials[0]) );
-    _uwrite( textures,    hdr->tex_cnt       * sizeof(textures[0]) );
-    _uwrite( texels,      hdr->texel_cnt     * sizeof(texels[0]) );
-    _uwrite( bvh_nodes,   hdr->bvh_node_cnt  * sizeof(bvh_nodes[0]) );
-    _uwrite( matrixes,    hdr->matrix_cnt    * sizeof(matrixes[0]) );
-    _uwrite( instances,   hdr->inst_cnt      * sizeof(instances[0]) );
-    _uwrite( lights,      hdr->light_cnt     * sizeof(lights[0]) );
-    _uwrite( cameras,     hdr->camera_cnt    * sizeof(cameras[0]) );
-    _uwrite( frames,      hdr->frame_cnt     * sizeof(frames[0]) );
-    _uwrite( animations,  hdr->animation_cnt * sizeof(animations[0]) );
+    _uwrite( hdr,               1                       * sizeof(hdr[0]) );
+    _uwrite( strings,           hdr->char_cnt           * sizeof(strings[0]) );
+    _uwrite( objects,           hdr->obj_cnt            * sizeof(objects[0]) );
+    _uwrite( polygons,          hdr->poly_cnt           * sizeof(polygons[0]) );
+    _uwrite( emissive_polygons, hdr->emissive_poly_cnt  * sizeof(emissive_polygons[0]) );
+    _uwrite( vertexes,          hdr->vtx_cnt            * sizeof(vertexes[0]) );
+    _uwrite( positions,         hdr->pos_cnt            * sizeof(positions[0]) );
+    _uwrite( normals,           hdr->norm_cnt           * sizeof(normals[0]) );
+    _uwrite( texcoords,         hdr->texcoord_cnt       * sizeof(texcoords[0]) );
+    _uwrite( materials,   	hdr->mtl_cnt       	* sizeof(materials[0]) );
+    _uwrite( textures,    	hdr->tex_cnt       	* sizeof(textures[0]) );
+    _uwrite( texels,      	hdr->texel_cnt     	* sizeof(texels[0]) );
+    _uwrite( bvh_nodes,   	hdr->bvh_node_cnt  	* sizeof(bvh_nodes[0]) );
+    _uwrite( matrixes,    	hdr->matrix_cnt    	* sizeof(matrixes[0]) );
+    _uwrite( instances,   	hdr->inst_cnt      	* sizeof(instances[0]) );
+    _uwrite( lights,      	hdr->light_cnt     	* sizeof(lights[0]) );
+    _uwrite( cameras,     	hdr->camera_cnt    	* sizeof(cameras[0]) );
+    _uwrite( frames,      	hdr->frame_cnt     	* sizeof(frames[0]) );
+    _uwrite( animations,  	hdr->animation_cnt 	* sizeof(animations[0]) );
 
     fsync( fd ); // flush
     close( fd );
@@ -1157,23 +1169,24 @@ bool Model::read_uncompressed( std::string model_path )
     }
     max = aligned_alloc<Header>( 1 );
     memcpy( max, hdr, sizeof( Header ) );
-    _uread( strings,     char,          hdr->char_cnt );
-    _uread( objects,     Object,        hdr->obj_cnt );
-    _uread( polygons,    Polygon,       hdr->poly_cnt );
-    _uread( vertexes,    Vertex,        hdr->vtx_cnt );
-    _uread( positions,   real3,         hdr->pos_cnt );
-    _uread( normals,     real3,         hdr->norm_cnt );
-    _uread( texcoords,   real2,         hdr->texcoord_cnt );
-    _uread( materials,   Material,      hdr->mtl_cnt );
-    _uread( textures,    Texture,       hdr->tex_cnt );
-    _uread( texels,      unsigned char, hdr->texel_cnt );
-    _uread( bvh_nodes,   BVH_Node,      hdr->bvh_node_cnt );
-    _uread( matrixes,    Matrix,        hdr->matrix_cnt );
-    _uread( instances,   Instance,      hdr->inst_cnt );
-    _uread( lights,      Light,         hdr->light_cnt );
-    _uread( cameras,     Camera,        hdr->camera_cnt );
-    _uread( frames,      Frame,         hdr->frame_cnt );
-    _uread( animations,  Animation,     hdr->animation_cnt );
+    _uread( strings,             char,          hdr->char_cnt );
+    _uread( objects,             Object,        hdr->obj_cnt );
+    _uread( polygons,            Polygon,       hdr->poly_cnt );
+    _uread( emissive_polygons,   uint,          hdr->emissive_poly_cnt );
+    _uread( vertexes,            Vertex,        hdr->vtx_cnt );
+    _uread( positions,           real3,         hdr->pos_cnt );
+    _uread( normals,             real3,         hdr->norm_cnt );
+    _uread( texcoords,           real2,         hdr->texcoord_cnt );
+    _uread( materials,           Material,      hdr->mtl_cnt );
+    _uread( textures,            Texture,       hdr->tex_cnt );
+    _uread( texels,              unsigned char, hdr->texel_cnt );
+    _uread( bvh_nodes,           BVH_Node,      hdr->bvh_node_cnt );
+    _uread( matrixes,            Matrix,        hdr->matrix_cnt );
+    _uread( instances,           Instance,      hdr->inst_cnt );
+    _uread( lights,              Light,         hdr->light_cnt );
+    _uread( cameras,             Camera,        hdr->camera_cnt );
+    _uread( frames,              Frame,         hdr->frame_cnt );
+    _uread( animations,          Animation,     hdr->animation_cnt );
 
     is_good = true;
 
@@ -1182,9 +1195,6 @@ bool Model::read_uncompressed( std::string model_path )
 
 bool Model::load_fsc( std::string fsc_file, std::string dir_name )
 {
-    tone_key = 0.2;
-    tone_white = 3.0;
-    tex_specular_is_orm = false;
     (void)dir_name;
 
     //------------------------------------------------------------
@@ -1199,6 +1209,9 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
     //------------------------------------------------------------
     // Parse top dictionary.
     //------------------------------------------------------------
+    hdr->tone_key = 0.2;
+    hdr->tone_white = 3.0;
+    hdr->tex_specular_is_orm = false;
     if ( !expect_char( '{', fsc, fsc_end, true ) ) goto error;
     for( ;; )
     {
@@ -1275,13 +1288,13 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
                     if ( !parse_real3( hdr->background_color, fsc, fsc_end, true ) ) goto error;
 
                 } else if ( strcmp( field, "tone_white" ) == 0 ) {
-                    if ( !parse_real( tone_white, fsc, fsc_end, true ) ) goto error;
+                    if ( !parse_real( hdr->tone_white, fsc, fsc_end, true ) ) goto error;
 
                 } else if ( strcmp( field, "tone_key" ) == 0 ) {
-                    if ( !parse_real( tone_key, fsc, fsc_end, true ) ) goto error;
+                    if ( !parse_real( hdr->tone_key, fsc, fsc_end, true ) ) goto error;
 
                 } else if ( strcmp( field, "tex_specular_is_orm" ) == 0 ) {
-                    if ( !parse_bool( tex_specular_is_orm, fsc, fsc_end ) ) goto error;
+                    if ( !parse_bool( hdr->tex_specular_is_orm, fsc, fsc_end ) ) goto error;
 
                 } else {
                     fsc_assert( 0, "unexpected user_defined field '" + std::string(field) + "' in " + fsc_file );
@@ -2008,10 +2021,12 @@ bool Model::load_obj( std::string obj_file, std::string dir_name )
             case CMD_F:
             {
                 perhaps_realloc<Polygon>( polygons, hdr->poly_cnt, max->poly_cnt, 1 );
-                polygon = &polygons[ hdr->poly_cnt++ ];
+                uint poly_i = hdr->poly_cnt++;
+                polygon = &polygons[poly_i];
                 polygon->mtl_i = mtl_i;
                 polygon->vtx_cnt = 0;
                 polygon->vtx_i = hdr->vtx_cnt;
+
                 while( !eol( obj, obj_end ) ) 
                 {
                     polygon->vtx_cnt++;
@@ -2106,6 +2121,11 @@ bool Model::load_obj( std::string obj_file, std::string dir_name )
                     triangle->area = len / 2;
                     triangle->normal = triangle->normal / len;
                     if ( false && triangle_cnt > 1 ) std::cout << "    poly_i=" << first_poly_i+t << " " << *triangle << ": p0=" << p0 << " p1=" << p1 << " p2=" << p2 << "\n";
+
+                    if ( mtl_i != uint(-1) && materials[mtl_i].is_emissive() ) {
+                        perhaps_realloc<uint>( emissive_polygons, hdr->emissive_poly_cnt, max->emissive_poly_cnt, 1 );
+                        emissive_polygons[hdr->emissive_poly_cnt++] = first_poly_i + t;
+                    }
                 }
                 break;
             }
@@ -3141,6 +3161,25 @@ void Model::bvh_build( Model::BVH_TREE bvh_tree )
     if ( hdr->poly_cnt != 0 ) {
         assert( hdr->inst_cnt == 0 );
         hdr->bvh_root_i = bvh_node( true, 0, hdr->poly_cnt, 1 );
+
+        if ( hdr->emissive_poly_cnt != 0 ) {
+            // need to rebuild this due to changes in poly indexes
+            // should end up with the same number of emissive polys
+            //
+            uint epoly_cnt = 0;
+            for( uint i = 0; i < hdr->poly_cnt; i++ )
+            {
+                uint mtl_i = polygons[i].mtl_i;
+                if ( mtl_i != uint(-1) && materials[mtl_i].is_emissive() ) {
+                    emissive_polygons[epoly_cnt++] = i;
+                }
+            }
+            if ( epoly_cnt != hdr->emissive_poly_cnt ) {
+                std::cout << "ERROR: after BVH build, new emissive_poly_cnt=" << epoly_cnt << 
+                             " != old emissive_poly_cnt=" << hdr->emissive_poly_cnt << "\n";
+                exit( 1 );
+            }
+        }
     } else {
         assert( hdr->inst_cnt != 0 && hdr->poly_cnt == 0 );
         hdr->bvh_root_i = bvh_node( false, 0, hdr->inst_cnt, 1 );

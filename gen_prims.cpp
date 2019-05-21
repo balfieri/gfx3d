@@ -30,25 +30,26 @@ int main( int argc, const char * argv[] )
     Model * model = new Model( file_name, Model::MIPMAP_FILTER::BOX, Model::BVH_TREE::BINARY );
     if ( !model->is_good ) die( model->error_msg );
 
-    print( "char_cnt:       " + std::to_string( model->hdr->char_cnt ) );
-    print( "obj_cnt:        " + std::to_string( model->hdr->obj_cnt ) );
-    print( "poly_cnt:       " + std::to_string( model->hdr->poly_cnt ) );
-    print( "vtx_cnt:        " + std::to_string( model->hdr->vtx_cnt ) );
-    print( "pos_cnt:        " + std::to_string( model->hdr->pos_cnt ) );
-    print( "norm_cnt:       " + std::to_string( model->hdr->norm_cnt ) );
-    print( "texcoord_cnt:   " + std::to_string( model->hdr->texcoord_cnt ) );
-    print( "mtl_cnt:        " + std::to_string( model->hdr->mtl_cnt ) );
-    print( "tex_cnt:        " + std::to_string( model->hdr->tex_cnt ) );
-    print( "texel_cnt:      " + std::to_string( model->hdr->texel_cnt ) );
-    print( "bvh_node_cnt:   " + std::to_string( model->hdr->bvh_node_cnt ) );
-    print( "matrix_cnt:     " + std::to_string( model->hdr->matrix_cnt ) );
-    print( "inst_cnt:       " + std::to_string( model->hdr->inst_cnt ) );
-    print( "light_cnt:      " + std::to_string( model->hdr->light_cnt ) );
-    print( "camera_cnt:     " + std::to_string( model->hdr->camera_cnt ) );
-    print( "frame_cnt:      " + std::to_string( model->hdr->frame_cnt ) );
-    print( "animation_cnt:  " + std::to_string( model->hdr->animation_cnt ) );
+    print( "char_cnt:               " + std::to_string( model->hdr->char_cnt ) );
+    print( "obj_cnt:                " + std::to_string( model->hdr->obj_cnt ) );
+    print( "poly_cnt:               " + std::to_string( model->hdr->poly_cnt ) );
+    print( "emissive_poly_cnt:      " + std::to_string( model->hdr->emissive_poly_cnt ) );
+    print( "vtx_cnt:                " + std::to_string( model->hdr->vtx_cnt ) );
+    print( "pos_cnt:                " + std::to_string( model->hdr->pos_cnt ) );
+    print( "norm_cnt:               " + std::to_string( model->hdr->norm_cnt ) );
+    print( "texcoord_cnt:           " + std::to_string( model->hdr->texcoord_cnt ) );
+    print( "mtl_cnt:                " + std::to_string( model->hdr->mtl_cnt ) );
+    print( "tex_cnt:                " + std::to_string( model->hdr->tex_cnt ) );
+    print( "texel_cnt:              " + std::to_string( model->hdr->texel_cnt ) );
+    print( "bvh_node_cnt:           " + std::to_string( model->hdr->bvh_node_cnt ) );
+    print( "matrix_cnt:             " + std::to_string( model->hdr->matrix_cnt ) );
+    print( "inst_cnt:               " + std::to_string( model->hdr->inst_cnt ) );
+    print( "light_cnt:              " + std::to_string( model->hdr->light_cnt ) );
+    print( "camera_cnt:             " + std::to_string( model->hdr->camera_cnt ) );
+    print( "frame_cnt:              " + std::to_string( model->hdr->frame_cnt ) );
+    print( "animation_cnt:          " + std::to_string( model->hdr->animation_cnt ) );
     float mb_cnt = float(model->hdr->byte_cnt) / float(1024 * 1024);
-    print( "total_byte_cnt: " + std::to_string( model->hdr->byte_cnt ) + " (" + std::to_string( mb_cnt ) + " MB)" );
+    print( "total_byte_cnt:         " + std::to_string( model->hdr->byte_cnt ) + " (" + std::to_string( mb_cnt ) + " MB)" );
 
     // construct name of .model file 
     std::string dir_name;

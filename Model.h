@@ -140,7 +140,7 @@ public:
     public:
         real c[4];
         
-        real4( void ) {}
+        real4( void )                               { c[0] = 0;  c[1] = 0;  c[2] = 0;  c[3] = 0;  }
         real4( real c0, real c1, real c2, real c3 ) { c[0] = c0; c[1] = c1; c[2] = c2; c[3] = c3; }
 
         real   dot( const real4 &v2 ) const;
@@ -167,7 +167,7 @@ public:
     public:
         real c[3];
         
-        real3( void ) {}
+        real3( void )                      { c[0] = 0;  c[1] = 0;  c[2] = 0;  }
         real3( real c0, real c1, real c2 ) { c[0] = c0; c[1] = c1; c[2] = c2; }
 
         real   dot( const real3 &v2 ) const;
@@ -195,7 +195,7 @@ public:
     public:
         real c[2];
 
-        real2( void ) {}
+        real2( void )             { c[0] = 0;  c[1] = 0;  }
         real2( real c0, real c1 ) { c[0] = c0; c[1] = c1; }
 
         real   dot( const real2 &v2 ) const;

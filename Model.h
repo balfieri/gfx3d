@@ -391,6 +391,8 @@ public:
     public:
         real            m[4][4];
 
+        Matrix( void )          { identity(); }
+
         void   identity(  void );                       // make this the identity matrix
         void   translate( const real3& translation );   // translate this matrix by a real3
         void   scale(     const real3& scaling );       // scale this matrix by a real3
@@ -400,7 +402,8 @@ public:
 
         Matrix operator + ( const Matrix& m ) const;    // add two matrices
         Matrix operator - ( const Matrix& m ) const;    // subtract two matrices
-        void   multiply(    double s );                 // multiply this matrix by scalar
+        bool   operator == ( const Matrix& m ) const;   // return true if both matrices are equal
+        void   multiply( double s );                    // multiply this matrix by scalar
 
         real4  row( uint r ) const;                     // returns row r as a vector
         real4  column( uint c ) const;                  // returns column c as a vector
@@ -667,9 +670,30 @@ inline std::istream& operator >> ( std::istream& is, Model::real3& v )
     return is;
 }
 
+inline std::ostream& operator << ( std::ostream& os, const Model::real4& v ) 
+{
+    os << "[" << v.c[0] << "," << v.c[1] << "," << v.c[2] << "," << v.c[3] << "]";
+    return os;
+}
+
 inline std::ostream& operator << ( std::ostream& os, const Model::real3& v ) 
 {
     os << "[" << v.c[0] << "," << v.c[1] << "," << v.c[2] << "]";
+    return os;
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::real2& v ) 
+{
+    os << "[" << v.c[0] << "," << v.c[1] << "]";
+    return os;
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::Matrix& m ) 
+{
+    os << "[ [" << m.m[0][0] << "," << m.m[0][1] << "," << m.m[0][2] << "," << m.m[0][3] << "],\n" << 
+          "  [" << m.m[1][0] << "," << m.m[1][1] << "," << m.m[1][2] << "," << m.m[1][3] << "],\n" << 
+          "  [" << m.m[2][0] << "," << m.m[2][1] << "," << m.m[2][2] << "," << m.m[2][3] << "],\n" << 
+          "  [" << m.m[3][0] << "," << m.m[3][1] << "," << m.m[3][2] << "," << m.m[3][3] << "] ]\n";
     return os;
 }
 
@@ -3784,6 +3808,18 @@ inline Model::Matrix Model::Matrix::operator - ( const Matrix& m ) const
         }
     }
     return r;
+}
+
+inline bool Model::Matrix::operator == ( const Matrix& m ) const
+{
+    for( uint i = 0; i < 4; i++ )
+    {
+        for( uint j = 0; j < 4; j++ )
+        {
+            if ( this->m[i][j] != m.m[i][j] ) return false;
+        }
+    }
+    return true;
 }
 
 inline void Model::Matrix::multiply( double s ) 

@@ -408,7 +408,7 @@ public:
         real4  row( uint r ) const;                     // returns row r as a vector
         real4  column( uint c ) const;                  // returns column c as a vector
         void   transform( const real4& v, real4& r ) const; // r = *this * v
-        void   transform( const real3& v, real3& r, bool div_by_w=false ) const; // r = *this * v (and optional divide by w)
+        void   transform( const real3& v, real3& r, bool div_by_w=true ) const; // r = *this * v (and divide by w by default)
         void   transform( const Matrix& M2, Matrix& M3 ) const; // M3 = *this * M2
         void   transpose( Matrix& mt ) const;           // return the transpose this matrix 
         void   invert( Matrix& minv ) const;            // return the inversion this matrix
@@ -539,9 +539,8 @@ public:
     std::map<std::string, uint>    name_to_animation_i;
 
     // debug flags
-    static bool         debug_hit;
+    static bool         debug;
     static uint         debug_tex_i;
-
 
 
 
@@ -690,10 +689,10 @@ inline std::ostream& operator << ( std::ostream& os, const Model::real2& v )
 
 inline std::ostream& operator << ( std::ostream& os, const Model::Matrix& m ) 
 {
-    os << "[ [" << m.m[0][0] << "," << m.m[0][1] << "," << m.m[0][2] << "," << m.m[0][3] << "],\n" << 
-          "  [" << m.m[1][0] << "," << m.m[1][1] << "," << m.m[1][2] << "," << m.m[1][3] << "],\n" << 
-          "  [" << m.m[2][0] << "," << m.m[2][1] << "," << m.m[2][2] << "," << m.m[2][3] << "],\n" << 
-          "  [" << m.m[3][0] << "," << m.m[3][1] << "," << m.m[3][2] << "," << m.m[3][3] << "] ]\n";
+    os << "[ [" << m.m[0][0] << "," << m.m[0][1] << "," << m.m[0][2] << "," << m.m[0][3] << "]," << 
+          "  [" << m.m[1][0] << "," << m.m[1][1] << "," << m.m[1][2] << "," << m.m[1][3] << "]," << 
+          "  [" << m.m[2][0] << "," << m.m[2][1] << "," << m.m[2][2] << "," << m.m[2][3] << "]," << 
+          "  [" << m.m[3][0] << "," << m.m[3][1] << "," << m.m[3][2] << "," << m.m[3][3] << "] ]";
     return os;
 }
 
@@ -4091,7 +4090,8 @@ bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real p
     return true;
 }
 
-bool Model::debug_hit = false;
+bool Model::debug = false;
+#define mdout if (Model::debug) std::cout 
 
 inline void Model::AABB::pad( Model::real p ) 
 {
@@ -4131,6 +4131,7 @@ inline bool Model::AABB::encloses( const AABB& other ) const
 inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& direction, const Model::real3& direction_inv, 
                               Model::real tmin, Model::real tmax ) const 
 {
+    mdout << "Model::AABB::hit: " << *this << " tmin=" << tmin << " tmax=" << tmax << "\n";
     (void)direction;
     for( uint a = 0; a < 3; a++ ) 
     {
@@ -4139,8 +4140,12 @@ inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& di
         real v1 = (max.c[a] - origin.c[a]) * dir_inv;
         tmin = std::fmax( tmin, std::fmin( v0, v1 ) );
         tmax = std::fmin( tmax, std::fmax( v0, v1 ) );
+        mdout << "Model::AABB::hit:     " << a << ": min=" << min.c[a] << " max=" << max.c[a] << 
+                                   " dir_inv=" << dir_inv << " origin=" << origin.c[a] << 
+                                   " v0=" << v0 << " v1=" << v1 << " tmin=" << tmin << " tmax=" << tmax << "\n";
     }
     bool r = tmax >= std::fmax( tmin, real(0.0) );
+    mdout << "Model::AABB::hit: return=" << r << "\n";
     return r;
 }
 
@@ -4160,6 +4165,10 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
         // t = dot(corner - o, N) / dot(v,N)
         real d = direction.dot( normal );
         real t = (p0 - origin).dot( normal ) / d;
+        uint poly_i = this - model->polygons;
+        mdout << "Model::Polygon::hit: poly_i=" << poly_i << " origin=" << origin << 
+                                     " direction=" << direction << " direction_inv=" << direction_inv << " solid_angle=" << solid_angle <<
+                                     " d=" << d << " t=" << t << " t_min=" << t_min << " t_max=" << t_max << "\n";
         if ( t > t_min && t < t_max ) {
             // compute barycentrics, see if it's in triangle
             const real3& p1 = positions[vertexes[1].v_i];
@@ -4174,6 +4183,7 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
             real area_2x = area * 2.0;
             real beta    = area1/area_2x;
             real gamma   = area2/area_2x;
+            mdout << "Model::Polygon::hit: poly_i=" << poly_i << " beta=" << beta << " gamma=" << gamma << "\n";
             if ( beta >= 0.0 && gamma >= 0.0 && (beta + gamma) <= 1.0 ) {
                 real alpha = 1.0 - beta - gamma;
 
@@ -4198,7 +4208,7 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
                     v1 = 0.0;
                     v2 = 0.0;
                 }
-                hit_info.poly_i = this - model->polygons;
+                hit_info.poly_i = poly_i;
                 hit_info.t = t;
 
                 if ( vertexes[0].vn_i != uint(-1) ) {
@@ -4296,10 +4306,15 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
 
                 hit_info.model = model;
 
+                mdout << "Model::Polygon::hit: poly_i=" << poly_i << " HIT t=" << hit_info.t << 
+                         " p=" << hit_info.p << " normal=" << hit_info.normal << 
+                         " frac_uv_cov=" << hit_info.frac_uv_cov << 
+                         " u=" << hit_info.u << " v=" << hit_info.v << " mtl_i=" << mtl_i << "\n";
                 return true;
             }
         }
     }
+    mdout << "Model::Polygon::hit: NOT a hit, poly_i=" << (this - model->polygons) << "\n";
     return false;
 }
 
@@ -4314,6 +4329,7 @@ bool Model::Instance::bounding_box( const Model * model, AABB& b, real padding )
 bool Model::Instance::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
                            real solid_angle, real t_min, real t_max, HitInfo& hit_info )
 {
+    assert( sizeof(real) == 4 );
     assert( kind == INSTANCE_KIND::MODEL_PTR );
 
     //-----------------------------------------------------------
@@ -4326,6 +4342,9 @@ bool Model::Instance::hit( const Model * model, const real3& origin, const real3
     M_inv->transform( origin, t_origin );
     M_inv->transform( direction, t_direction );
     M_inv->transform( direction_inv, t_direction_inv );
+    mdout << "Model::Instance::hit: M_inv=" << *M_inv << 
+                                  " origin="   << origin   << " direction="   << direction   << " direction_inv="   << direction_inv << 
+                                  " t_origin=" << t_origin << " t_direction=" << t_direction << " t_direction_inv=" << t_direction_inv << "\n";
 
     BVH_Node * t_bvh = &t_model->bvh_nodes[t_model->hdr->bvh_root_i];
     if ( !t_bvh->hit( t_model, t_origin, t_direction, t_direction_inv, solid_angle, t_min, t_max, hit_info ) ) return false;
@@ -4355,6 +4374,8 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
                                   Model::real solid_angle, Model::real t_min, Model::real t_max, Model::HitInfo& hit_info ) const
 {
     bool r = false;
+    uint bvh_i = this - model->bvh_nodes;
+    mdout << "Model::BVH_Node::hit: bvh_i=" << bvh_i << "\n";
     if ( box.hit( origin, direction, direction_inv, t_min, t_max ) ) {
         HitInfo left_hit_info;
         HitInfo right_hit_info;
@@ -4379,6 +4400,7 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
             r = true;
         }
     }
+    mdout << "Model::BVH_Node::hit: bvh_i=" << bvh_i << " return=" << r << "\n";
     return r;
 }
 

@@ -27,7 +27,10 @@ int main( int argc, const char * argv[] )
         die( "usage: gen_prims <top_file>" );
     }
     std::cout << "Reading in " << file_name << "...\n";
-    Model * model = new Model( file_name, Model::MIPMAP_FILTER::BOX, Model::BVH_TREE::BINARY );
+    Model * model = new Model( file_name, 
+                               Model::MIPMAP_FILTER::BOX, 
+                               Model::TEXTURE_COMPRESSION::ASTC,
+                               Model::BVH_TREE::BINARY );
     if ( !model->is_good ) die( model->error_msg );
 
     print( "char_cnt:               " + std::to_string( model->hdr->char_cnt ) );

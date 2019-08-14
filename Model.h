@@ -50,7 +50,24 @@
 //        the number of texels in each level, so you'll need to compute those on the fly as you
 //        try to obtain the starting offset for a given level.
 //
-//     4) If you want Model to generate a BVH tree for you, add Model::BVH_TREE::BINARY as the third argument
+//     4) If you want Model to generate compressed textures for you, it will use ARM's astcenc to encode
+//        the textures using ASTC which is a modern, high-quality compression format that is often 10-20x smaller than uncompressed.
+//        You should pass in the original (ideally uncompressed) file name, e.g., image1.png, so that we can encode using the best
+//        version of the image.  Model will create files in the same directory as image1.png named 
+//        image1.astc for mip level 0 (finest), image1.1.astc for mip level 1, etc.  This way, if these
+//        files already exist, Model will not need to re-generate them, which can otherwise take quite a bit of time.
+//        Your .mtl files may also refer to .astc files for mip 0, which can be named image1.astc etc.
+//        In this case, Model will generate image1.1.astc, etc. for the other mip levels if they do not
+//        already exist.  It is better to let Model generate all mip levels from the original image file OR
+//        generate them all yourself so they are ready to go.  In practice, I have not confirmed that
+//        there's any noticeable difference.
+//
+//        Currently, Model uses a heuristic to pick the block size for each mip level.
+//        If you would like different block sizes for different textures or mip levels, then we can add
+//        an option or, for now, you can do your own texture filtering outside of Model and just be sure to name 
+//        your files image1.astc, image1.1.astc, etc. so that Model will see them and not regenerate them.
+//
+//     5) If you want Model to generate a BVH tree for you, add Model::BVH_TREE::BINARY as the third argument
 //        to the Model() constructor in (1) to get a binary BVH tree.  QUAD and OCT trees are not
 //        currently supported.
 //
@@ -65,9 +82,11 @@
 //     2) Read entire .obj file into memory (the o/s should effectively make this work like an mmap).
 //     3) Parse .obj file using custom parser that goes character-by-character and does its own number conversions. 
 //     4) Add elements to 1D arrays.  Load any .mtl file encounted in .obj file.  
-//     5) Optionally generate BVH tree.
-//     6) Write to  uncompressed file is fast because all structures are aligned on a page boundary in mem and in file.
-//     7) Read from uncompressed file is fast because all structures are aligned on a page boundary in mem and in file.
+//     5) Optionally generate mipmap textures.  
+//     6) Optionally compress textures.
+//     7) Optionally generate BVH tree.
+//     8) Write to  uncompressed file is fast because all structures are aligned on a page boundary in mem and in file.
+//     9) Read from uncompressed file is fast because all structures are aligned on a page boundary in mem and in file.
 //        The O/S will do the equivalent of an mmap() for each array.
 //
 // To Do:
@@ -82,9 +101,11 @@
 #include <cstdint>
 #include <string>
 #include <cmath>
+#include <cstdlib>
 #include <algorithm>
 #include <map>
 #include <iostream>
+#include <mutex>
 
 #include <errno.h>
 #include <stdlib.h>
@@ -98,6 +119,10 @@
 #ifndef STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+#endif
+#ifndef STB_IMAGE_WRITE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
 #endif
 
 class Model
@@ -114,14 +139,23 @@ public:
         BOX,                                // generate mipmap levels using simple box filter (average)
     };
 
+    enum class TEXTURE_COMPRESSION          // texture compression
+    {
+        NONE,                               // uncompressed
+        ASTC,                               // ASTC compression 
+    };
+
     enum class BVH_TREE
     {
         NONE,                               // do not generate BVH tree
         BINARY,                             // generate binary BVH tree
     };
 
-    Model( std::string top_file, MIPMAP_FILTER mipmap_filter=MIPMAP_FILTER::NONE, 
-                                 BVH_TREE bvh_tree=BVH_TREE::NONE, bool resolve_models=true );
+    Model( std::string top_file, 
+           MIPMAP_FILTER        mipmap_filter=MIPMAP_FILTER::NONE, 
+           TEXTURE_COMPRESSION  texture_compression=TEXTURE_COMPRESSION::NONE,
+           BVH_TREE             bvh_tree=BVH_TREE::NONE, 
+           bool                 resolve_models=true );
     Model( std::string model_file, bool is_compressed );
     ~Model(); 
 
@@ -260,6 +294,9 @@ public:
         uint64      frame_cnt;              // in frames array 
         uint64      animation_cnt;          // in animations array
         real        animation_speed;        // divide frame time by this to get real time (default: 1.0)
+
+        // move this up later
+        TEXTURE_COMPRESSION texture_compression; // NONE or ASTC used (individual textures are also marked)
     };
 
     class Object
@@ -356,13 +393,77 @@ public:
     {
     public:
         uint            name_i;             // index in strings array (null-terminated strings)
+      //TEXTURE_COMPRESSION compression;    // NONE or ASTC (for now, look in model structure)
         uint            width;              // level 0 width
         uint            height;             // level 0 height
         uint            nchan;              // number of channels (typically 3 or 4)
-        uint64          texel_i;            // index into texels array of first texel
+        uint64          texel_i;            // index into texels array of first texel (uncompressed) or ASTC header
         real            bump_multiplier;    // should be for bump maps only but also used with other textures
         real3           offset;             // uvw offset of texture map on surface (w is 0 for 2D textures)
         real3           scale;              // uvw scale  of texture map on surface (w is 0 for 2D textures)
+
+        real4           texel_read(              const Model * model, uint mip_level, uint64 ui, uint64 vi, 
+                                                 uint64 * vaddr=nullptr, uint64 * byte_cnt=nullptr ) const;
+        static void     astc_blk_dims_get( uint width, uint height, uint& blk_dim_x, uint& blk_dim_y );
+
+        // for ARM .astc files and our internal format
+        struct ASTC_Header                      
+        {
+            uint8_t magic[4];
+            uint8_t blockdim_x;
+            uint8_t blockdim_y;
+            uint8_t blockdim_z;
+            uint8_t xsize[3];                       // x-size = xsize[0] + xsize[1] + xsize[2]
+            uint8_t ysize[3];                       // x-size, y-size and z-size are given in texels;
+            uint8_t zsize[3];                       // block count is inferred
+
+            // utility functions
+            bool        magic_is_good( void ) const;
+            uint        size_x( void ) const;                 // width of texture etc.
+            uint        size_y( void ) const;
+            uint        size_z( void ) const;
+            uint        blk_cnt_x( void ) const;              
+            uint        blk_cnt_y( void ) const;
+            uint        blk_cnt_z( void ) const;
+            uint        blk_cnt( void ) const;                // including header block
+            uint        byte_cnt( void ) const;               // blk_cnt() * 16
+        };
+
+    private:
+        real4           texel_read_uncompressed( const Model * model, uint mip_level, uint64 ui, uint64 vi, 
+                                                 uint64 * vaddr=nullptr, uint64 * byte_cnt=nullptr ) const;
+        real4           texel_read_astc(         const Model * model, uint mip_level, uint64 ui, uint64 vi, 
+                                                 uint64 * vaddr=nullptr, uint64 * byte_cnt=nullptr ) const;
+
+        real4           astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, uint s, uint t, uint r ) const;
+        static void     astc_decode_block_mode( const unsigned char * bdata, unsigned char * rbdata, uint& plane_cnt, uint& partition_cnt, 
+                                                uint& weights_w, uint& weights_h, uint& weights_d, uint& R, uint& H );
+        static uint     astc_decode_partition( const unsigned char * bdata, uint x, uint y, uint z, uint partition_cnt, uint texel_cnt );
+        static void     astc_decode_color_endpoint_mode( const unsigned char * bdata, uint partition, uint partition_cnt, uint remaining_bit_cnt, uint cem_more_start,
+                                                         uint& cem, uint& trits, uint& quints, uint& bits, uint& endpoints_start );
+        static void     astc_decode_color_endpoints( const unsigned char * bdata, uint cem, uint trits, uint quints, uint bits, uint endpoints_start, 
+                                                     uint endpoints[4][2] );
+        static void     astc_decode_bit_transfer_signed( int& a, int& b );
+        static void     astc_decode_blue_contract( int& r, int& g, int& b, int& a );
+        static uint     astc_decode_clamp_unorm8( int v );
+        static uint     astc_decode_unquantize_color_endpoint( uint v, uint trits, uint quints, uint bits );
+        static void     astc_decode_weights( const unsigned char * rbdata, uint weights_start, uint plane_cnt,
+                                             uint Bs, uint Bt, uint Br, uint N, uint M, uint Q, uint s, uint t, uint r,
+                                             uint trits, uint quints, uint bits, 
+                                             uint plane_weights[2] );
+        static uint     astc_decode_unquantize_weight( uint v, uint trits, uint quints, uint bits );
+        static uint     astc_decode_integer( const unsigned char * bdata, uint start, uint i, uint trits, uint quints, uint bits );
+
+        struct ASTC_Range_Encoding
+        {
+            uint max;           // max value
+            uint trits;         // if 1, MSBs are trit-encoded
+            uint quints;        // if 1, MSBs are quint-encoded
+            uint bits;          // number of unshared LSBs for value
+        };
+
+        static const ASTC_Range_Encoding astc_weight_range_encodings[16];
+        static const ASTC_Range_Encoding astc_color_endpoint_range_encodings[11];
     };
 
     enum class BVH_NODE_KIND
@@ -614,7 +715,11 @@ private:
     bool load_mtl( std::string mtl_file, std::string dir_name, bool replacing=false );
     bool load_tex( const char * tex_name, std::string dir_name, Texture *& texture );
 
-    bool open_and_read( std::string file_name, char *& start, char *& end );
+    bool file_exists( std::string file_name );
+    bool file_read( std::string file_name, char *& start, char *& end );
+    void file_write( std::string file_name, const unsigned char * data, uint64_t byte_cnt );
+
+    void cmd( std::string c, std::string error="command failed");  // calls std::system and aborts if not success
 
     bool skip_whitespace_to_eol( char *& xxx, char *& xxx_end );  // on this line only
     bool skip_whitespace( char *& xxx, char *& xxx_end );
@@ -662,6 +767,7 @@ private:
 #define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << msg << "\n"; assert( false ); return false; }
 #define fsc_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << msg << "\n"; assert( false ); goto error;   }
 #define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << msg << "\n"; assert( false ); goto error;   }
+#define die_assert( bool, msg ) if ( !(bool) ) {                               std::cout << msg << "\n"; assert( false );               }
 
 inline std::istream& operator >> ( std::istream& is, Model::real3& v ) 
 {
@@ -753,7 +859,10 @@ inline std::ostream& operator << ( std::ostream& os, const Model::BVH_Node& bvh 
     return os;
 }
 
-Model::Model( std::string top_file, Model::MIPMAP_FILTER mipmap_filter, Model::BVH_TREE bvh_tree, bool resolve_models )
+Model::Model( std::string                top_file,      
+              Model::MIPMAP_FILTER       mipmap_filter, 
+              Model::TEXTURE_COMPRESSION texture_compression,
+              Model::BVH_TREE bvh_tree,  bool resolve_models )
 {
     is_good = false;
     error_msg = "<unknown error>";
@@ -769,6 +878,7 @@ Model::Model( std::string top_file, Model::MIPMAP_FILTER mipmap_filter, Model::B
     hdr->norm_cnt = 1;
     hdr->texcoord_cnt = 1;
     hdr->mipmap_filter = mipmap_filter;
+    hdr->texture_compression = texture_compression;
     hdr->lighting_scale = 1.0;
     hdr->ambient_intensity = real3( 0.1, 0.1, 0.1 );
     hdr->sky_box_tex_i = uint(-1);
@@ -947,7 +1057,6 @@ Model::Model( std::string model_path, bool is_compressed )
             if ( array == nullptr ) { \
                 gzclose( fd ); \
                 error_msg = "could not allocate " #array " array"; \
-                assert( 0 ); \
                 return; \
             } \
             char * _addr = reinterpret_cast<char *>( array ); \
@@ -958,7 +1067,6 @@ Model::Model( std::string model_path, bool is_compressed )
                 if ( gzread( fd, _addr, _this_byte_cnt ) <= 0 ) { \
                     gzclose( fd ); \
                     error_msg = "could not gzread() file " + model_path + " - gzread() error: " + strerror( errno ); \
-                    assert( 0 ); \
                     return; \
                 } \
                 _byte_cnt -= _this_byte_cnt; \
@@ -971,7 +1079,7 @@ Model::Model( std::string model_path, bool is_compressed )
         gzclose( fd );
         error_msg = "hdr->version does not match current VERSION " + std::to_string(VERSION) + ", got " + std::to_string(hdr->version) + 
                     "; please re-generate (or re-download) your .model files"; 
-        assert( 0 ); \
+        die_assert( false, "aborting..." ); 
         return;
     }
     max = aligned_alloc<Header>( 1 );
@@ -1100,7 +1208,6 @@ inline void Model::perhaps_realloc( T *& array, const Model::uint64& hdr_cnt, Mo
         uint64 old_max_cnt = max_cnt;
         max_cnt *= 2;
         if ( max_cnt < old_max_cnt ) {
-            assert( old_max_cnt != uint(-1) );
             max_cnt = uint(-1);
         }
         posix_memalign( &mem, getpagesize(), max_cnt*sizeof(T) );
@@ -1176,7 +1283,7 @@ bool Model::read_uncompressed( std::string model_path )
 {
     char * start;
     char * end;
-    if ( !open_and_read( model_path, start, end ) ) return false;
+    if ( !file_read( model_path, start, end ) ) return false;
     mapped_region = start;
 
     //------------------------------------------------------------
@@ -1237,7 +1344,7 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
     line_num = 1;
     fsc = nullptr;
     uint initial_camera_name_i = uint(-1);
-    if ( !open_and_read( fsc_file, fsc_start, fsc_end ) ) goto error;
+    if ( !file_read( fsc_file, fsc_start, fsc_end ) ) goto error;
     fsc = fsc_start;
 
     //------------------------------------------------------------
@@ -1978,7 +2085,7 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
 
     error:
         error_msg += " (at line " + std::to_string( line_num ) + " of " + fsc_file + ")";
-        assert( 0 );
+        die_assert( false, "aborting..." );
         return false;
 }
 
@@ -1990,7 +2097,7 @@ bool Model::load_obj( std::string obj_file, std::string dir_name )
     // Map in .obj file
     //------------------------------------------------------------
     line_num = 1;
-    if ( !open_and_read( obj_file, obj_start, obj_end ) ) return false;
+    if ( !file_read( obj_file, obj_start, obj_end ) ) return false;
     obj = obj_start;
 
     //------------------------------------------------------------
@@ -2190,7 +2297,7 @@ bool Model::load_obj( std::string obj_file, std::string dir_name )
     }
     error:
         error_msg += " (at line " + std::to_string( line_num ) + " of " + obj_file + ")";
-        assert( 0 );
+        die_assert( false, "aborting..." );
         return false;
 }
 
@@ -2202,7 +2309,7 @@ bool Model::load_mtl( std::string mtl_file, std::string dir_name, bool replacing
     char * mtl;
     char * mtl_end;
     if ( dir_name != std::string( "" ) ) mtl_file = dir_name + "/" + mtl_file;
-    if ( !open_and_read( mtl_file, mtl, mtl_end ) ) return false;
+    if ( !file_read( mtl_file, mtl, mtl_end ) ) return false;
 
     //------------------------------------------------------------
     // Parse .mtl file contents
@@ -2399,8 +2506,9 @@ uint Model::debug_tex_i = 1; // uint(-1);
 
 bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Texture *& texture )
 {
-    // allocate Texture structure
-    //
+    //---------------------------------------------
+    // Allocate Texture structure
+    //---------------------------------------------
     perhaps_realloc<Texture>( textures, hdr->tex_cnt, max->tex_cnt, 1 );
     uint tex_i = hdr->tex_cnt++;
     texture = &textures[tex_i];
@@ -2408,8 +2516,9 @@ bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Textur
     texture->name_i = tex_name - strings;
     name_to_tex_i[ tex_name ] = tex_i;
 
-    // change any '\' to '/'
-    //
+    //---------------------------------------------
+    // Change any '\' to '/'
+    //---------------------------------------------
     std::string tex_name_s = std::string( tex_name );
     if ( dir_name != "" ) tex_name_s = dir_name + "/" + tex_name_s;
     char * file_name = strdup( tex_name_s.c_str() );
@@ -2419,81 +2528,217 @@ bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Textur
         if ( file_name[i] == '\\' ) file_name[i] = '/';
     }
 
-    // read file using stb_image.h
-    //
-    int    w;
-    int    h;
-    int    nchan;
-    unsigned char * data = stbi_load( file_name, &w, &h, &nchan, 0 );
-    rtn_assert( data != nullptr, "unable to read in texture file " + std::string( file_name ) );
-    texture->width  = w;
-    texture->height = h;
-    texture->nchan  = nchan;
-    texture->texel_i = hdr->texel_cnt;
-    uint width      = texture->width;
-    uint height     = texture->height;
-    uint byte_width = width * texture->nchan;
-    uint byte_cnt   = byte_width * height;
-    perhaps_realloc<unsigned char>( texels, hdr->texel_cnt, max->texel_cnt, byte_cnt );
-    hdr->texel_cnt += byte_cnt;
-    memcpy( texels + texture->texel_i, data, byte_cnt );
-    delete data;
+    //---------------------------------------------
+    // Dissect the path so we can replace the extension.
+    //---------------------------------------------
+    std::string base_name;
+    std::string ext_name;
+    dissect_path( file_name, dir_name, base_name, ext_name );
 
-    // if requested, generate mipmap levels down to 1x1
-    //
-    uint prior_byte_cnt = 0;
-    while( hdr->mipmap_filter != MIPMAP_FILTER::NONE && !(width == 1 && height == 1) )
+    //---------------------------------------------
+    // There are three possible regimes:
+    // 1) read non-ASTC file for miplevel 0, generate other miplevels, keep uncompressed
+    // 2) read non-ASTC file for miplevel 0, generate other miplevels, 
+    //    write out uncompressed file, compress to ASTC using ARM's astcenc program,
+    //    read back in .astc file.  In this case, we need to keep uncompressed
+    //    texels in a separate buffer.
+    // 3) read ASTC file for each miplevel.  All must exist.
+    //---------------------------------------------
+    std::string astc_name = dir_name + "/" + base_name + ".astc";
+    bool        astc_file_exists     = file_exists( astc_name );
+    bool        in_uncompressed_mode = hdr->texture_compression == TEXTURE_COMPRESSION::NONE;
+    bool        in_astc_gen_mode     = !astc_file_exists && hdr->texture_compression == TEXTURE_COMPRESSION::ASTC;
+    bool        in_astc_read_mode    =  astc_file_exists && hdr->texture_compression == TEXTURE_COMPRESSION::ASTC;
+
+    unsigned char * data = nullptr;
+    uint width = 0;
+    uint height = 0;
+    uint byte_width = 0;
+    uint byte_cnt = 0;
+    for( uint mipmap_level = 0; ; mipmap_level++ )
     {
-        uint to_width  = width  >> 1;
-        uint to_height = height >> 1;
-        if ( to_width  == 0 ) to_width  = 1;
-        if ( to_height == 0 ) to_height = 1;
+        if ( !in_astc_read_mode ) {
+            if ( mipmap_level == 0 ) {
+                //---------------------------------------------
+                // READ NON-ASTC FILE FOR MIP 0
+                //---------------------------------------------
+                int    w;
+                int    h;
+                int    nchan;
+                data = stbi_load( file_name, &w, &h, &nchan, 0 );
+                rtn_assert( data != nullptr, "unable to read in texture file " + std::string( file_name ) );
+                texture->width  = w;
+                texture->height = h;
+                texture->nchan  = nchan;
+                texture->texel_i = hdr->texel_cnt;
+                width      = texture->width;
+                height     = texture->height;
+                byte_width = width * texture->nchan;
+                byte_cnt   = byte_width * height;
 
-        uint   to_byte_width = to_width * texture->nchan;
-        uint   to_byte_cnt   = to_byte_width * to_height;
-        perhaps_realloc<unsigned char>( texels, hdr->texel_cnt, max->texel_cnt, to_byte_cnt );
-        hdr->texel_cnt += to_byte_cnt;
+            } else if ( mipmap_level != 0 && !in_astc_read_mode ) {
+                //---------------------------------------------
+                // GENERATE UNCOMPRESSED TEXELS FOR THIS MIP LEVEL
+                //
+                // To keep this simple, we create a new buffer, 
+                // then copy it back to texels[] later if we're in_uncompressed_mode.
+                //---------------------------------------------
+                uint to_width  = width  >> 1;
+                uint to_height = height >> 1;
+                if ( to_width  == 0 ) to_width  = 1;
+                if ( to_height == 0 ) to_height = 1;
 
-        unsigned char * rgb  = texels + texture->texel_i + prior_byte_cnt;  // must do this after realloc
-        unsigned char * trgb = rgb + byte_cnt;
-
-        for( uint ti = 0; ti < to_height; ti++ )
-        {
-            for( uint tj = 0; tj < to_width; tj++, trgb += texture->nchan )
-            {
-                uint sum[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
-                uint cnt = 0;
-                for( uint fi = 0; fi < 2; fi++ )
+                uint   to_byte_width = to_width * texture->nchan;
+                uint   to_byte_cnt   = to_byte_width * to_height;
+                unsigned char * to_data = aligned_alloc<unsigned char>( to_byte_cnt );
+                unsigned char * trgb = to_data;
+                for( uint ti = 0; ti < to_height; ti++ )
                 {
-                    uint fii = ti*2 + fi;
-                    if ( fii >= height ) continue;
-                    for( uint fj = 0; fj < 2; fj++ )
+                    for( uint tj = 0; tj < to_width; tj++, trgb += texture->nchan )
                     {
-                        uint fjj = tj*2 + fj;
-                        if ( fjj >= width ) continue;
-                        unsigned char * frgb = rgb + fii*byte_width + fjj*texture->nchan;
+                        uint sum[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+                        uint cnt = 0;
+                        for( uint fi = 0; fi < 2; fi++ )
+                        {
+                            uint fii = ti*2 + fi;
+                            if ( fii >= height ) continue;
+                            for( uint fj = 0; fj < 2; fj++ )
+                            {
+                                uint fjj = tj*2 + fj;
+                                if ( fjj >= width ) continue;
+                                unsigned char * frgb = data + fii*byte_width + fjj*texture->nchan;
+                                for( uint c = 0; c < texture->nchan; c++ )
+                                {
+                                    sum[c] += frgb[c];
+                                }
+                                cnt++;
+                            }
+                        }
+
                         for( uint c = 0; c < texture->nchan; c++ )
                         {
-                            sum[c] += frgb[c];
+                            trgb[c] = (real(sum[c]) + 0.5) / real(cnt);
                         }
-                        cnt++;
                     }
                 }
+                delete data;
 
-                for( uint c = 0; c < texture->nchan; c++ )
-                {
-                    trgb[c] = (real(sum[c]) + 0.5) / real(cnt);
-                }
+                height          = to_height;
+                width           = to_width;
+                byte_width      = to_byte_width;
+                byte_cnt        = to_byte_cnt;
+                data            = to_data;
             }
+
+        } else if ( mipmap_level != 0 ) {
+            //---------------------------------------------
+            // Update width and height.
+            //---------------------------------------------
+            if ( width  != 1 ) width  >>= 1;
+            if ( height != 1 ) height >>= 1;
         }
 
-        prior_byte_cnt += byte_cnt;
-        height          = to_height;
-        width           = to_width;
-        byte_width      = to_byte_width;
-        byte_cnt        = to_byte_cnt;
-    }
+        if ( in_uncompressed_mode ) {
+            //---------------------------------------------
+            // SAVE UNCOMPRESSED TEXELS
+            //
+            // For consistency, keep the data buffer for mipmap generation in the next pass.
+            //---------------------------------------------
+            perhaps_realloc<unsigned char>( texels, hdr->texel_cnt, max->texel_cnt, byte_cnt );
+            hdr->texel_cnt += byte_cnt;
+            memcpy( texels + texture->texel_i, data, byte_cnt );
 
+        } else if ( in_astc_gen_mode ) {
+            //---------------------------------------------
+            // WRITE OUT UNCOMPRESSED TEXELS AND CREATE ASTC FILE
+            //
+            // Write out temporary .BMP file, then 
+            // use ARM's astcenc program to compress the texels.
+            // It must be on the current PATH.
+            //---------------------------------------------
+            int mypid = getpid();
+            std::string bmp_name = dir_name + "/" + base_name + "." + std::to_string(mipmap_level) + 
+                                   "." + std::to_string(mypid) + ".bmp";
+            if ( !stbi_write_bmp( bmp_name.c_str(), width, height, texture->nchan, data ) ) {
+                die_assert( false, "could not write out temporary BMP file " + bmp_name );    
+            }
+
+            std::string suff = (mipmap_level == 0) ? "" : ("." + std::to_string(mipmap_level));
+            std::string astc_name = dir_name + "/" + base_name + suff + ".astc";
+            uint        dim_x;
+            uint        dim_y;
+            Texture::astc_blk_dims_get( width, height, dim_x, dim_y ); // chooses some default
+            cmd( "astcenc -c '" + bmp_name + "' '" + astc_name + "' " + std::to_string(dim_x) + "x" + std::to_string(dim_y) + " -exhaustive > /dev/null" );
+            cmd( "rm -f '" + bmp_name + "'" );
+            die_assert( file_exists( astc_name ), "weird, ASTC file " + astc_name + " did not get created by astcenc" );
+        } 
+
+        if ( in_astc_gen_mode || in_astc_read_mode ) {
+            //---------------------------------------------
+            // READ ASTC FILE 
+            //
+            // It should exist at this point.
+            //---------------------------------------------
+            std::string suff = (mipmap_level == 0) ? "" : ("." + std::to_string(mipmap_level));
+            astc_name = dir_name + "/" + base_name + suff + ".astc";
+            die_assert( file_exists( astc_name ), "ASTC file " + astc_name + " does not exist for miplevel " + 
+                                                  std::to_string(mipmap_level) + "; delete them all and try again" );
+            char * start;
+            char * end;
+            if ( !file_read( astc_name, start, end ) ) {
+                die_assert( false, "unable to read ASTC file for miplevel " + std::to_string(mipmap_level) + " even though file exists: " + astc_name );
+            }
+            unsigned char * astc_data = reinterpret_cast<unsigned char *>( start );
+            uint astc_byte_cnt = end - start;
+
+            //---------------------------------------------
+            // We assume ARM .astc file format where there is a 16B header block 
+            // with the following format.  Little endian.
+            //---------------------------------------------
+            die_assert( astc_byte_cnt >= 32, "ASTC file " + astc_name + " does not have at least 32 bytes (header + one block)" );
+            die_assert( (astc_byte_cnt % 16) == 0, "ASTC file " + astc_name + " does not have a multiple of 16 bytes" );
+
+            const Texture::ASTC_Header * astc_hdr = reinterpret_cast<const Texture::ASTC_Header *>( astc_data );
+            die_assert( astc_hdr->magic_is_good(), "ASTC file " + astc_name + " header magic number is not expected value" );
+            die_assert( astc_hdr->blockdim_z == 1, "ASTC file " + astc_name + " uses 3D textures which are currently unsuported" );
+            uint w = (astc_hdr->xsize[0] << 0) | (astc_hdr->xsize[1] << 8) | (astc_hdr->xsize[2] << 16);
+            uint h = (astc_hdr->ysize[0] << 0) | (astc_hdr->ysize[1] << 8) | (astc_hdr->ysize[2] << 16);
+            uint d = (astc_hdr->zsize[0] << 0) | (astc_hdr->zsize[1] << 8) | (astc_hdr->zsize[2] << 16);
+            die_assert( d == 1, "ASTC file " + astc_name + " uses 3D textures which are currently unsupported" );
+            if ( mipmap_level == 0 ) {
+                texture->width  = w;
+                texture->height = h;
+                texture->nchan  = 4;
+                width  = w;
+                height = h;
+            } else {
+                die_assert( w == width,  "unexpected width in ASTC file " + astc_name );
+                die_assert( h == height, "unexpected height in ASTC file " + astc_name );
+            }
+            uint64_t x_blk_cnt = (w + astc_hdr->blockdim_x - 1) / astc_hdr->blockdim_x;
+            uint64_t y_blk_cnt = (h + astc_hdr->blockdim_y - 1) / astc_hdr->blockdim_y;
+            uint64_t file_blk_cnt = astc_byte_cnt/16 - 1;
+            die_assert( file_blk_cnt == (x_blk_cnt * y_blk_cnt), "ASTC file " + astc_name + " does not have the expected number of blocks" );
+
+            //---------------------------------------------
+            // Use the same header to keep aligned to 16B.
+            // We memcpy() the entire file - as is - to our texels[] space,
+            // aligning on 16B boundary.
+            //---------------------------------------------
+            hdr->texel_cnt += ((hdr->texel_cnt % 16) == 0) ? 0 : (16 - (hdr->texel_cnt % 16)); // align should be safe
+            texture->texel_i = hdr->texel_cnt;
+            perhaps_realloc<unsigned char>( texels, hdr->texel_cnt, max->texel_cnt, astc_byte_cnt );
+            hdr->texel_cnt += astc_byte_cnt;
+            memcpy( texels + texture->texel_i, astc_data, astc_byte_cnt );
+            delete astc_data;
+        }
+
+        //---------------------------------------------
+        // Stop if not generating mip levels > 0 or we've just done the 1x1 level.
+        //---------------------------------------------
+        if ( hdr->mipmap_filter == MIPMAP_FILTER::NONE || (width == 1 && height == 1) ) break;
+    } 
+    if ( data != nullptr ) delete data;
     return true;
 }
 
@@ -2533,11 +2778,17 @@ void Model::dissect_path( std::string path, std::string& dir_name, std::string& 
     if ( pos >= 0 ) dir_name = path.substr( 0, pos+1 );
 }
 
-bool Model::open_and_read( std::string file_path, char *& start, char *& end )
+bool Model::file_exists( std::string file_path )
+{
+    struct stat ss;
+    return stat( file_path.c_str(), &ss ) == 0;
+}
+
+bool Model::file_read( std::string file_path, char *& start, char *& end )
 {
     const char * fname = file_path.c_str();
     int fd = open( fname, O_RDONLY );
-    if ( fd < 0 ) std::cout << "open_and_read() error reading " << file_path << ": " << strerror( errno ) << "\n";
+    if ( fd < 0 ) std::cout << "file_read() error reading " << file_path << ": " << strerror( errno ) << "\n";
     rtn_assert( fd >= 0, "could not open file " + file_path + " - open() error: " + strerror( errno ) );
 
     struct stat file_stat;
@@ -2563,13 +2814,41 @@ bool Model::open_and_read( std::string file_path, char *& start, char *& end )
         if ( size < _this_size ) _this_size = size;
         if ( ::read( fd, addr, _this_size ) <= 0 ) {
             close( fd );
-            rtn_assert( 0, "could not read() file " + std::string(fname) + " - read error: " + std::string( strerror( errno ) ) );
+            rtn_assert( 0, "could not read() file " + std::string(fname) + " - read error: " + strerror( errno ) );
         }
         size -= _this_size;
         addr += _this_size;
     }
     close( fd );
     return true;
+}
+
+void Model::file_write( std::string file_path, const unsigned char * data, uint64_t byte_cnt )
+{
+    cmd( "rm -f '" + file_path + "'" );
+
+    int fd = open( file_path.c_str(), O_WRONLY|O_CREAT );
+    die_assert( fd >= 0, "file_write() error opening " + file_path + " for writing: " + strerror( errno ) );
+
+    while( byte_cnt != 0 ) 
+    {
+        size_t _this_byte_cnt = 1024*1024*1024;
+        if ( byte_cnt < _this_byte_cnt ) _this_byte_cnt = byte_cnt;
+        if ( ::write( fd, data, _this_byte_cnt ) <= 0 ) {
+            close( fd );
+            die_assert( 0, "could not write() file " + file_path + ": " + strerror( errno ) );
+        }
+        byte_cnt -= _this_byte_cnt;
+        data     += _this_byte_cnt;
+    }
+    close( fd );
+    cmd( "chmod +rw " + file_path );
+}
+
+void Model::cmd( std::string c, std::string error )
+{
+    std::cout << c << "\n";
+    if ( std::system( c.c_str() ) != 0 ) die_assert( false, "ERROR: " + error + ": " + c );
 }
 
 inline bool Model::skip_whitespace( char *& xxx, char *& xxx_end )
@@ -3194,7 +3473,7 @@ void Model::bvh_build( Model::BVH_TREE bvh_tree )
 {
     (void)bvh_tree;
     if ( hdr->poly_cnt != 0 ) {
-        assert( hdr->inst_cnt == 0 );
+        die_assert( hdr->inst_cnt == 0, "inst_cnt should be 0" );
         hdr->bvh_root_i = bvh_node( true, 0, hdr->poly_cnt, 1 );
 
         if ( hdr->emissive_poly_cnt != 0 ) {
@@ -3216,7 +3495,7 @@ void Model::bvh_build( Model::BVH_TREE bvh_tree )
             }
         }
     } else {
-        assert( hdr->inst_cnt != 0 && hdr->poly_cnt == 0 );
+        die_assert( hdr->inst_cnt != 0 && hdr->poly_cnt == 0, "poly_cnt should be 0" );
         hdr->bvh_root_i = bvh_node( false, 0, hdr->inst_cnt, 1 );
     }
 }
@@ -3244,7 +3523,7 @@ inline Model::uint Model::bvh_qsplit( bool for_polys, Model::uint first, Model::
        }
     }
 
-    assert( m >= first && m <= (first+n)  );
+    die_assert( m >= first && m <= (first+n), "qsplit has gone mad" );
     if ( m == first || m == (first +n) ) m = first + n/2;
     return m;
 }
@@ -3283,14 +3562,14 @@ Model::uint Model::bvh_node( bool for_polys, Model::uint first, Model::uint n, M
             node->right_kind = Model::BVH_NODE_KIND::INSTANCE;
             instances[first+0].bounding_box( this, new_box );
         }
-        assert( node->box.encloses( new_box ) );
+        die_assert( node->box.encloses( new_box ), "box should enclose new_box" );
         if ( n == 2 ) {
             if ( for_polys ) {
                 polygons[first+1].bounding_box( this, new_box );
             } else {
                 instances[first+1].bounding_box( this, new_box );
             }
-            assert( node->box.encloses( new_box ) );
+            die_assert( node->box.encloses( new_box ), "box should enclose new_box" );
             node->right_i = first + 1;
         } else {
             node->right_i = first;
@@ -3307,7 +3586,7 @@ Model::uint Model::bvh_node( bool for_polys, Model::uint first, Model::uint n, M
         node = &bvh_nodes[bvh_i];  // could change after previous calls
         node->left_i  = left_i;
         node->right_i = right_i;
-        assert( node->box.encloses( bvh_nodes[left_i].box ) && node->box.encloses( bvh_nodes[right_i].box ) );
+        die_assert( node->box.encloses( bvh_nodes[left_i].box ) && node->box.encloses( bvh_nodes[right_i].box ), "box does not enclose left and right boxes" );
     }
 
     return bvh_i;
@@ -4093,6 +4372,1237 @@ bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real p
 bool Model::debug = false;
 #define mdout if (Model::debug) std::cout 
 
+inline Model::real4 Model::Texture::texel_read( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt ) const
+{
+    TEXTURE_COMPRESSION compression = TEXTURE_COMPRESSION::NONE;  // TODO: temporary
+    switch( compression )
+    {
+        case TEXTURE_COMPRESSION::NONE:         return texel_read_uncompressed( model, mip_level, ui, vi, vaddr, byte_cnt );
+        case TEXTURE_COMPRESSION::ASTC:         return texel_read_astc(         model, mip_level, ui, vi, vaddr, byte_cnt );
+        default:
+        {
+            std::cout << "ERROR: unexpected texture compression: " << int(compression) << "\n";
+            die_assert( false, "aborting..." );
+            return real4( 0, 0, 0, 0 );
+        }
+    }
+}
+
+inline Model::real4 Model::Texture::texel_read_uncompressed( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt ) const
+{
+    const unsigned char * mdata = &model->texels[texel_i];
+    uint mw = width;
+    uint mh = height;
+    if ( model->hdr->mipmap_filter != MIPMAP_FILTER::NONE ) {
+        // find the beginning of the proper mip texture 
+        for( _int imip_level = mip_level; imip_level > 0 && !(mw == 1 && mh == 1); imip_level-- ) 
+        {
+            mdata += nchan * mw * mh;
+            if ( mw != 1 ) mw >>= 1;
+            if ( mh != 1 ) mh >>= 1;
+        }
+    }
+
+    uint64_t toffset = nchan*ui + nchan*mw*vi;
+
+    if (vaddr != nullptr)    *vaddr = reinterpret_cast<uint64_t>( &mdata[toffset] );
+    if (byte_cnt != nullptr) *byte_cnt = 3;
+
+    real r =                 real(mdata[toffset+0]) / 255.0;
+    real g = (nchan > 2)  ? (real(mdata[toffset+1]) / 255.0) : r;
+    real b = (nchan > 2)  ? (real(mdata[toffset+2]) / 255.0) : r;
+    real a = (nchan > 3)  ? (real(mdata[toffset+3]) / 255.0) : 
+             (nchan == 2) ? (real(mdata[toffset+1]) / 255.0) : 1.0;
+    return real4( r, g, b, a );
+}
+
+inline Model::real4 Model::Texture::texel_read_astc( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt ) const
+{
+    //---------------------------------------------------------------
+    // Each mipmap level has its own ASTC_Header and thus potential block footprint.
+    // Find the beginning of the appropriate mip texture data.
+    // All blocks are 16B, but texels represented can differ.
+    //---------------------------------------------------------------
+    const ASTC_Header * astc_hdr = reinterpret_cast<const ASTC_Header *>( &model->texels[texel_i] );
+    uint mw = width;
+    uint mh = height;
+    uint bw = astc_hdr->blk_cnt_x();
+    if ( model->hdr->mipmap_filter != MIPMAP_FILTER::NONE ) {
+        for( _int imip_level = mip_level; imip_level > 0 && !(mw == 1 && mh == 1); imip_level-- ) 
+        {
+            die_assert( astc_hdr->magic_is_good(), "ASTC header is corrupted - bad magic number" );
+            die_assert( astc_hdr->size_x() == mw,  "ASTC header is corrupted - bad width" );
+            die_assert( astc_hdr->size_y() == mh,  "ASTC header is corrupted - bad height" );
+            die_assert( astc_hdr->size_z() == 1,   "ASTC header is corrupted - depth != 1" );
+
+            if ( mw != 1 ) mw >>= 1;
+            if ( mh != 1 ) mh >>= 1;
+            astc_hdr += astc_hdr->blk_cnt();
+        }
+    }
+    const unsigned char * bdata = reinterpret_cast<const unsigned char *>( astc_hdr+1 );
+
+    //---------------------------------------------------------------
+    // Find block x,y and offsets within block.
+    // Find block data.
+    //---------------------------------------------------------------
+    uint bx = ui / astc_hdr->blockdim_x;
+    uint by = vi / astc_hdr->blockdim_y;
+    uint s  = ui - bx*astc_hdr->blockdim_x;
+    uint t  = vi - by*astc_hdr->blockdim_y;
+    uint r  = 1;
+    bdata += 16 * (bx + by*bw);
+
+    //---------------------------------------------------------------
+    // Decode ASTC texel at [s,t,r] within the block.
+    //---------------------------------------------------------------
+    real4 rgba = astc_decode( bdata, astc_hdr, s, t, r );
+
+    //---------------------------------------------------------------
+    // Return texel and other info.
+    //---------------------------------------------------------------
+    if ( vaddr != nullptr )     *vaddr = reinterpret_cast<uint64_t>( bdata );
+    if ( byte_cnt != nullptr )  *byte_cnt = 16;
+    return rgba;
+}
+
+const Model::Texture::ASTC_Range_Encoding Model::Texture::astc_weight_range_encodings[16] = 
+{
+    // H=0
+    {  0, 0, 0, 0 },    // invalid
+    {  0, 0, 0, 0 },    // invalid
+    {  1, 0, 0, 0 },    
+    {  2, 1, 0, 0 },
+    {  3, 0, 0, 2 },
+    {  4, 0, 1, 0 },
+    {  5, 1, 0, 1 },
+    {  7, 0, 0, 3 },
+
+    // H=1
+    {  0, 0, 0, 0 },    // invalid
+    {  0, 0, 0, 0 },    // invalid
+    {  9, 0, 1, 1 },    
+    { 11, 1, 0, 2 },
+    { 15, 0, 0, 4 },
+    { 19, 0, 1, 2 },
+    { 23, 1, 0, 3 },
+    { 31, 0, 0, 5 },
+};
+
+const Model::Texture::ASTC_Range_Encoding Model::Texture::astc_color_endpoint_range_encodings[11] = 
+{
+    {  5, 1, 0, 1 },    
+    {  9, 0, 1, 1 },
+    { 11, 1, 0, 2 },
+    { 19, 0, 1, 2 },
+    { 23, 1, 0, 3 },
+    { 39, 0, 1, 3 },
+    { 47, 1, 0, 4 },
+    { 79, 0, 1, 4 },
+    { 95, 1, 0, 5 },
+    {159, 0, 1, 5 },
+    {191, 1, 0, 6 },
+};
+
+static inline uint64_t _astc_bits( const unsigned char * bdata, uint start, uint len ) 
+{
+    // extract bits from 128 bits
+    uint64_t bits_lo = *reinterpret_cast<const uint64_t *>( bdata+0 );
+    uint64_t bits_hi = *reinterpret_cast<const uint64_t *>( bdata+4 );
+    uint64_t bits = bits_lo >> start;
+    if ( (start+len) <= 64 ) {
+        // lo only
+        bits &= (1ULL << len) - 1ULL;
+    } else if ( start < 64 ) {
+        // mixed
+        uint64_t lower_len = 64 - start;
+        uint64_t upper_len = len - lower_len;
+        uint64_t upper     = bits_hi & ((1ULL << upper_len)-1);
+        bits |= upper << lower_len;
+    } else {
+        // hi only
+        bits = (bits_hi >> (start-64)) & ((1ULL << len)-1);
+    }
+    return bits;
+}
+
+inline void Model::Texture::astc_blk_dims_get( uint width, uint height, uint& blk_dim_x, uint& blk_dim_y )
+{
+    //---------------------------------------------------------------
+    // Always choose squares for now using max(width, height).
+    // Algorithm here is arbitrary.
+    //---------------------------------------------------------------
+    uint dim = std::max( width, height );
+         if ( dim >= 2048 )     blk_dim_x = 12;
+    else if ( dim >=  512 )     blk_dim_x = 10;
+    else if ( dim >=  256 )     blk_dim_x =  8;
+    else if ( dim >=   64 )     blk_dim_x =  6;
+    else if ( dim >=   32 )     blk_dim_x =  5;
+    else                        blk_dim_x =  4;
+    blk_dim_y = blk_dim_x;
+}
+
+#define _bits(  start, len ) _astc_bits( bdata,  start, len )
+#define _rbits( start, len ) _astc_bits( rbdata, start, len )
+
+inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, uint s, uint t, uint r ) const
+{
+    //---------------------------------------------------------------
+    // Determine if void-extent.
+    //---------------------------------------------------------------
+    real4 rgba;
+    if ( _bits(0, 9) == 0b111111100 ) {
+        //---------------------------------------------------------------
+        // VOID EXTENT CASE
+        //
+        // Color bits are [127:64].
+        // Return constant color.
+        //---------------------------------------------------------------
+        bool is_all_ones = (_bits(0, 64) & 0xFFFFFFFFFFFFFDFFULL) == 0xFFFFFFFFFFFFFDFCULL;
+        for( uint c = 0; c < 4; c++ )
+        {
+            uint C = is_all_ones ? ((1 << 13) - 1) : _bits(64 + 16*c, 16);
+            rgba.c[c] = (C == 65535) ? 1.0 : real(C) / real(1 << 16);
+        }
+        return rgba;
+    }
+
+    //---------------------------------------------------------------
+    // NORMAL CASE
+    //
+    // Refer to the ASTC Specification 1.0, which we follow here.
+    // rbdata == reversal of 128 bdata bits so that we can easily traverse from other end.
+    // plane_cnt == 1 + D bit from spec
+    // partition_cnt
+    // See Table 11 for block mode.
+    //---------------------------------------------------------------
+    uint texel_cnt = astc_hdr->blockdim_x * astc_hdr->blockdim_y * astc_hdr->blockdim_z;
+    unsigned char rbdata[16];
+    uint plane_cnt;
+    uint partition_cnt;
+    uint weights_w;  // M
+    uint weights_h;  // N
+    uint weights_d;  // Q
+    uint R; // R = range encoding
+    uint H; // H = high-precision?
+
+    astc_decode_block_mode( bdata, rbdata, plane_cnt, partition_cnt, weights_w, weights_h, weights_d, R, H );
+
+    uint plane_weights_cnt = weights_w * weights_h * weights_d;  // per-plane
+    uint weights_cnt = plane_weights_cnt * plane_cnt;            // total
+
+    //---------------------------------------------------------------
+    // Use H and R to determine max weight, and weight trits, quints, and bits.
+    // See Table 11.
+    // We use our own table for this decode.
+    //---------------------------------------------------------------
+    die_assert( R >= 2, "ASTC: bad R range encoding" );
+    R |= H << 3;
+    const ASTC_Range_Encoding& enc = astc_weight_range_encodings[R];
+    uint weight_max    = enc.max;
+    uint weight_trits  = enc.trits;
+    uint weight_quints = enc.quints;
+    uint weight_bits   = enc.bits;
+
+    //---------------------------------------------------------------
+    // See section 3.16.
+    // Calculate sizes of config, weights, and CEM parts of blocks.
+    // This layout can be confusing.
+    //---------------------------------------------------------------
+    uint config_bit_cnt; // includes block mode, partition info, and CEM
+    if ( partition_cnt == 1 ) {
+        config_bit_cnt = 17;
+    } else {
+        uint cem_classes_cnt = _bits(23, 2);
+        if ( cem_classes_cnt == 0 ) {
+            // all partitions have same CEM
+            config_bit_cnt = 29;
+        } else {
+            config_bit_cnt = 24 + 3*partition_cnt;
+        }
+    }
+    config_bit_cnt += 2*(plane_cnt-1);
+
+    uint weights_bit_cnt = (weights_cnt*8*weight_trits  + 4) / 5 +
+                           (weights_cnt*7*weight_quints + 2) / 3 + 
+                           (weights_cnt*1*weight_bits   + 0) / 1;
+
+    uint remaining_bit_cnt = 128 - config_bit_cnt - weights_bit_cnt;
+    uint weights_start     = 0;  // bit 127, but we count down
+    uint cem_more_start    = weights_bit_cnt - 8;  // see Table 7 and Table 15
+
+    //---------------------------------------------------------------
+    // Decode partition for our texel.
+    //---------------------------------------------------------------
+    uint partition = astc_decode_partition( bdata, s, t, r, partition_cnt, texel_cnt );
+
+    //---------------------------------------------------------------
+    // Determine the Color Endpoint Mode (CEM) for our partition.
+    // See Table 13 and 14.
+    // Also determine the number of trits, quints, and bits,
+    // factoring in the remaining_bit_cnt.
+    // See Table 15 and section 3.7.
+    //---------------------------------------------------------------
+    uint cem;
+    uint cem_trits;
+    uint cem_quints;
+    uint cem_bits;
+    uint color_endpoints_start;
+    astc_decode_color_endpoint_mode( bdata, partition_cnt, partition, remaining_bit_cnt, cem_more_start, cem, cem_trits, cem_quints, cem_bits, color_endpoints_start );
+
+    //---------------------------------------------------------------
+    // Decode the endpoints for our partition.
+    //---------------------------------------------------------------
+    uint color_endpoints[4][2];
+    astc_decode_color_endpoints( bdata, cem, cem_trits, cem_quints, cem_bits, color_endpoints_start, color_endpoints );
+
+    //---------------------------------------------------------------
+    // If dual-plane, find which channel is the dual-plane one.
+    // There can be only one.
+    //---------------------------------------------------------------
+    uint plane1_chan = 0;
+    if ( plane_cnt == 2 ) {
+        uint plane1_chan_start = weights_start + weights_bit_cnt;
+        die_assert( plane1_chan_start < 127, "ASTC bad plane1_chan_start" );
+        plane1_chan = _rbits(plane1_chan_start, 2); 
+    }
+
+    //---------------------------------------------------------------
+    // Get 1 or 2 plane weights.
+    //---------------------------------------------------------------
+    uint plane_weights[2];
+    astc_decode_weights( rbdata, weights_start, plane_cnt, 
+                         astc_hdr->blockdim_x, astc_hdr->blockdim_y, astc_hdr->blockdim_z,
+                         weights_w, weights_h, weights_d,
+                         s, t, r,
+                         weight_trits, weight_quints, weight_bits, plane_weights );
+
+    //---------------------------------------------------------------
+    // See section 3.13.
+    // Apply weights to color endpoints.
+    // Assume non-sRGB for now.
+    //---------------------------------------------------------------
+    for( uint c = 0; c < 4; c++ )
+    {
+        uint pi = (plane_cnt == 2 && plane1_chan == c) ? 1 : 0;
+        uint w  = plane_weights[pi];
+
+        uint C0 = (color_endpoints[c][0] << 8) | color_endpoints[c][0];
+        uint C1 = (color_endpoints[c][1] << 8) | color_endpoints[c][1];
+        uint C = (C0*(64-w) + C1*w + 32) / 64;
+        rgba.c[c] = (C == 65535) ? 1.0 : real(C) / real(1 << 16);
+    }
+    return rgba;
+}
+
+inline void Model::Texture::astc_decode_block_mode( const unsigned char * bdata, unsigned char * rbdata, 
+                                                    uint& plane_cnt, uint& partition_cnt, 
+                                                    uint& weights_w, uint& weights_h, uint& weights_d, 
+                                                    uint& R, uint& H )
+{
+    //---------------------------------------------------------------
+    // Refer to the ASTC Specification 1.0, which we follow here.
+    // First reverse bdata bits to make it easier to traverse from the other end.
+    // plane_cnt == 1 + D bit from spec
+    // partition_cnt
+    // See Table 11 for block mode.
+    //---------------------------------------------------------------
+    for( uint i = 0; i < 16; i++ )
+    {
+        unsigned char b = bdata[15-i];
+        b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;  // reverse bits in this byte
+        b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+        b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+        rbdata[i] = b;
+    }
+
+    plane_cnt     = 1 + _bits(10, 1);    // hammered to 0 below for A6_B6 mode 
+    partition_cnt = _bits(11, 2) + 1;
+
+    uint a = _bits(5, 2);  
+    uint b = _bits(7, 2); 
+    R = _bits(4, 1);
+    H = _bits(9, 1);  // high-precision?
+    weights_d = 1;
+    if ( _bits(0, 2) != 0 ) {
+        // first 5 rows in table 11
+        R |= _bits(0, 2) << 1;      
+        uint mode_bits = _bits(2, 2);
+        if ( mode_bits == 0 ) {
+            // B4_A2
+            weights_w = b + 4;
+            weights_h = a + 2;
+        
+        } else if ( mode_bits == 1 ) {
+            // B8_A2
+            weights_w = b + 8;
+            weights_h = a + 2;
+
+        } else if ( mode_bits == 2 ) {
+            // A2_B8
+            weights_w = a + 2;
+            weights_h = b + 8;
+
+        } else if ( _bits(8, 1) ) {
+            // B2_A2
+            weights_w = (b&1) + 2;
+            weights_h = a + 2;
+
+        } else {
+            // A2_B6
+            weights_w = a + 2;
+            weights_h = (b&1) + 6;
+        }
+    } else {
+        // second 5 rows in table 11
+        R |= _bits(2, 2) << 1;
+        uint mode_bits = _bits(5, 4);
+        if ( (mode_bits & 0xc) == 0 ) {
+            // 12_A2
+            die_assert( _bits(0, 4) != 0, "bad ASTC block mode" );
+            weights_w = 12;
+            weights_h = a + 2;
+        } else if ( (mode_bits & 0xc) == 4 ) {
+            // A2_12
+            weights_w = a + 2;
+            weights_h = 12;
+        } else if ( (mode_bits & 0xc) == 4 ) {
+            // 6_10
+            weights_w = 6;
+            weights_h = 10;
+        } else if ( mode_bits == 0xd ) {
+            // 10_6
+            weights_w = 10;
+            weights_h = 6;
+        } else if ( (mode_bits & 0xc) == 8 ) {
+            // A6_B6
+            b = _bits(9, 2); 
+            plane_cnt = 1;
+            H = 0;
+            weights_w = a + 6;
+            weights_h = b + 6;
+        } else {
+            // illegal
+            die_assert( false, "illegal ASTC block mode" );
+            weights_w = 0;
+            weights_h = 0;
+        }
+    }
+
+    die_assert( plane_cnt == 1 || partition_cnt <= 3, "ASTC: dual-plane mode must have no more than 3 partitions" );
+}
+
+inline uint Model::Texture::astc_decode_partition( const unsigned char * bdata, uint s, uint t, uint r, uint partition_cnt, uint texel_cnt )
+{
+    //---------------------------------------------------------------
+    // See section 3.15.
+    //---------------------------------------------------------------
+    if ( partition_cnt <= 1 ) return 0;
+
+    uint seed = _bits(13, 10);
+
+    if ( texel_cnt < 31 ) {
+        s <<= 1;
+        t <<= 1;
+        r <<= 1;
+    }
+
+    seed += (partition_cnt - 1) * 1024;
+
+    // hash52 inlined here:
+    uint32_t rnum = seed;
+    rnum ^= rnum >> 15;
+    rnum -= rnum << 17;
+    rnum += rnum << 7;
+    rnum += rnum << 4;
+    rnum ^= rnum >> 5;
+    rnum += rnum << 16;
+    rnum ^= rnum >> 7;
+    rnum ^= rnum >> 3;
+    rnum ^= rnum << 6;
+    rnum ^= rnum >> 17;
+
+    uint8_t seed1 = rnum & 0xF;
+    uint8_t seed2 = (rnum >> 4) & 0xF;
+    uint8_t seed3 = (rnum >> 8) & 0xF;
+    uint8_t seed4 = (rnum >> 12) & 0xF;
+    uint8_t seed5 = (rnum >> 16) & 0xF;
+    uint8_t seed6 = (rnum >> 20) & 0xF;
+    uint8_t seed7 = (rnum >> 24) & 0xF;
+    uint8_t seed8 = (rnum >> 28) & 0xF;
+    uint8_t seed9 = (rnum >> 18) & 0xF;
+    uint8_t seed10 = (rnum >> 22) & 0xF;
+    uint8_t seed11 = (rnum >> 26) & 0xF;
+    uint8_t seed12 = ((rnum >> 30) | (rnum << 2)) & 0xF;
+
+    seed1 *= seed1;
+    seed2 *= seed2;
+    seed3 *= seed3;
+    seed4 *= seed4;
+    seed5 *= seed5;
+    seed6 *= seed6;
+    seed7 *= seed7;
+    seed8 *= seed8;
+    seed9 *= seed9;
+    seed10 *= seed10;
+    seed11 *= seed11;
+    seed12 *= seed12;
+
+    uint sh1, sh2, sh3;
+    if ( seed & 1 ) {
+      sh1 = (seed & 2 ? 4 : 5);
+      sh2 = (partition_cnt == 3 ? 6 : 5);
+    } else {
+      sh1 = (partition_cnt == 3 ? 6 : 5);
+      sh2 = (seed & 2 ? 4 : 5);
+    }
+    sh3 = (seed & 0x10) ? sh1 : sh2;
+
+    seed1 >>= sh1;
+    seed2 >>= sh2;
+    seed3 >>= sh1;
+    seed4 >>= sh2;
+    seed5 >>= sh1;
+    seed6 >>= sh2;
+    seed7 >>= sh1;
+    seed8 >>= sh2;
+    seed9 >>= sh3;
+    seed10 >>= sh3;
+    seed11 >>= sh3;
+    seed12 >>= sh3;
+
+    uint a = seed1 * s + seed2 * t + seed11 * r + (rnum >> 14);
+    uint b = seed3 * s + seed4 * t + seed12 * r + (rnum >> 10);
+    uint c = seed5 * s + seed6 * t + seed9  * r + (rnum >> 06);
+    uint d = seed7 * s + seed8 * t + seed10 * r + (rnum >> 02);
+
+    a &= 0x3F;
+    b &= 0x3F;
+    c &= 0x3F;
+    d &= 0x3F;
+
+    if ( partition_cnt <= 3 ) d = 0;
+    if ( partition_cnt <= 2 ) c = 0;
+
+    if ( a >= b && a >= c && a >= d ) {
+        return 0;
+    } else if ( b >= c && b >= d ) {
+        return 1;
+    } else if ( c >= d ) {
+        return 2;
+    } else {
+        return 3;
+    }
+}
+
+inline void Model::Texture::astc_decode_color_endpoint_mode( const unsigned char * bdata, uint partition, uint partition_cnt, uint remaining_bit_cnt, uint cem_more_start,
+                                                             uint& cem, uint& trits, uint& quints, uint& bits, uint& endpoints_start )
+{
+    //---------------------------------------------------------------
+    // Determine the Color Endpoint Mode (CEM) only for our partition.
+    // See Tables 13, 14, and 15.
+    //---------------------------------------------------------------
+    uint cem_pairs_cnt = 1;
+    endpoints_start = 0; 
+    if ( partition_cnt == 1 ) {
+        //---------------------------------------------------------------
+        // One partition, so one set of CEM
+        //---------------------------------------------------------------
+        cem = _bits(13, 4);
+    } else {
+        uint cem_selector = _bits(23, 2);
+        if ( cem_selector == 0 ) {
+            //---------------------------------------------------------------
+            // All partitions have same CEM.
+            //---------------------------------------------------------------
+            cem = _bits( 25, 4 );
+        } else {
+            //---------------------------------------------------------------
+            // See Table 15.
+            // C class selectors start at bit 25.
+            // M = low two bits of CEM and has a variable location
+            //     depending on the number of partitions.
+            //     cem_more_start points to 8 bits just below weights.
+            //---------------------------------------------------------------
+            uint c = (_bits( 25, 4 ) >> partition) & 1;
+
+            // get all M as one value, then select the 2 bits for partition
+            uint m_all;
+            if ( partition_cnt == 2 ) {
+                m_all = _bits( 27, 2 ) | (_bits( cem_more_start+6, 2 ) << 2);
+                cem_pairs_cnt = 2;
+            } else if ( partition_cnt == 3 ) {
+                m_all = _bits( 28, 1 ) | (_bits( cem_more_start+3, 5 ) << 1);
+                cem_pairs_cnt = 3;
+            } else {
+                m_all = _bits( cem_more_start, 8 );
+                cem_pairs_cnt = 4;
+            }
+            cem = (m_all >> (2*partition)) & 0x3;
+        }
+    }
+
+    //---------------------------------------------------------------
+    // See section 3.16.
+    // This is the trickiest part of ASTC.
+    // We need to figure out the number of trits, quints, and bits for the CEM.
+    //---------------------------------------------------------------
+    uint cem_values_cnt = cem_pairs_cnt*2;
+    const uint astc_color_endpoint_range_encodings_cnt = sizeof(Model::Texture::astc_color_endpoint_range_encodings) / 
+                                                         sizeof(Model::Texture::astc_color_endpoint_range_encodings[0]);
+    for( int i = astc_color_endpoint_range_encodings_cnt-1; i >= 0; i-- )
+    {
+        const ASTC_Range_Encoding& enc = astc_color_endpoint_range_encodings[i];
+        uint cem_bit_cnt = (cem_values_cnt*8*enc.trits  + 4) / 5 +
+                           (cem_values_cnt*7*enc.quints + 2) / 3 + 
+                           (cem_values_cnt*1*enc.bits   + 0) / 1;
+        if ( cem_bit_cnt <= remaining_bit_cnt ) {
+            trits  = enc.trits;
+            quints = enc.quints;
+            bits   = enc.bits;
+            return;
+        }
+    }
+
+    die_assert( false, "ASTC could not find CEM range encoding that fits in remaining bits" );
+}
+
+inline void Model::Texture::astc_decode_color_endpoints( const unsigned char * bdata, uint cem, uint trits, uint quints, uint bits, uint endpoints_start,
+                                                         uint endpoints[4][2] )
+{
+    //---------------------------------------------------------------
+    // See Section 3.8 and table 20.
+    // 
+    // Read the unquantized v0, v1, etc. values.
+    // Keep them around as signed values.
+    //---------------------------------------------------------------
+    uint v_cnt = (cem <= 3) ? 2 : (cem <= 6) ? 4 : (cem <= 11) ? 6 : 8;
+    int  v[8];
+    for( uint i = 0; i < v_cnt; i++ )
+    {
+        //---------------------------------------------------------------
+        // Read quantized value.
+        // Unquantize it.
+        //---------------------------------------------------------------
+        uint qv = astc_decode_integer( bdata, endpoints_start, i, trits, quints, bits );
+        v[i] = astc_decode_unquantize_color_endpoint( qv, trits, quints, bits );
+    }
+
+    //---------------------------------------------------------------
+    // Now use those values according to the CEM.
+    // Not supporting HDR right now.
+    //---------------------------------------------------------------
+    switch( cem )
+    {
+        case 0:
+        {
+            endpoints[0][0] = v[0];
+            endpoints[0][1] = v[1];
+            endpoints[1][0] = v[0];
+            endpoints[1][1] = v[1];
+            endpoints[2][0] = v[0];
+            endpoints[2][1] = v[1];
+            endpoints[3][0] = 0xff;
+            endpoints[3][1] = 0xff;
+            break;
+        }
+
+        case 1:
+        {
+            uint L0 = (v[0] >> 2) | (v[1] & 0xc0);
+            uint L1 = L0 + (v[1] & 0x3f);
+            if ( L1 > 0xff ) L1 = 0xff;
+            endpoints[0][0] = L0;
+            endpoints[0][1] = L1;
+            endpoints[1][0] = L0;
+            endpoints[1][1] = L1;
+            endpoints[2][0] = L0;
+            endpoints[2][1] = L1;
+            endpoints[3][0] = 0xff;
+            endpoints[3][1] = 0xff;
+            break;
+        }
+           
+        case 4:
+        {
+            endpoints[0][0] = v[0];
+            endpoints[0][1] = v[1];
+            endpoints[1][0] = v[0];
+            endpoints[1][1] = v[1];
+            endpoints[2][0] = v[0];
+            endpoints[2][1] = v[1];
+            endpoints[3][0] = v[2];
+            endpoints[3][1] = v[3];
+            break;
+        }
+
+        case 5:
+        {
+            astc_decode_bit_transfer_signed( v[1], v[0] );
+            astc_decode_bit_transfer_signed( v[3], v[2] );
+            endpoints[0][0] = astc_decode_clamp_unorm8( v[0] );
+            endpoints[0][1] = astc_decode_clamp_unorm8( v[0] + v[1] );
+            endpoints[1][0] = endpoints[0][0];
+            endpoints[1][1] = endpoints[0][1];
+            endpoints[2][0] = endpoints[0][0];
+            endpoints[2][1] = endpoints[0][1];
+            endpoints[3][0] = astc_decode_clamp_unorm8( v[2] );
+            endpoints[3][1] = astc_decode_clamp_unorm8( v[2] + v[3] );
+            break;
+        }
+
+        case 6:
+        {
+            endpoints[0][0] = (v[0]*v[3]) >> 8;
+            endpoints[0][1] = v[0];
+            endpoints[1][0] = (v[1]*v[3]) >> 8;
+            endpoints[1][1] = v[1];
+            endpoints[2][0] = (v[2]*v[3]) >> 8;
+            endpoints[2][1] = v[2];
+            endpoints[3][0] = 0xff;
+            endpoints[3][1] = 0xff;
+            break;
+        }
+
+        case 8:
+        {
+            int s0 = v[0] + v[2] + v[4];
+            int s1 = v[1] + v[3] + v[5];
+            if ( s1 >= s0 ) {
+                endpoints[0][0] = astc_decode_clamp_unorm8( v[0] );
+                endpoints[0][1] = astc_decode_clamp_unorm8( v[1] );
+                endpoints[1][0] = astc_decode_clamp_unorm8( v[2] );
+                endpoints[1][1] = astc_decode_clamp_unorm8( v[3] );
+                endpoints[2][0] = astc_decode_clamp_unorm8( v[4] );
+                endpoints[2][1] = astc_decode_clamp_unorm8( v[5] );
+                endpoints[3][0] = 0xff;
+                endpoints[3][1] = 0xff;
+            } else {
+                int a = 0xff;
+                astc_decode_blue_contract( v[1], v[3], v[5], a );
+                endpoints[0][0] = astc_decode_clamp_unorm8( v[1] );
+                endpoints[1][0] = astc_decode_clamp_unorm8( v[3] );
+                endpoints[2][0] = astc_decode_clamp_unorm8( v[5] );
+                endpoints[3][0] = a;
+
+                a = 0xff;
+                astc_decode_blue_contract( v[0], v[2], v[4], a );
+                endpoints[0][0] = astc_decode_clamp_unorm8( v[0] );
+                endpoints[1][0] = astc_decode_clamp_unorm8( v[2] );
+                endpoints[2][0] = astc_decode_clamp_unorm8( v[4] );
+                endpoints[3][0] = a;
+            }
+            break;
+        }
+
+        case 9:
+        {
+            astc_decode_bit_transfer_signed( v[1], v[0] );
+            astc_decode_bit_transfer_signed( v[3], v[2] );
+            astc_decode_bit_transfer_signed( v[5], v[4] );
+            int r = v[0] + v[1];
+            int g = v[2] + v[3];
+            int b = v[4] + v[5];
+            int a = 0xff;
+            endpoints[3][0] = a;
+            endpoints[3][1] = a;
+            if ( (v[1] + v[3] + v[5]) >= 0 ) {
+                endpoints[0][0] = astc_decode_clamp_unorm8( v[0] );
+                endpoints[1][0] = astc_decode_clamp_unorm8( v[2] );
+                endpoints[2][0] = astc_decode_clamp_unorm8( v[4] );
+                endpoints[0][1] = astc_decode_clamp_unorm8( r );
+                endpoints[1][1] = astc_decode_clamp_unorm8( g );
+                endpoints[2][1] = astc_decode_clamp_unorm8( b );
+            } else {
+                astc_decode_blue_contract( r, g, b, a );
+                endpoints[0][0] = astc_decode_clamp_unorm8( r );
+                endpoints[1][0] = astc_decode_clamp_unorm8( g );
+                endpoints[2][0] = astc_decode_clamp_unorm8( b );
+
+                r = v[0];
+                g = v[2];
+                b = v[4];
+                astc_decode_blue_contract( r, g, b, a );
+                endpoints[0][1] = astc_decode_clamp_unorm8( r );
+                endpoints[1][1] = astc_decode_clamp_unorm8( g );
+                endpoints[2][1] = astc_decode_clamp_unorm8( b );
+            }
+            break;
+        }
+
+        case 10:
+        {
+            endpoints[0][0] = (v[0]*v[3]) >> 8;
+            endpoints[0][1] = v[0];
+            endpoints[1][0] = (v[1]*v[3]) >> 8;
+            endpoints[1][1] = v[1];
+            endpoints[2][0] = (v[2]*v[3]) >> 8;
+            endpoints[2][1] = v[2];
+            endpoints[3][0] = v[4];
+            endpoints[3][1] = v[5];
+            break;
+        }
+
+        case 12:
+        {
+            if ( (v[1] + v[3] + v[5]) >= (v[0] + v[2] + v[4]) ) {
+                endpoints[0][0] = v[0];
+                endpoints[1][0] = v[2];
+                endpoints[2][0] = v[4];
+                endpoints[2][0] = v[6];
+
+                endpoints[0][1] = v[1];
+                endpoints[1][1] = v[3];
+                endpoints[2][1] = v[5];
+                endpoints[2][1] = v[7];
+            } else {
+                astc_decode_blue_contract( v[1], v[3], v[5], v[7] );
+                endpoints[0][0] = v[1];
+                endpoints[1][0] = v[3];
+                endpoints[2][0] = v[5];
+                endpoints[2][0] = v[7];
+
+                astc_decode_blue_contract( v[0], v[2], v[4], v[6] );
+                endpoints[0][1] = v[0];
+                endpoints[1][1] = v[2];
+                endpoints[2][1] = v[4];
+                endpoints[2][1] = v[6];
+            }
+            break;
+        }
+
+        case 13:
+        {
+            astc_decode_bit_transfer_signed( v[1], v[0] );
+            astc_decode_bit_transfer_signed( v[3], v[2] );
+            astc_decode_bit_transfer_signed( v[5], v[4] );
+            astc_decode_bit_transfer_signed( v[7], v[6] );
+            if ( (v[1] + v[3] + v[5]) >= 0 ) {
+                endpoints[0][0] = v[0];
+                endpoints[1][0] = v[2];
+                endpoints[2][0] = v[4];
+                endpoints[2][0] = v[6];
+
+                endpoints[0][0] = astc_decode_clamp_unorm8( v[0] + v[1] );
+                endpoints[1][1] = astc_decode_clamp_unorm8( v[2] + v[3] );
+                endpoints[2][1] = astc_decode_clamp_unorm8( v[4] + v[5] );
+                endpoints[3][1] = astc_decode_clamp_unorm8( v[6] + v[7] );
+            } else {
+                int r = v[0] + v[1];
+                int g = v[2] + v[3];
+                int b = v[4] + v[5];
+                int a = v[6] + v[7];
+                astc_decode_blue_contract( r, g, b, a );
+                endpoints[0][0] = r;
+                endpoints[1][0] = g;
+                endpoints[2][0] = b;
+                endpoints[2][0] = a;
+
+                astc_decode_blue_contract( v[0], v[2], v[4], v[6] );
+                endpoints[0][1] = v[0];
+                endpoints[1][1] = v[2];
+                endpoints[2][1] = v[4];
+                endpoints[2][1] = v[6];
+            }
+            break;
+        }
+
+        default:
+        {
+            die_assert( false, "ASTC HDR color endpoint modes are not yet supported" );
+            break;
+        }
+    }
+}
+
+inline void Model::Texture::astc_decode_bit_transfer_signed( int& a, int& b )
+{
+    //---------------------------------------------------------------
+    // See code below Table 20.
+    //---------------------------------------------------------------
+    b >>= 1;
+    b  |= a & 0x80;
+    a >>= 1;
+    a  &= 0x3f;
+    if ( (a & 0x20) != 0 ) a -= 0x40;
+}
+
+inline void Model::Texture::astc_decode_blue_contract( int& r, int& g, int& b, int& a )
+{
+    //---------------------------------------------------------------
+    // See code below Table 20.
+    // b and a don't change.
+    //---------------------------------------------------------------
+    r = (r+b) >> 1;
+    g = (g+b) >> 1;
+    (void)a;
+}
+
+inline uint Model::Texture::astc_decode_clamp_unorm8( int v )
+{
+    //---------------------------------------------------------------
+    // Clamp to 0 .. 255 range.
+    //---------------------------------------------------------------
+    return (v < 0) ? 0 : (v > 255) ? 255 : v;
+}
+
+inline uint Model::Texture::astc_decode_unquantize_color_endpoint( uint v, uint trits, uint quints, uint bits )
+{
+    //---------------------------------------------------------------
+    // Note: v is the value returned from astc_decode_integer().
+    // This routine completes the decode.
+    //---------------------------------------------------------------
+    if ( trits == 0 && quints == 0 ) {
+        //---------------------------------------------------------------
+        // Replicate MSB and return.
+        //---------------------------------------------------------------
+        uint msb = (v >> (bits-1)) & 0x1;
+        for( uint b = bits; b < 8; b++ ) 
+        {
+            v |= msb << b;
+        }
+    } else {
+        //---------------------------------------------------------------
+        // First compute A,B,C,D using Table 19 in section 3.7.
+        //---------------------------------------------------------------
+        uint a = (bits >> 0) & 0x1;
+        uint b = (bits >> 1) & 0x1;
+        uint c = (bits >> 2) & 0x2;
+        uint d = (bits >> 3) & 0x3;
+        uint e = (bits >> 4) & 0x4;
+        uint f = (bits >> 5) & 0x5;
+
+        uint D = v >> bits;  // trit or quint value
+        uint A = 0;  for( uint i = 0; i < 9; i++ ) A |= a << i;
+        uint B;
+        uint C;
+        if ( bits == 1 ) {
+            B = 0;
+            C = trits ? 204 : 113;
+        } else if ( bits == 2 ) {
+            B = (b << 8) | ((b&quints) << 4) | (b << 2) | ((b&trits) << 1);
+            C = trits ? 93 : 54;
+        } else if ( bits == 3 ) {
+            B = (c << 8) | (b << 7) | (trits ? ((c << 3) | (b << 2) | (c << 1) | (b << 0)) : ((c << 2) | (b << 1) | (c << 1)));
+            C = trits ? 44 : 26;
+        } else if ( bits == 4 ) {
+            B = (d << 8) | (c << 7) | (b << 6) | (trits ? ((d << 2) | (c << 1) | (b << 0)) : ((d << 1) | (c << 0)));
+            C = trits ? 22 : 13;
+        } else if ( bits == 5 ) {
+            B = (e << 8) | (d << 7) | (c << 6) | (b << 5) | (trits ? ((e << 1) | (d << 0)) : (e << 0));
+            C = trits ? 11 : 6;
+        } else if ( bits == 6 ) {
+            die_assert( trits, "ASTC: should have trits=1 when bits=6" );
+            B = (f << 8) | (e << 7) | (d << 6) | (c << 5) || (f << 0);
+            C = 5;
+        } else {
+            die_assert( false, "ASTC: bits > 6" );
+            B = 0;
+            C = 0;
+        }
+        v  = D*C + B;
+        v ^= A;
+        v  = (A & 0x80) | (v >> 2);
+    }
+
+    return v;
+}
+
+inline void Model::Texture::astc_decode_weights( const unsigned char * rbdata, uint weights_start, 
+                                                 uint Bs, uint Bt, uint Br, uint N, uint M, uint Q, uint s, uint t, uint r,
+                                                 uint plane_cnt, uint trits, uint quints, uint bits, 
+                                                 uint plane_weights[2] )
+{
+    //---------------------------------------------------------------
+    // See sections 3.10 and 3.11.
+    // The texel coordinates within the block are s,t,r.
+    // Figure out which weights we're going to interpolate.
+    // Note that the weight grid dimensions (N,M,Q) are not the same
+    // as the block dimensions (Bs,Bt,Br).
+    //---------------------------------------------------------------
+    uint Ds = ( (1024 + (Bs/2) ) / (Bs-1) );
+    uint Dt = ( (1024 + (Bt/2) ) / (Bt-1) );
+    uint Dr = ( (1024 + (Br/2) ) / (Br-1) );
+    uint cs = Ds * s;
+    uint ct = Ds * t;
+    uint cr = Ds * r;
+    uint gs = (cs*(N-1) + 32) >> 6;
+    uint gt = (ct*(M-1) + 32) >> 6;
+    uint gr = (cr*(Q-1) + 32) >> 6;
+    uint js = gs >> 4;
+    uint jt = gt >> 4;
+    uint jr = gr >> 4;
+    uint fs = gs & 0xf;
+    uint ft = gt & 0xf;
+    uint fr = gr & 0xf;
+    if ( Br == 1 ) {
+        //---------------------------------------------------------------
+        // 2D
+        //
+        // Need to interpolate for 1 or 2 sets of weights.
+        //---------------------------------------------------------------
+        uint v0 = js + jt*N;
+        uint v1 = v0 + 1;
+        uint v2 = v0 + N;
+        uint v3 = v0 + N + 1;
+        uint w11 = (fs*ft + 8) >> 4;
+        uint w10 = ft - w11;
+        uint w01 = fs - w11;
+        uint w00 = 16 - fs - ft + w11;
+        for( uint p = 0; p < plane_cnt; p++ )
+        {
+            uint p00 = astc_decode_integer( rbdata, weights_start, v0*plane_cnt + p, trits, quints, bits );
+            uint p01 = astc_decode_integer( rbdata, weights_start, v1*plane_cnt + p, trits, quints, bits );
+            uint p10 = astc_decode_integer( rbdata, weights_start, v2*plane_cnt + p, trits, quints, bits );
+            uint p11 = astc_decode_integer( rbdata, weights_start, v3*plane_cnt + p, trits, quints, bits );
+            p00 = astc_decode_unquantize_weight( p00, trits, quints, bits );
+            p01 = astc_decode_unquantize_weight( p01, trits, quints, bits );
+            p10 = astc_decode_unquantize_weight( p10, trits, quints, bits );
+            p11 = astc_decode_unquantize_weight( p11, trits, quints, bits );
+
+            plane_weights[p] = (p00*w00 + p01+w01 + p10*w10 + p11*w11) >> 4;
+        }
+    } else {
+        die_assert( Br == 1, "ASTC cannot handle 3D yet" );
+    } 
+
+}
+
+inline uint Model::Texture::astc_decode_unquantize_weight( uint v, uint trits, uint quints, uint bits )
+{
+    //---------------------------------------------------------------
+    // See section 3.11.
+    // Note: v is the value returned from astc_decode_integer().
+    // This routine completes the decode.
+    //---------------------------------------------------------------
+    if ( trits == 0 && quints == 0 ) {
+        //---------------------------------------------------------------
+        // Replicate MSB and return.
+        //---------------------------------------------------------------
+        die_assert( bits <= 6, "ASTC quantized weight must have <= 6 bits" );
+        uint msb = (v >> (bits-1)) & 0x1;
+        for( uint b = bits; b < 6; b++ ) 
+        {
+            v |= msb << b;
+        }
+    } else {
+        //---------------------------------------------------------------
+        // First compute A,B,C,D using Table 29.
+        //---------------------------------------------------------------
+        uint a = (bits >> 0) & 0x1;
+        uint b = (bits >> 1) & 0x1;
+        uint c = (bits >> 2) & 0x2;
+
+        uint D = v >> bits;  // trit or quint value
+        uint A = 0;  for( uint i = 0; i < 7; i++ ) A |= a << i;
+        uint B;
+        uint C;
+        if ( bits == 1 ) {
+            B = 0;
+            C = trits ? 50 : 28 ;
+        } else if ( bits == 2 ) {
+            B = (b << 7) | ((b&trits) << 2) | ((b&quints) << 1) | ((b&trits) << 0);
+            C = trits ? 23 : 13;
+        } else if ( bits == 3 ) {
+            die_assert( trits, "ASTC: should have trits=1 when bits=3" );
+            B = (c << 7) | (b << 6) | (c << 1) || (b << 0);
+            C = 11;
+        } else {
+            die_assert( false, "ASTC: bits > 3" );
+            B = 0;
+            C = 0;
+        }
+        v  = D*C + B;
+        v ^= A;
+        v  = (A & 0x20) | (v >> 2);
+    }
+
+    if ( v > 32 ) v++; // expand to 0 .. 64 range
+    return v;
+}
+
+inline uint Model::Texture::astc_decode_integer( const unsigned char * bdata, uint start, uint i, uint trits, uint quints, uint bits )
+{
+    //---------------------------------------------------------------
+    // See SPEC Section 3.6.
+    // bits == n == number of LSBs in each value
+    // This is coded a little differently from the spec because we
+    // only care about pulling out value i.
+    //---------------------------------------------------------------
+    uint v;
+    if ( trits != 0 ) {
+        //---------------------------------------------------------------
+        // TRITS
+        //
+        // See Table 17.
+        // Pull out trit and bits ii = (i % 5).
+        // T0 .. T7 bit locations depends on bits (n).
+        //---------------------------------------------------------------
+        uint tstart = start + (i / 5) * (8 + 5 * bits);
+        uint t0     = _astc_bits( bdata, tstart + 1*bits + 0, 1 );
+        uint t1     = _astc_bits( bdata, tstart + 1*bits + 1, 1 );
+        uint t2     = _astc_bits( bdata, tstart + 2*bits + 2, 1 );
+        uint t3     = _astc_bits( bdata, tstart + 2*bits + 3, 1 );
+        uint t4     = _astc_bits( bdata, tstart + 3*bits + 4, 1 );
+        uint t5     = _astc_bits( bdata, tstart + 4*bits + 5, 1 );
+        uint t6     = _astc_bits( bdata, tstart + 4*bits + 6, 1 );
+        uint t7     = _astc_bits( bdata, tstart + 5*bits + 7, 1 );
+
+        uint t65     = (t6 << 1) | (t5 << 0);
+        uint t42     = (t4 << 2) | (t3 << 1) | (t2 << 0);
+        uint c4      = (t42 == 0b111) ? t7 : t4;
+        uint c32     = (t42 == 0b111) ? ((t6 << 1) | (t5 << 0)) : ((t3 << 1) | (t2 << 0));
+        uint c10     = (t1 << 1) | t0;
+        uint c3      = c32 >> 1;
+        uint c1      = c10 >> 1;
+
+        uint ii = i % 5;
+        uint m;
+        uint t;
+        switch( ii ) 
+        {
+            case 0: 
+                m = _astc_bits( bdata, tstart, bits );
+                t = (c10 == 0b11) ? (c32 & ~c3) : (c32 == 0b11) ? c10 : (c10 & ~c1);
+                break;
+
+            case 1:
+                m = _astc_bits( bdata, tstart + 1*bits + 2, bits );
+                t = (c10 == 0b11) ? c4 : (c32 == 0b11) ? 2 : c32;
+                break;
+
+            case 2:
+                m = _astc_bits( bdata, tstart + 2*bits + 4, bits );
+                t = (c10 == 0b11 || c32 == 0b11) ? 2 : c4;
+                break;
+
+            case 3:
+                m = _astc_bits( bdata, tstart + 3*bits + 5, bits );
+                t = (t42 == 0b111) ? 2 : (t65 == 0b11) ? t7 : t65;
+                break;
+
+            case 4:
+                m = _astc_bits( bdata, tstart + 4*bits + 7, bits );
+                t = (t42 == 0b111 || t65 == 0b11) ? 2 : t7;
+                break;
+
+            default:
+                die_assert( false, "ASTC integer decode unexpected ii value" );
+                m = 0;
+                t = 0;
+                break;
+        }
+        v = (t << bits) | m;
+    
+    } else if ( quints != 1 ) {
+        //---------------------------------------------------------------
+        // QUINTS
+        //
+        // See Table 17.
+        // Pull out quint ii = (i % 3).
+        // Q0 .. Q6 bit locations depends on bits (n).
+        //---------------------------------------------------------------
+        uint qstart = start + (i / 3) * (7 + 3 * bits);
+        uint q0     = _astc_bits( bdata, qstart + 1*bits + 0, 1 );
+        uint q1     = _astc_bits( bdata, qstart + 1*bits + 1, 1 );
+        uint q2     = _astc_bits( bdata, qstart + 2*bits + 2, 1 );
+        uint q3     = _astc_bits( bdata, qstart + 2*bits + 3, 1 );
+        uint q4     = _astc_bits( bdata, qstart + 2*bits + 4, 1 );
+        uint q5     = _astc_bits( bdata, qstart + 3*bits + 5, 1 );
+        uint q6     = _astc_bits( bdata, qstart + 3*bits + 6, 1 );
+
+        uint q65     = (q6 << 1) | (q5 << 0);
+        uint q43     = (q4 << 1) | (q3 << 0);
+        uint q21     = (q2 << 1) | (q1 << 0);
+        uint c43     = q43;
+        uint c20     = (q21 == 0b11) ? (((~q65 & 0x3) << 1) | q0) : ((q2 << 2) | (q1 << 1) | (q0 << 0));
+
+        uint ii = i % 3;
+        uint m;
+        uint q;
+        switch( ii ) 
+        {
+            case 0: 
+                m = _astc_bits( bdata, qstart, bits );
+                q = (q21 == 0b11 && q65 == 0b00) ? 4 : (c20 == 0b101) ? c43 : c20;
+                break;
+
+            case 1:
+                m = _astc_bits( bdata, qstart + 1*bits + 3, bits );
+                q = ((q21 == 0b11 && q65 == 0b00) || (c20 == 0b101)) ? 4 : c43;
+                break;
+
+            case 2:
+                m = _astc_bits( bdata, qstart + 2*bits + 5, bits );
+                q = (q21 == 0b11 && q65 == 0b00) ? ((q0 << 2) | ((q4 & ~q0) << 1)) | ((q3 & ~q0) << 0) : (q21 == 0b11) ? 4 : q65;
+                break;
+
+            default:
+                die_assert( false, "ASTC integer decode unexpected ii value" );
+                m = 0;
+                q = 0;
+                break;
+        }
+        v = (q << bits) | m;
+
+    } else {
+        //---------------------------------------------------------------
+        // BITS
+        //
+        // trivial case
+        //---------------------------------------------------------------
+        uint bstart = start + i*bits;
+        v = _astc_bits( bdata, bstart, bits);
+    }
+    return v;
+}
+
+bool Model::Texture::ASTC_Header::magic_is_good( void ) const
+{
+    uint64_t full_magic = (magic[0] << 0) | (magic[1] << 8) | (magic[2] << 16) | (magic[3] << 24);
+    return full_magic == 0x5CA1AB13;
+}
+
+uint Model::Texture::ASTC_Header::size_x( void ) const
+{
+    return (xsize[0] << 0) | (xsize[1] << 8) | (xsize[2] << 16);
+}
+
+uint Model::Texture::ASTC_Header::size_y( void ) const
+{
+    return (ysize[0] << 0) | (ysize[1] << 8) | (ysize[2] << 16);
+}
+
+uint Model::Texture::ASTC_Header::size_z( void ) const
+{
+    return (zsize[0] << 0) | (zsize[1] << 8) | (zsize[2] << 16);
+}
+
+uint Model::Texture::ASTC_Header::blk_cnt_x( void ) const
+{
+    return (size_x() + blockdim_x - 1) / blockdim_x;
+}
+
+uint Model::Texture::ASTC_Header::blk_cnt_y( void ) const
+{
+    return (size_y() + blockdim_y - 1) / blockdim_y;
+}
+
+uint Model::Texture::ASTC_Header::blk_cnt_z( void ) const
+{
+    return (size_z() + blockdim_z - 1) / blockdim_z;
+}
+
+uint Model::Texture::ASTC_Header::blk_cnt( void ) const
+{
+    return 1 + blk_cnt_x()*blk_cnt_y()*blk_cnt_z();
+}
+
+uint Model::Texture::ASTC_Header::byte_cnt( void ) const
+{
+    return 16*blk_cnt();
+}
+
 inline void Model::AABB::pad( Model::real p ) 
 {
     min -= real3( p, p, p );
@@ -4329,8 +5839,8 @@ bool Model::Instance::bounding_box( const Model * model, AABB& b, real padding )
 bool Model::Instance::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
                            real solid_angle, real t_min, real t_max, HitInfo& hit_info )
 {
-    assert( sizeof(real) == 4 );
-    assert( kind == INSTANCE_KIND::MODEL_PTR );
+    die_assert( sizeof(real) == 4, "real is not float" );
+    die_assert( kind == INSTANCE_KIND::MODEL_PTR, "did not get model_ptr instance" );
 
     //-----------------------------------------------------------
     // Use inverse matrix to transform origin, direction, and direction_inv into target model's space.

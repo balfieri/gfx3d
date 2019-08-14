@@ -1,6 +1,8 @@
 # Model.h
 
-This is a single C++ Model.h file (plus stb_image.h) that reads in 3D models in .obj/.mtl format. It also reads in any textures that are listed in the .mtl files.  It can optionally generate mipmaps, and it can also generate a BVH tree for ray tracing.
+This is a single C++ Model.h file (plus stb_image.h and stb_image_write.h) that reads in 3D models in .obj/.mtl format. 
+It also reads in any textures that are listed in the .mtl files.  
+It can optionally generate mipmaps, and it can also generate a BVH tree for ray tracing.
 
 The implementation uses a hand-optimized parser that can read in a 10M polygon model of San Miguel in less than 4 seconds on a 4GHz i7-6700K with one CPU core active.  The implementation can also write out a compressed or uncompressed file, the latter of which can be loaded
 instantaneously.

@@ -104,6 +104,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <map>
+#include <vector>
 #include <iostream>
 #include <mutex>
 
@@ -162,8 +163,18 @@ public:
     bool write( std::string file_path, bool is_compressed ); 
     bool replace_materials( std::string mtl_file_path );
 
+    // system utilities
     static void dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ); // utility
+    void cmd( std::string c, std::string error="command failed");  // calls std::system and aborts if not success
 
+    // srgb<->linear conversion utilities
+    static real srgb_to_linear_gamma( real srgb );
+    static real srgb8_to_linear_gamma( uint8_t srgb );   // more efficient, uses LUT
+    static real linear_to_srgb_gamma( real linear );
+    static real linear8_to_srgb_gamma( uint8_t linear ); // more efficient, uses LUT
+
+
+    // start of main structures
     static const uint VERSION = 0xB0BA1f09; // current version 
 
     bool                is_good;            // set to true if constructor succeeds
@@ -299,6 +310,9 @@ public:
         TEXTURE_COMPRESSION texture_compression; // NONE or ASTC used (individual textures are also marked)
     };
 
+    // TODO: move this into HDR later
+    real        tone_avg_luminance;     // tone mapping average luminance override (if supported by application)
+
     class Object
     {
     public:
@@ -403,7 +417,8 @@ public:
         real3           scale;              // uvw scale  of texture map on surface (w is 0 for 2D textures)
 
         real4           texel_read(              const Model * model, uint mip_level, uint64 ui, uint64 vi, 
-                                                 uint64 * vaddr=nullptr, uint64 * byte_cnt=nullptr ) const;
+                                                 uint64 * vaddr=nullptr, uint64 * byte_cnt=nullptr,
+                                                 bool do_srgb_to_linear=false ) const;
         static void     astc_blk_dims_get( uint width, uint height, uint& blk_dim_x, uint& blk_dim_y );
 
         // for ARM .astc files and our internal format
@@ -431,15 +446,16 @@ public:
 
     private:
         real4           texel_read_uncompressed( const Model * model, uint mip_level, uint64 ui, uint64 vi, 
-                                                 uint64 * vaddr=nullptr, uint64 * byte_cnt=nullptr ) const;
+                                                 uint64 * vaddr, uint64 * byte_cnt, bool do_srgb_to_linear ) const;
         real4           texel_read_astc(         const Model * model, uint mip_level, uint64 ui, uint64 vi, 
-                                                 uint64 * vaddr=nullptr, uint64 * byte_cnt=nullptr ) const;
+                                                 uint64 * vaddr, uint64 * byte_cnt, bool do_srgb_to_linear ) const;
 
-        real4           astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, uint s, uint t, uint r ) const;
+        real4           astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, uint s, uint t, uint r, bool do_srgb_to_linear ) const;
         static void     astc_decode_block_mode( const unsigned char * bdata, unsigned char * rbdata, uint& plane_cnt, uint& partition_cnt, 
                                                 uint& weights_w, uint& weights_h, uint& weights_d, uint& R, uint& H );
         static uint     astc_decode_partition( const unsigned char * bdata, uint x, uint y, uint z, uint partition_cnt, uint texel_cnt );
-        static void     astc_decode_color_endpoint_mode( const unsigned char * bdata, uint partition, uint partition_cnt, uint remaining_bit_cnt, uint cem_more_start,
+        static void     astc_decode_color_endpoint_mode( const unsigned char * bdata, uint plane_cnt, uint partition, uint partition_cnt, 
+                                                         uint weights_bit_cnt, uint below_weights_start,
                                                          uint& cem, uint& trits, uint& quints, uint& bits, uint& endpoints_start );
         static void     astc_decode_color_endpoints( const unsigned char * bdata, uint cem, uint trits, uint quints, uint bits, uint endpoints_start, 
                                                      uint endpoints[4][2] );
@@ -639,6 +655,9 @@ public:
     std::map<std::string, uint>    name_to_camera_i;
     std::map<std::string, uint>    name_to_animation_i;
 
+    // map of model file name to ignored polygon indexes
+    std::map<std::string, std::vector<uint> *> model_ignored_polys;
+
     // debug flags
     static bool         debug;
     static uint         debug_tex_i;
@@ -718,8 +737,6 @@ private:
     bool file_exists( std::string file_name );
     bool file_read( std::string file_name, char *& start, char *& end );
     void file_write( std::string file_name, const unsigned char * data, uint64_t byte_cnt );
-
-    void cmd( std::string c, std::string error="command failed");  // calls std::system and aborts if not success
 
     bool skip_whitespace_to_eol( char *& xxx, char *& xxx_end );  // on this line only
     bool skip_whitespace( char *& xxx, char *& xxx_end );
@@ -982,6 +999,23 @@ Model::Model( std::string                top_file,
                     unique_name_i[u] = instance->model_file_name_i;
                     uniques[u]       = model;
                     unique_cnt++;
+
+                    // nullify any ignored_polys[]
+                    auto it = model_ignored_polys.find( file_name );
+                    if ( it != model_ignored_polys.end() ) {
+                        std::vector<uint>& polys = *it->second;
+                        for( auto pit = polys.begin(); pit != polys.end(); pit++ )
+                        {
+                            uint poly_i = *pit;
+                            if ( poly_i < model->hdr->poly_cnt ) {
+                                std::cout << "Ignoring poly_i=" << poly_i << " in " << file_name << "\n";
+                                model->polygons[poly_i].vtx_cnt = 0;  // makes it invisible to hit()
+                            } else {
+                                error_msg = "ignored poly is out of range in " + file_name;
+                                return;
+                            }
+                        }
+                    }
                 } else {
                     // model already read in
                     model = uniques[u];
@@ -1352,6 +1386,7 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
     //------------------------------------------------------------
     hdr->tone_key = 0.2;
     hdr->tone_white = 3.0;
+    tone_avg_luminance = 0.0;
     hdr->tex_specular_is_orm = false;
     if ( !expect_char( '{', fsc, fsc_end, true ) ) goto error;
     for( ;; )
@@ -1434,6 +1469,9 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
                 } else if ( strcmp( field, "tone_key" ) == 0 ) {
                     if ( !parse_real( hdr->tone_key, fsc, fsc_end, true ) ) goto error;
 
+                } else if ( strcmp( field, "tone_avg_luminance" ) == 0 ) {
+                    if ( !parse_real( tone_avg_luminance, fsc, fsc_end, true ) ) goto error;
+
                 } else if ( strcmp( field, "tex_specular_is_orm" ) == 0 ) {
                     if ( !parse_bool( hdr->tex_specular_is_orm, fsc, fsc_end ) ) goto error;
 
@@ -1449,6 +1487,7 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
         } else if ( strcmp( field, "models" ) == 0 ) {
             if ( !expect_char( '[', fsc, fsc_end, true ) ) goto error;
             uint model_file_name_i = uint(-1);
+            std::string model_file_name;
             uint model_name_i = uint(-1);
             for( ;; )
             {
@@ -1476,6 +1515,10 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
 
                     if ( strcmp( model_field, "file" ) == 0 ) {
                         if ( !parse_string_i( model_file_name_i, fsc, fsc_end ) ) goto error;
+                        model_file_name = &strings[model_file_name_i];
+                        if ( model_ignored_polys.find( model_file_name ) == model_ignored_polys.end() ) {
+                            model_ignored_polys[model_file_name] = new std::vector<uint>;
+                        }
 
                     } else if ( strcmp( model_field, "name" ) == 0 ) {
                         if ( !parse_string_i( model_name_i, fsc, fsc_end ) ) goto error;
@@ -1567,6 +1610,28 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
                             // pre-compute inv and inv_trans matrixes
                             matrix->invert( *matrix_inv );
                             matrix_inv->transpose( *matrix_inv_trans );
+
+                            skip_whitespace( fsc, fsc_end );
+                            fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                            if ( *fsc == ',' && !expect_char( ',', fsc, fsc_end ) ) goto error;
+                        }
+
+                    } else if ( strcmp( model_field, "ignored_polys" ) == 0 ) {
+                        if ( !expect_char( '[', fsc, fsc_end, true ) ) goto error;
+                        fsc_assert( model_file_name_i != uint(-1), "model file name must come before ignored_polys[] in " + fsc_file );
+                        std::vector<uint> * ignored_polys = model_ignored_polys[model_file_name];
+                        for( ;; ) 
+                        {
+                            skip_whitespace( fsc, fsc_end );
+                            fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
+                            if ( *fsc == ']' ) {
+                                if ( !expect_char( ']', fsc, fsc_end ) ) goto error;
+                                break;
+                            }
+
+                            _int poly_i;
+                            if ( !parse_int( poly_i, fsc, fsc_end ) ) goto error;
+                            ignored_polys->push_back( poly_i );
 
                             skip_whitespace( fsc, fsc_end );
                             fsc_assert( fsc != fsc_end, "unexpected end of " + fsc_file );
@@ -2550,6 +2615,15 @@ bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Textur
     bool        in_astc_gen_mode     = !astc_file_exists && hdr->texture_compression == TEXTURE_COMPRESSION::ASTC;
     bool        in_astc_read_mode    =  astc_file_exists && hdr->texture_compression == TEXTURE_COMPRESSION::ASTC;
 
+    if ( hdr->texture_compression == TEXTURE_COMPRESSION::ASTC ) {
+        //---------------------------------------------
+        // Align to 16B boundary to match ASTC alignment
+        // Should not need to reallocate due to >16B granularity of allocations.
+        //---------------------------------------------
+        hdr->texel_cnt += ((hdr->texel_cnt % 16) == 0) ? 0 : (16 - (hdr->texel_cnt % 16)); 
+    }
+    texture->texel_i = hdr->texel_cnt;  // always
+
     unsigned char * data = nullptr;
     uint width = 0;
     uint height = 0;
@@ -2570,7 +2644,6 @@ bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Textur
                 texture->width  = w;
                 texture->height = h;
                 texture->nchan  = nchan;
-                texture->texel_i = hdr->texel_cnt;
                 width      = texture->width;
                 height     = texture->height;
                 byte_width = width * texture->nchan;
@@ -2645,8 +2718,8 @@ bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Textur
             // For consistency, keep the data buffer for mipmap generation in the next pass.
             //---------------------------------------------
             perhaps_realloc<unsigned char>( texels, hdr->texel_cnt, max->texel_cnt, byte_cnt );
+            memcpy( texels + hdr->texel_cnt, data, byte_cnt );
             hdr->texel_cnt += byte_cnt;
-            memcpy( texels + texture->texel_i, data, byte_cnt );
 
         } else if ( in_astc_gen_mode ) {
             //---------------------------------------------
@@ -2725,11 +2798,9 @@ bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Textur
             // We memcpy() the entire file - as is - to our texels[] space,
             // aligning on 16B boundary.
             //---------------------------------------------
-            hdr->texel_cnt += ((hdr->texel_cnt % 16) == 0) ? 0 : (16 - (hdr->texel_cnt % 16)); // align should be safe
-            texture->texel_i = hdr->texel_cnt;
             perhaps_realloc<unsigned char>( texels, hdr->texel_cnt, max->texel_cnt, astc_byte_cnt );
+            memcpy( texels + hdr->texel_cnt, astc_data, astc_byte_cnt );
             hdr->texel_cnt += astc_byte_cnt;
-            memcpy( texels + texture->texel_i, astc_data, astc_byte_cnt );
             delete astc_data;
         }
 
@@ -2849,6 +2920,52 @@ void Model::cmd( std::string c, std::string error )
 {
     std::cout << c << "\n";
     if ( std::system( c.c_str() ) != 0 ) die_assert( false, "ERROR: " + error + ": " + c );
+}
+
+inline Model::real Model::srgb_to_linear_gamma( Model::real srgb )
+{
+    if ( srgb <= 0.04045 ) {
+        return srgb / 12.92;
+    } else {
+        return std::pow( (srgb + 0.055)/1.055, 2.4 );
+    }
+}
+
+inline Model::real Model::srgb8_to_linear_gamma( uint8_t srgb )
+{
+    static bool did_lut_init = false;
+    static real lut[256];
+    if ( !did_lut_init ) {
+        for( uint i = 0; i < 256; i++ )
+        {
+            lut[i] = srgb_to_linear_gamma( real(i) / 255.0 );
+        } 
+        did_lut_init = true;
+    }
+    return lut[srgb];
+}
+
+Model::real Model::linear_to_srgb_gamma( Model::real linear )
+{
+    if ( linear < 0.0031308 ) {
+        return linear * 12.92;
+    } else {
+        return 1.055 * std::pow( linear, 1.0/2.4 ) - 0.055;
+    }
+}
+
+Model::real Model::linear8_to_srgb_gamma( uint8_t linear )
+{
+    static bool did_lut_init = false;
+    static real lut[256];
+    if ( !did_lut_init ) {
+        for( uint i = 0; i < 256; i++ )
+        {
+            lut[i] = linear_to_srgb_gamma( real(i) / 255.0 );
+        } 
+        did_lut_init = true;
+    }
+    return lut[linear];
 }
 
 inline bool Model::skip_whitespace( char *& xxx, char *& xxx_end )
@@ -4372,13 +4489,13 @@ bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real p
 bool Model::debug = false;
 #define mdout if (Model::debug) std::cout 
 
-inline Model::real4 Model::Texture::texel_read( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt ) const
+inline Model::real4 Model::Texture::texel_read( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt, bool do_srgb_to_linear ) const
 {
-    TEXTURE_COMPRESSION compression = TEXTURE_COMPRESSION::NONE;  // TODO: temporary
+    TEXTURE_COMPRESSION compression = model->hdr->texture_compression;
     switch( compression )
     {
-        case TEXTURE_COMPRESSION::NONE:         return texel_read_uncompressed( model, mip_level, ui, vi, vaddr, byte_cnt );
-        case TEXTURE_COMPRESSION::ASTC:         return texel_read_astc(         model, mip_level, ui, vi, vaddr, byte_cnt );
+        case TEXTURE_COMPRESSION::NONE: return texel_read_uncompressed( model, mip_level, ui, vi, vaddr, byte_cnt, do_srgb_to_linear );
+        case TEXTURE_COMPRESSION::ASTC: return texel_read_astc(         model, mip_level, ui, vi, vaddr, byte_cnt, do_srgb_to_linear );
         default:
         {
             std::cout << "ERROR: unexpected texture compression: " << int(compression) << "\n";
@@ -4388,7 +4505,7 @@ inline Model::real4 Model::Texture::texel_read( const Model * model, uint mip_le
     }
 }
 
-inline Model::real4 Model::Texture::texel_read_uncompressed( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt ) const
+inline Model::real4 Model::Texture::texel_read_uncompressed( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt, bool do_srgb_to_linear ) const
 {
     const unsigned char * mdata = &model->texels[texel_i];
     uint mw = width;
@@ -4408,15 +4525,19 @@ inline Model::real4 Model::Texture::texel_read_uncompressed( const Model * model
     if (vaddr != nullptr)    *vaddr = reinterpret_cast<uint64_t>( &mdata[toffset] );
     if (byte_cnt != nullptr) *byte_cnt = 3;
 
-    real r =                 real(mdata[toffset+0]) / 255.0;
-    real g = (nchan > 2)  ? (real(mdata[toffset+1]) / 255.0) : r;
-    real b = (nchan > 2)  ? (real(mdata[toffset+2]) / 255.0) : r;
-    real a = (nchan > 3)  ? (real(mdata[toffset+3]) / 255.0) : 
-             (nchan == 2) ? (real(mdata[toffset+1]) / 255.0) : 1.0;
+    uint ru = mdata[toffset+0];
+    uint gu = (nchan  > 2) ? mdata[toffset+1] : ru;
+    uint bu = (nchan  > 2) ? mdata[toffset+2] : ru;
+    uint au = (nchan  > 3) ? mdata[toffset+3] : (nchan == 2) ? mdata[toffset+1] : 255;
+
+    real r = do_srgb_to_linear ? srgb8_to_linear_gamma( ru ) : (real(ru) / 255.0);
+    real g = do_srgb_to_linear ? srgb8_to_linear_gamma( gu ) : (real(gu) / 255.0);
+    real b = do_srgb_to_linear ? srgb8_to_linear_gamma( bu ) : (real(bu) / 255.0);
+    real a = real(au) / 255.0;  // always stored linear
     return real4( r, g, b, a );
 }
 
-inline Model::real4 Model::Texture::texel_read_astc( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt ) const
+inline Model::real4 Model::Texture::texel_read_astc( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt, bool do_srgb_to_linear ) const
 {
     //---------------------------------------------------------------
     // Each mipmap level has its own ASTC_Header and thus potential block footprint.
@@ -4424,16 +4545,16 @@ inline Model::real4 Model::Texture::texel_read_astc( const Model * model, uint m
     // All blocks are 16B, but texels represented can differ.
     //---------------------------------------------------------------
     const ASTC_Header * astc_hdr = reinterpret_cast<const ASTC_Header *>( &model->texels[texel_i] );
+    die_assert( astc_hdr->magic_is_good(), "ASTC mip 0 header is corrupted - bad magic number" );
     uint mw = width;
     uint mh = height;
-    uint bw = astc_hdr->blk_cnt_x();
     if ( model->hdr->mipmap_filter != MIPMAP_FILTER::NONE ) {
         for( _int imip_level = mip_level; imip_level > 0 && !(mw == 1 && mh == 1); imip_level-- ) 
         {
-            die_assert( astc_hdr->magic_is_good(), "ASTC header is corrupted - bad magic number" );
-            die_assert( astc_hdr->size_x() == mw,  "ASTC header is corrupted - bad width" );
-            die_assert( astc_hdr->size_y() == mh,  "ASTC header is corrupted - bad height" );
-            die_assert( astc_hdr->size_z() == 1,   "ASTC header is corrupted - depth != 1" );
+            die_assert( astc_hdr->magic_is_good(), "ASTC mip " + std::to_string(imip_level) + " header is corrupted - bad magic number" );
+            die_assert( astc_hdr->size_x() == mw,  "ASTC mip " + std::to_string(imip_level) + " header is corrupted - bad width" );
+            die_assert( astc_hdr->size_y() == mh,  "ASTC mip " + std::to_string(imip_level) + " header is corrupted - bad height" );
+            die_assert( astc_hdr->size_z() == 1,   "ASTC mip " + std::to_string(imip_level) + " header is corrupted - depth != 1" );
 
             if ( mw != 1 ) mw >>= 1;
             if ( mh != 1 ) mh >>= 1;
@@ -4450,13 +4571,15 @@ inline Model::real4 Model::Texture::texel_read_astc( const Model * model, uint m
     uint by = vi / astc_hdr->blockdim_y;
     uint s  = ui - bx*astc_hdr->blockdim_x;
     uint t  = vi - by*astc_hdr->blockdim_y;
-    uint r  = 1;
+    uint r  = 0;
+    mdout << "astc: uv=[" << ui << "," << vi << "] bxy=[" << bx << "," << by << "] st=[" << s << "," << t << "]\n";
+    uint bw = astc_hdr->blk_cnt_x();
     bdata += 16 * (bx + by*bw);
 
     //---------------------------------------------------------------
     // Decode ASTC texel at [s,t,r] within the block.
     //---------------------------------------------------------------
-    real4 rgba = astc_decode( bdata, astc_hdr, s, t, r );
+    real4 rgba = astc_decode( bdata, astc_hdr, s, t, r, do_srgb_to_linear );
 
     //---------------------------------------------------------------
     // Return texel and other info.
@@ -4471,7 +4594,7 @@ const Model::Texture::ASTC_Range_Encoding Model::Texture::astc_weight_range_enco
     // H=0
     {  0, 0, 0, 0 },    // invalid
     {  0, 0, 0, 0 },    // invalid
-    {  1, 0, 0, 0 },    
+    {  1, 0, 0, 1 },    
     {  2, 1, 0, 0 },
     {  3, 0, 0, 2 },
     {  4, 0, 1, 0 },
@@ -4508,7 +4631,7 @@ static inline uint64_t _astc_bits( const unsigned char * bdata, uint start, uint
 {
     // extract bits from 128 bits
     uint64_t bits_lo = *reinterpret_cast<const uint64_t *>( bdata+0 );
-    uint64_t bits_hi = *reinterpret_cast<const uint64_t *>( bdata+4 );
+    uint64_t bits_hi = *reinterpret_cast<const uint64_t *>( bdata+8 );
     uint64_t bits = bits_lo >> start;
     if ( (start+len) <= 64 ) {
         // lo only
@@ -4545,25 +4668,38 @@ inline void Model::Texture::astc_blk_dims_get( uint width, uint height, uint& bl
 #define _bits(  start, len ) _astc_bits( bdata,  start, len )
 #define _rbits( start, len ) _astc_bits( rbdata, start, len )
 
-inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, uint s, uint t, uint r ) const
+inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, uint s, uint t, uint r, bool do_srgb_to_linear ) const
 {
+    mdout << "astc: s=" << s << " t=" << t << " r=" << r << "\n";
+
     //---------------------------------------------------------------
     // Determine if void-extent.
     //---------------------------------------------------------------
     real4 rgba;
-    if ( _bits(0, 9) == 0b111111100 ) {
+    uint block_mode = _bits(0, 11);
+    if ( (block_mode & 0x1ff) == 0x1fc ) {
         //---------------------------------------------------------------
         // VOID EXTENT CASE
         //
+        // Format can be floating-point or unorm16.
         // Color bits are [127:64].
         // Return constant color.
         //---------------------------------------------------------------
-        bool is_all_ones = (_bits(0, 64) & 0xFFFFFFFFFFFFFDFFULL) == 0xFFFFFFFFFFFFFDFCULL;
+        bool is_hdr = (block_mode & 0x200) != 0;
+        die_assert( !is_hdr, "ASTC can't currently handle HDR void-extent blocks" );
         for( uint c = 0; c < 4; c++ )
         {
-            uint C = is_all_ones ? ((1 << 13) - 1) : _bits(64 + 16*c, 16);
-            rgba.c[c] = (C == 65535) ? 1.0 : real(C) / real(1 << 16);
+            bool do_srgb = do_srgb_to_linear && c != 3;
+            uint C = _bits(64 + 16*c, 16);
+            mdout << "C[" << c << "]=" << std::hex << C << std::dec << "\n";
+            if ( do_srgb ) {
+                C = (C >> 8) & 0xff;
+                rgba.c[c] = srgb8_to_linear_gamma( C );
+            } else {
+                rgba.c[c] = (C == 0xffff) ? 1.0 : (real(C) / real(1 << 16));
+            }
         }
+        mdout << "astc: void extent rgba=" << rgba << "\n";
         return rgba;
     }
 
@@ -4591,6 +4727,11 @@ inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, co
     uint plane_weights_cnt = weights_w * weights_h * weights_d;  // per-plane
     uint weights_cnt = plane_weights_cnt * plane_cnt;            // total
 
+    mdout << "astc: blockdims=[" << uint32_t(astc_hdr->blockdim_x) << "," << uint32_t(astc_hdr->blockdim_y) << "," << uint32_t(astc_hdr->blockdim_z) << "]" <<
+             " plane_cnt=" << plane_cnt << " partition_cnt=" << partition_cnt << 
+             " weights_dims=[" << weights_w << "," << weights_h << "," << weights_d << "] R=" << R << " H=" << H <<
+             " plane_weights_cnt=" << plane_weights_cnt << " weights_cnt=" << weights_cnt << "\n";
+
     //---------------------------------------------------------------
     // Use H and R to determine max weight, and weight trits, quints, and bits.
     // See Table 11.
@@ -4599,48 +4740,35 @@ inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, co
     die_assert( R >= 2, "ASTC: bad R range encoding" );
     R |= H << 3;
     const ASTC_Range_Encoding& enc = astc_weight_range_encodings[R];
-    uint weight_max    = enc.max;
     uint weight_trits  = enc.trits;
     uint weight_quints = enc.quints;
     uint weight_bits   = enc.bits;
+    mdout << "astc: weight max=" << enc.max << " trits=" << weight_trits << " quints=" << weight_quints << " bits=" << weight_bits << "\n";
 
     //---------------------------------------------------------------
     // See section 3.16.
-    // Calculate sizes of config, weights, and CEM parts of blocks.
-    // This layout can be confusing.
+    // Calculate some size info we need.
     //---------------------------------------------------------------
-    uint config_bit_cnt; // includes block mode, partition info, and CEM
-    if ( partition_cnt == 1 ) {
-        config_bit_cnt = 17;
-    } else {
-        uint cem_classes_cnt = _bits(23, 2);
-        if ( cem_classes_cnt == 0 ) {
-            // all partitions have same CEM
-            config_bit_cnt = 29;
-        } else {
-            config_bit_cnt = 24 + 3*partition_cnt;
-        }
-    }
-    config_bit_cnt += 2*(plane_cnt-1);
-
     uint weights_bit_cnt = (weights_cnt*8*weight_trits  + 4) / 5 +
                            (weights_cnt*7*weight_quints + 2) / 3 + 
                            (weights_cnt*1*weight_bits   + 0) / 1;
 
-    uint remaining_bit_cnt = 128 - config_bit_cnt - weights_bit_cnt;
-    uint weights_start     = 0;  // bit 127, but we count down
-    uint cem_more_start    = weights_bit_cnt - 8;  // see Table 7 and Table 15
+    uint weights_start       = 0;                       // counting from msb
+    uint below_weights_start = 128 - weights_bit_cnt;   // counting from lsb
+
+    mdout << "astc: weights_bit_cnt=" << weights_bit_cnt << " below_weights_start=" << below_weights_start << "\n";
 
     //---------------------------------------------------------------
     // Decode partition for our texel.
     //---------------------------------------------------------------
     uint partition = astc_decode_partition( bdata, s, t, r, partition_cnt, texel_cnt );
+    mdout << "astc: partition=" << partition << "\n";
 
     //---------------------------------------------------------------
     // Determine the Color Endpoint Mode (CEM) for our partition.
     // See Table 13 and 14.
     // Also determine the number of trits, quints, and bits,
-    // factoring in the remaining_bit_cnt.
+    // factoring in the space left.
     // See Table 15 and section 3.7.
     //---------------------------------------------------------------
     uint cem;
@@ -4648,7 +4776,10 @@ inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, co
     uint cem_quints;
     uint cem_bits;
     uint color_endpoints_start;
-    astc_decode_color_endpoint_mode( bdata, partition_cnt, partition, remaining_bit_cnt, cem_more_start, cem, cem_trits, cem_quints, cem_bits, color_endpoints_start );
+    astc_decode_color_endpoint_mode( bdata, plane_cnt, partition, partition_cnt, weights_bit_cnt, below_weights_start, 
+                                     cem, cem_trits, cem_quints, cem_bits, color_endpoints_start );
+    mdout << "astc: cem=" << cem << " trits=" << cem_trits << " quints=" << cem_quints << " bits=" << cem_bits << 
+             " color_endpoints_start=" << color_endpoints_start << "\n";
 
     //---------------------------------------------------------------
     // Decode the endpoints for our partition.
@@ -4676,6 +4807,9 @@ inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, co
                          weights_w, weights_h, weights_d,
                          s, t, r,
                          weight_trits, weight_quints, weight_bits, plane_weights );
+    mdout << "astc: plane_weights[0]=" << plane_weights[0];
+    if ( plane_cnt == 2 ) mdout << " plane_weights[1]=" << plane_weights[1];
+    mdout << "\n";
 
     //---------------------------------------------------------------
     // See section 3.13.
@@ -4687,10 +4821,17 @@ inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, co
         uint pi = (plane_cnt == 2 && plane1_chan == c) ? 1 : 0;
         uint w  = plane_weights[pi];
 
-        uint C0 = (color_endpoints[c][0] << 8) | color_endpoints[c][0];
-        uint C1 = (color_endpoints[c][1] << 8) | color_endpoints[c][1];
+        bool do_srgb = do_srgb_to_linear && c != 3;
+        uint C0 = (color_endpoints[c][0] << 8) | (do_srgb ? 0x80 : color_endpoints[c][0]);
+        uint C1 = (color_endpoints[c][1] << 8) | (do_srgb ? 0x80 : color_endpoints[c][1]);
         uint C = (C0*(64-w) + C1*w + 32) / 64;
-        rgba.c[c] = (C == 65535) ? 1.0 : real(C) / real(1 << 16);
+        if ( do_srgb ) {
+            C = (C >> 8) & 0xff;
+            rgba.c[c] = srgb8_to_linear_gamma( C );
+        } else {
+            rgba.c[c] = (C == 0xffff) ? 1.0 : (real(C) / real(1 << 16));
+        }
+        mdout << "astc: c=" << c << " C0=" << C0 << " C1=" << C1 << " pi=" << pi << " w=" << w << " C=" << C << " rgba[c]=" << rgba.c[c] << "\n";
     }
     return rgba;
 }
@@ -4895,68 +5036,97 @@ inline uint Model::Texture::astc_decode_partition( const unsigned char * bdata, 
     }
 }
 
-inline void Model::Texture::astc_decode_color_endpoint_mode( const unsigned char * bdata, uint partition, uint partition_cnt, uint remaining_bit_cnt, uint cem_more_start,
+inline void Model::Texture::astc_decode_color_endpoint_mode( const unsigned char * bdata, uint plane_cnt, uint partition, uint partition_cnt, 
+                                                             uint weights_bit_cnt, uint below_weights_start, 
                                                              uint& cem, uint& trits, uint& quints, uint& bits, uint& endpoints_start )
 {
     //---------------------------------------------------------------
-    // Determine the Color Endpoint Mode (CEM) only for our partition.
+    // See Section 3.5.
     // See Tables 13, 14, and 15.
+    // This stuff is the the most confusing part of ASTC.
+    // We follow the ARM astcenc physical_to_symbolic() code here.
+    //
+    // Determine the Color Endpoint Mode (CEM) for our partition.
     //---------------------------------------------------------------
-    uint cem_pairs_cnt = 1;
-    endpoints_start = 0; 
+    uint encoded_type_highpart_bit_cnt = 0;
+    uint cems[4];
     if ( partition_cnt == 1 ) {
         //---------------------------------------------------------------
         // One partition, so one set of CEM
         //---------------------------------------------------------------
-        cem = _bits(13, 4);
+        cems[0] = _bits(13, 4);
     } else {
-        uint cem_selector = _bits(23, 2);
-        if ( cem_selector == 0 ) {
+        encoded_type_highpart_bit_cnt = (3 * partition_cnt) - 4;
+        below_weights_start -= encoded_type_highpart_bit_cnt;
+        //---------------------------------------------------------------
+        // This is easier when we concatenate all the bits.
+        //---------------------------------------------------------------
+        uint encoded_type = _bits(23, 6) | (_bits(below_weights_start, encoded_type_highpart_bit_cnt) << 6);
+        uint base_class = encoded_type & 3;
+        if ( base_class == 0 ) {
             //---------------------------------------------------------------
             // All partitions have same CEM.
             //---------------------------------------------------------------
-            cem = _bits( 25, 4 );
+            for( uint i = 0; i < partition_cnt; i++ )
+            {
+                cems[i] = (encoded_type >> 2) & 0xf;
+            }
+            below_weights_start += encoded_type_highpart_bit_cnt;
+            encoded_type_highpart_bit_cnt = 0;
         } else {
             //---------------------------------------------------------------
             // See Table 15.
-            // C class selectors start at bit 25.
-            // M = low two bits of CEM and has a variable location
-            //     depending on the number of partitions.
-            //     cem_more_start points to 8 bits just below weights.
             //---------------------------------------------------------------
-            uint c = (_bits( 25, 4 ) >> partition) & 1;
-
-            // get all M as one value, then select the 2 bits for partition
-            uint m_all;
-            if ( partition_cnt == 2 ) {
-                m_all = _bits( 27, 2 ) | (_bits( cem_more_start+6, 2 ) << 2);
-                cem_pairs_cnt = 2;
-            } else if ( partition_cnt == 3 ) {
-                m_all = _bits( 28, 1 ) | (_bits( cem_more_start+3, 5 ) << 1);
-                cem_pairs_cnt = 3;
-            } else {
-                m_all = _bits( cem_more_start, 8 );
-                cem_pairs_cnt = 4;
+            uint bit_pos = 2;
+            base_class--;
+            for( uint i = 0; i < partition_cnt; i++, bit_pos++ )
+            {
+                cems[i] = (((encoded_type >> bit_pos) & 1) + base_class) << 2;
             }
-            cem = (m_all >> (2*partition)) & 0x3;
+            for( uint i = 0; i < partition_cnt; i++, bit_pos += 2 )
+            {
+                cems[i] |= (encoded_type >> bit_pos) & 0x3;
+            }
         }
     }
+    cem = cems[partition];  
+
+    //---------------------------------------------------------------
+    // Determine number of integers we need to unpack if we were getting
+    // all of the endpoint pairs.
+    //
+    // Then figure out the number of bits available for color endpoints.
+    //---------------------------------------------------------------
+    uint color_integer_cnt = 0;
+    for( uint i = 0; i < partition_cnt; i++ )
+    {
+        uint endpoint_class = cems[i] >> 2;                     // only reason we computed all cems[] above
+        color_integer_cnt += (endpoint_class + 1) * 2;
+    }
+    die_assert( color_integer_cnt <= 18, "ASTC: too many color endpoint pairs" );
+
+    int color_bits_cnt = (partition_cnt <= 1) ? (115 - 4) : (113 - 4 - 10);
+    color_bits_cnt -= weights_bit_cnt - encoded_type_highpart_bit_cnt - (plane_cnt-1)*2;
+    if ( color_bits_cnt < 0 ) color_bits_cnt = 0;
+    endpoints_start = (partition_cnt == 1) ? 17 : 29;
+    mdout << "astc: cem=" << cem << " encoded_type_highpart_bit_cnt=" << encoded_type_highpart_bit_cnt << 
+                    " color_integer_cnt=" << color_integer_cnt << " color_bits_cnt=" << color_bits_cnt << 
+                    " color_endpoints_start=" << endpoints_start << "\n";
 
     //---------------------------------------------------------------
     // See section 3.16.
-    // This is the trickiest part of ASTC.
-    // We need to figure out the number of trits, quints, and bits for the CEM.
+    // Figure out the number of trits, quints, and bits for our partition's CEM.
+    // This is implicit based on color_bits_cnt.
     //---------------------------------------------------------------
-    uint cem_values_cnt = cem_pairs_cnt*2;
     const uint astc_color_endpoint_range_encodings_cnt = sizeof(Model::Texture::astc_color_endpoint_range_encodings) / 
                                                          sizeof(Model::Texture::astc_color_endpoint_range_encodings[0]);
     for( int i = astc_color_endpoint_range_encodings_cnt-1; i >= 0; i-- )
     {
         const ASTC_Range_Encoding& enc = astc_color_endpoint_range_encodings[i];
-        uint cem_bit_cnt = (cem_values_cnt*8*enc.trits  + 4) / 5 +
-                           (cem_values_cnt*7*enc.quints + 2) / 3 + 
-                           (cem_values_cnt*1*enc.bits   + 0) / 1;
-        if ( cem_bit_cnt <= remaining_bit_cnt ) {
+        uint cem_bit_cnt = (color_integer_cnt*8*enc.trits  + 4) / 5 +
+                           (color_integer_cnt*7*enc.quints + 2) / 3 + 
+                           (color_integer_cnt*1*enc.bits   + 0) / 1;
+        if ( cem_bit_cnt <= uint(color_bits_cnt) ) {
             trits  = enc.trits;
             quints = enc.quints;
             bits   = enc.bits;
@@ -5308,11 +5478,13 @@ inline uint Model::Texture::astc_decode_unquantize_color_endpoint( uint v, uint 
     return v;
 }
 
-inline void Model::Texture::astc_decode_weights( const unsigned char * rbdata, uint weights_start, 
+inline void Model::Texture::astc_decode_weights( const unsigned char * rbdata, uint weights_start, uint plane_cnt,
                                                  uint Bs, uint Bt, uint Br, uint N, uint M, uint Q, uint s, uint t, uint r,
-                                                 uint plane_cnt, uint trits, uint quints, uint bits, 
+                                                 uint trits, uint quints, uint bits, 
                                                  uint plane_weights[2] )
 {
+    (void)Q;
+    (void)r;
     //---------------------------------------------------------------
     // See sections 3.10 and 3.11.
     // The texel coordinates within the block are s,t,r.
@@ -5322,25 +5494,26 @@ inline void Model::Texture::astc_decode_weights( const unsigned char * rbdata, u
     //---------------------------------------------------------------
     uint Ds = ( (1024 + (Bs/2) ) / (Bs-1) );
     uint Dt = ( (1024 + (Bt/2) ) / (Bt-1) );
-    uint Dr = ( (1024 + (Br/2) ) / (Br-1) );
+//  uint Dr = ( (1024 + (Br/2) ) / (Br-1) );
     uint cs = Ds * s;
-    uint ct = Ds * t;
-    uint cr = Ds * r;
+    uint ct = Dt * t;
+//  uint cr = Dr * r;
     uint gs = (cs*(N-1) + 32) >> 6;
     uint gt = (ct*(M-1) + 32) >> 6;
-    uint gr = (cr*(Q-1) + 32) >> 6;
+//  uint gr = (cr*(Q-1) + 32) >> 6;
     uint js = gs >> 4;
     uint jt = gt >> 4;
-    uint jr = gr >> 4;
+//  uint jr = gr >> 4;
     uint fs = gs & 0xf;
     uint ft = gt & 0xf;
-    uint fr = gr & 0xf;
+//  uint fr = gr & 0xf;
     if ( Br == 1 ) {
         //---------------------------------------------------------------
         // 2D
         //
         // Need to interpolate for 1 or 2 sets of weights.
         //---------------------------------------------------------------
+        die_assert( r == 0, "ASTC 2D mode requires that r=0" );
         uint v0 = js + jt*N;
         uint v1 = v0 + 1;
         uint v2 = v0 + N;
@@ -5363,7 +5536,7 @@ inline void Model::Texture::astc_decode_weights( const unsigned char * rbdata, u
             plane_weights[p] = (p00*w00 + p01+w01 + p10*w10 + p11*w11) >> 4;
         }
     } else {
-        die_assert( Br == 1, "ASTC cannot handle 3D yet" );
+        die_assert( Br == 1, "ASTC cannot handle 3D yet Br=" + std::to_string(Br) );
     } 
 
 }
@@ -5408,7 +5581,7 @@ inline uint Model::Texture::astc_decode_unquantize_weight( uint v, uint trits, u
             B = (c << 7) | (b << 6) | (c << 1) || (b << 0);
             C = 11;
         } else {
-            die_assert( false, "ASTC: bits > 3" );
+            die_assert( trits, "ASTC: should have trits=1 when bits=0" );
             B = 0;
             C = 0;
         }

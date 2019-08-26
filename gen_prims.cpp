@@ -29,7 +29,7 @@ int main( int argc, const char * argv[] )
     std::cout << "Reading in " << file_name << "...\n";
     Model * model = new Model( file_name, 
                                Model::MIPMAP_FILTER::BOX, 
-                               Model::TEXTURE_COMPRESSION::ASTC,
+                               Model::TEXTURE_COMPRESSION::NONE,
                                Model::BVH_TREE::BINARY );
     if ( !model->is_good ) die( model->error_msg );
 

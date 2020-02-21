@@ -106,6 +106,8 @@
 #include <map>
 #include <vector>
 #include <iostream>
+#include <sstream>
+#include <iomanip>
 #include <mutex>
 
 #include <errno.h>
@@ -163,17 +165,6 @@ public:
     bool write( std::string file_path, bool is_compressed ); 
     bool replace_materials( std::string mtl_file_path );
 
-    // system utilities
-    static void dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ); // utility
-    void cmd( std::string c, std::string error="command failed");  // calls std::system and aborts if not success
-
-    // srgb<->linear conversion utilities
-    static real srgb_to_linear_gamma( real srgb );
-    static real srgb8_to_linear_gamma( uint8_t srgb );   // more efficient, uses LUT
-    static real linear_to_srgb_gamma( real linear );
-    static real linear8_to_srgb_gamma( uint8_t linear ); // more efficient, uses LUT
-
-
     // start of main structures
     static const uint VERSION = 0xB0BA1f09; // current version 
 
@@ -199,6 +190,7 @@ public:
         real4  operator * ( real s ) const;
         real4  operator / ( const real4& v ) const;
         real4  operator / ( real s ) const;
+        bool   operator == ( const real4 &v2 ) const;
         real4& operator += ( const real4 &v2 );
         real4& operator -= ( const real4 &v2 );
         real4& operator *= ( const real4 &v2 );
@@ -227,6 +219,7 @@ public:
         real3  operator * ( real s ) const;
         real3  operator / ( const real3& v ) const;
         real3  operator / ( real s ) const;
+        bool   operator == ( const real3 &v2 ) const;
         real3& operator += ( const real3 &v2 );
         real3& operator -= ( const real3 &v2 );
         real3& operator *= ( const real3 &v2 );
@@ -306,12 +299,19 @@ public:
         uint64      animation_cnt;          // in animations array
         real        animation_speed;        // divide frame time by this to get real time (default: 1.0)
 
-        // move this up later
+        // move these up later
         TEXTURE_COMPRESSION texture_compression; // NONE or ASTC used (individual textures are also marked)
     };
 
-    // TODO: move this into HDR later
-    real        tone_avg_luminance;     // tone mapping average luminance override (if supported by application)
+    // TODO: move these into HDR later
+        real        tone_avg_luminance;     // tone mapping average luminance override (if supported by application)
+        uint        direct_V;               // number of virtual point lights (VPLs) for direct lighting reservoir sampling (default: 0 == choose)
+        uint        direct_M;               // number of M candidate samples for direct lighting reservoir sampling (default: 0 == choose)
+        uint        direct_N;               // number of N used samples for direct lighting reservoir sampling (default: 0 == choose)
+
+        uint64      graph_node_cnt;         // in graph_nodes array
+        uint64      graph_node_cnt_max;     // in graph_nodes array
+        uint64      graph_root_i;           // index of root Graph_Node in graph_nodes array
 
     class Object
     {
@@ -331,7 +331,9 @@ public:
         real            frac_uv_cov;            // UV footprint of hit surface (used by mip_level calculation)
         real3           p;
         real3           normal;
+        real3           shading_normal;
         real3           tangent;
+        real3           tangent_normalized;
         real3           bitangent;
         const Model *   model;              // model of owning BVH
     };
@@ -388,7 +390,7 @@ public:
         real3           Ks;                 // RGB specular reflectivity                        (default: [0,0,0])
         real3           Tf;                 // RGB tranmission filter                           (default: [1,1,1])
         real            Tr;                 // transparency (currently used for RGB)            (default: 0=opaque)
-        real            Ns;                 // specular exponent (focus of specular highlight)  (default: [0,0,0])
+        real            Ns;                 // specular exponent (focus of specular highlight)  (default: 0)
         real            Ni;                 // optical density == index of refraction (0.001 to 10, 1=default=no bending, 1.5=glass)
         real            d;                  // dissolve                                         (default: 1=opaque)
         real            illum;              // ilumination model (0-10, consult documentation)  (default: 2)
@@ -402,6 +404,39 @@ public:
 
         inline bool is_emissive( void ) { return Ke.c[0] != 0.0 || Ke.c[1] != 0.0 || Ke.c[2] != 0.0; }
     };
+
+    // Graphs will replace simple Materials
+    // Work-in-progress:
+    //
+    enum class GRAPH_NODE_KIND
+    {
+        BLOCK,                                  // there is currently only one block of assigns
+        ASSIGN,                                 // the only statement
+        REAL,                                   // one real number constant
+        REAL3,                                  // vector constant
+        STR,                                    // string constant
+        ID,                                     // identifier 
+        OP,                                     // operator
+        NARY,                                   // n-ary operator or function call (first child is ID or OP, rest are arguments)
+    };
+
+    class Graph_Node
+    {
+    public:
+        GRAPH_NODE_KIND kind;
+        union {
+            uint        child_first_i;          // index of first child node
+            uint        s_i;                    // string index (for ID, OP)
+            real        r;                      // real constant
+            real3       r3;                     // real3 constant
+        } u;
+        uint            parent_i;
+        uint            sibling_i;
+
+        std::string str( const Model * model, std::string indent="" ) const;       // recursive
+    };
+
+    uint gph_node_alloc( Model::GRAPH_NODE_KIND kind, uint parent_i=uint(-1) );
 
     class Texture
     {
@@ -420,6 +455,19 @@ public:
                                                  uint64 * vaddr=nullptr, uint64 * byte_cnt=nullptr,
                                                  bool do_srgb_to_linear=false ) const;
         static void     astc_blk_dims_get( uint width, uint height, uint& blk_dim_x, uint& blk_dim_y );
+
+        // self-contained functions for implementing mip-based addressing 
+        static void     astc_blk_addr_get( uint      ray_id,
+                                           uint      blockdim_x, uint blockdim_y, uint blockdim_z,
+                                           uint      xsize,      uint ysize,      uint zsize,
+                                           real      u,          real v,          real w,
+                                           real      frac_uv_covg, 
+                                           uint      size_w,
+                                           uint      addr_w,
+                                           uint      uv_frac_w,
+                                           uint      covg_frac_w,
+                                           uint64_t  blks_addr,
+                                           uint64_t& blk_addr, uint& s, uint& t, uint& r );
 
         // for ARM .astc files and our internal format
         struct ASTC_Header                      
@@ -452,34 +500,57 @@ public:
 
         real4           astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, uint s, uint t, uint r, bool do_srgb_to_linear ) const;
         static void     astc_decode_block_mode( const unsigned char * bdata, unsigned char * rbdata, uint& plane_cnt, uint& partition_cnt, 
-                                                uint& weights_w, uint& weights_h, uint& weights_d, uint& R, uint& H );
+                                                uint& weights_w, uint& weights_h, uint& weights_d, uint& R, uint& H, uint& weights_qmode );
         static uint     astc_decode_partition( const unsigned char * bdata, uint x, uint y, uint z, uint partition_cnt, uint texel_cnt );
         static void     astc_decode_color_endpoint_mode( const unsigned char * bdata, uint plane_cnt, uint partition, uint partition_cnt, 
                                                          uint weights_bit_cnt, uint below_weights_start,
-                                                         uint& cem, uint& trits, uint& quints, uint& bits, uint& endpoints_start );
-        static void     astc_decode_color_endpoints( const unsigned char * bdata, uint cem, uint trits, uint quints, uint bits, uint endpoints_start, 
+                                                         uint& cem, uint& qmode, uint& trits, uint& quints, uint& bits, 
+                                                         uint& endpoints_cnt, uint& endpoints_start, uint& endpoints_v_first, uint& endpoints_v_cnt );
+        static void     astc_decode_color_endpoints( const unsigned char * bdata, 
+                                                     uint cem, uint cem_qmode, uint trits, uint quints, uint bits, 
+                                                     uint endpoints_cnt, uint endpoints_start, uint endpoints_v_first, uint endpoints_v_cnt,
                                                      uint endpoints[4][2] );
         static void     astc_decode_bit_transfer_signed( int& a, int& b );
         static void     astc_decode_blue_contract( int& r, int& g, int& b, int& a );
         static uint     astc_decode_clamp_unorm8( int v );
-        static uint     astc_decode_unquantize_color_endpoint( uint v, uint trits, uint quints, uint bits );
         static void     astc_decode_weights( const unsigned char * rbdata, uint weights_start, uint plane_cnt,
-                                             uint Bs, uint Bt, uint Br, uint N, uint M, uint Q, uint s, uint t, uint r,
-                                             uint trits, uint quints, uint bits, 
+                                             uint blk_w, uint blk_h, uint blk_d, uint weights_w, uint weights_h, uint weights_d,
+                                             uint s, uint t, uint r, uint trits, uint quints, uint bits, uint qmode,
                                              uint plane_weights[2] );
-        static uint     astc_decode_unquantize_weight( uint v, uint trits, uint quints, uint bits );
-        static uint     astc_decode_integer( const unsigned char * bdata, uint start, uint i, uint trits, uint quints, uint bits );
+        static uint     astc_decode_integer( const unsigned char * bdata, uint start, uint cnt, uint i, uint trits, uint quints, uint bits );
+        static std::string astc_dat_str( const unsigned char * bdata ); 
+
 
         struct ASTC_Range_Encoding
         {
-            uint max;           // max value
+            uint max_p1;        // max value + 1
             uint trits;         // if 1, MSBs are trit-encoded
             uint quints;        // if 1, MSBs are quint-encoded
             uint bits;          // number of unshared LSBs for value
         };
 
-        static const ASTC_Range_Encoding astc_weight_range_encodings[16];
-        static const ASTC_Range_Encoding astc_color_endpoint_range_encodings[11];
+        static const ASTC_Range_Encoding astc_range_encodings[21];        
+        static const uint                astc_color_quantization_mode[17][128];   // [color_int_cnt/2][color_bits]
+
+        static const uint                astc_integer_trits[256][5];
+        static const uint                astc_integer_quints[128][3];
+
+        static const uint                astc_weight_unquantized[12][32];         // [quantization_mode][qv]
+        static const uint                astc_color_unquantized[21][256];         // [quantization_mode][qv]
+
+        struct ASTC_Texel_Decimation_Encoding  // per texel in a block
+        {
+            uint        weight_cnt;         // number of weights to use; up to 4 max
+            uint        weight_i[4];        // index of weight in weights[] array
+            uint        weight_factor[4];   // factor to multiply by
+        };
+        using ASTC_Block_Weights_Decimation_Encoding = std::vector<ASTC_Texel_Decimation_Encoding>;         // per block dims by weight dims
+        using ASTC_Block_Decimation_Encoding         = std::vector<ASTC_Block_Weights_Decimation_Encoding>; // per block dims
+        using ASTC_Decimation_Encoding               = std::vector<ASTC_Block_Decimation_Encoding>;         // for all possible blocks
+        static ASTC_Decimation_Encoding   astc_weight_decimation_encodings;                                 // this gets filled in on demand by...
+
+        // the following will fill in the table based on demand for certain combinations of block and weights dims
+        static const ASTC_Block_Weights_Decimation_Encoding& astc_block_weights_decimation_encoding( uint blk_w, uint blk_h, uint weights_w, uint weight_h );  
     };
 
     enum class BVH_NODE_KIND
@@ -621,6 +692,45 @@ public:
         bool            is_looped;          // whether the animation sequence should be looped (default: false)
     };
 
+    uint string_alloc( std::string s );     // returns index in strings[] array
+
+    // srgb<->linear conversion utilities
+    static real srgb_to_linear_gamma( real srgb );
+    static real srgb8_to_linear_gamma( uint8_t srgb );   // more efficient, uses LUT
+    static real linear_to_srgb_gamma( real linear );
+    static real linear8_to_srgb_gamma( uint8_t linear ); // more efficient, uses LUT
+
+    // system utilities
+    void cmd( std::string c, std::string error="command failed");  // calls std::system and aborts if not success
+
+    // file utilities
+    void dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ); 
+    bool file_exists( std::string file_name );
+    bool file_read( std::string file_name, char *& start, char *& end );                        // sucks in entire file
+    void file_write( std::string file_name, const unsigned char * data, uint64_t byte_cnt );
+
+    // parsing utilities for files sucked into memory
+    uint line_num;
+    bool skip_whitespace_to_eol( char *& xxx, char *& xxx_end );  // on this line only
+    bool skip_whitespace( char *& xxx, char *& xxx_end );
+    bool skip_to_eol( char *& xxx, char *& xxx_end );
+    bool eol( char *& xxx, char *& xxx_end );
+    bool expect_char( char ch, char *& xxx, char* xxx_end, bool skip_whitespace_first=false );
+    bool expect_cmd( const char * s, char *& xxx, char *& xxx_end );
+    bool parse_string( std::string& s, char *& xxx, char *& xxx_end );
+    bool parse_string_i( uint& s, char *& xxx, char *& xxx_end );
+    bool parse_name( char *& name, char *& xxx, char *& xxx_end );
+    bool parse_id( std::string& id, char *& xxx, char *& xxx_end );
+    bool parse_id_i( uint& id_i, char *& xxx, char *& xxx_end );
+    bool parse_option_name( std::string& option_name, char *& xxx, char *& xxx_end );
+    bool parse_real3( real3& r3, char *& xxx, char *& xxx_end, bool has_brackets=false );
+    bool parse_real2( real2& r2, char *& xxx, char *& xxx_end, bool has_brackets=false );
+    bool parse_real( real& r, char *& xxx, char *& xxx_end, bool skip_whitespace_first=false );
+    bool parse_int( _int& i, char *& xxx, char *& xxx_end );
+    bool parse_uint( uint& u, char *& xxx, char *& xxx_end );
+    bool parse_bool( bool& b, char *& xxx, char *& xxx_end );
+    std::string surrounding_lines( char *& xxx, char *& xxx_end );
+
     // structs
     char *              mapped_region;      // != nullptr means the whole file was sucked in by read_uncompressed()
     Header *            hdr;
@@ -636,6 +746,7 @@ public:
     real3 *             normals;
     real2 *             texcoords;
     Material *          materials;
+    Graph_Node *        graph_nodes;
     Texture *           textures;
     unsigned char *     texels;
     BVH_Node *          bvh_nodes;
@@ -661,9 +772,6 @@ public:
     // debug flags
     static bool         debug;
     static uint         debug_tex_i;
-
-
-
 
 
 //------------------------------------------------------------------------------
@@ -727,37 +835,29 @@ private:
     char * obj_start;
     char * obj_end;
     char * obj;
-    uint   line_num;
+    char * mtl_start;
+    char * mtl_end;
+    char * mtl;
+    char * gph_start;
+    char * gph_end;
+    char * gph;
 
     bool load_fsc( std::string fsc_file, std::string dir_name );        // .fscene 
     bool load_obj( std::string obj_file, std::string dir_name );        // .obj
     bool load_mtl( std::string mtl_file, std::string dir_name, bool replacing=false );
     bool load_tex( const char * tex_name, std::string dir_name, Texture *& texture );
+    bool load_gph( std::string gph_file, std::string dir_name, std::string base_name, std::string ext_name );
 
-    bool file_exists( std::string file_name );
-    bool file_read( std::string file_name, char *& start, char *& end );
-    void file_write( std::string file_name, const unsigned char * data, uint64_t byte_cnt );
-
-    bool skip_whitespace_to_eol( char *& xxx, char *& xxx_end );  // on this line only
-    bool skip_whitespace( char *& xxx, char *& xxx_end );
-    bool skip_to_eol( char *& xxx, char *& xxx_end );
-    bool eol( char *& xxx, char *& xxx_end );
-    bool expect_char( char ch, char *& xxx, char* xxx_end, bool skip_whitespace_first=false );
-    bool expect_cmd( const char * s, char *& xxx, char *& xxx_end );
-    bool parse_string( std::string& s, char *& xxx, char *& xxx_end );
-    bool parse_string_i( uint& s, char *& xxx, char *& xxx_end );
-    bool parse_name( char *& name, char *& xxx, char *& xxx_end );
-    bool parse_id( std::string& id, char *& xxx, char *& xxx_end );
-    bool parse_option_name( std::string& option_name, char *& xxx, char *& xxx_end );
     bool parse_obj_cmd( obj_cmd_t& cmd );
     bool parse_mtl_cmd( mtl_cmd_t& cmd, char *& mtl, char *& mtl_end );
-    bool parse_real3( real3& r3, char *& xxx, char *& xxx_end, bool has_brackets=false );
-    bool parse_real2( real2& r2, char *& xxx, char *& xxx_end, bool has_brackets=false );
-    bool parse_real( real& r, char *& xxx, char *& xxx_end, bool skip_whitespace_first=false );
-    bool parse_int( _int& i, char *& xxx, char *& xxx_end );
-    bool parse_uint( uint& u, char *& xxx, char *& xxx_end );
-    bool parse_bool( bool& b, char *& xxx, char *& xxx_end );
-    std::string surrounding_lines( char *& xxx, char *& xxx_end );
+    bool parse_gph_real( uint& r_i, char *& gph, char *& gph_end );
+    bool parse_gph_real3( uint& r3_i, char *& gph, char *& gph_end );
+    bool parse_gph_str( uint& s_i, char *& gph, char *& gph_end );
+    bool parse_gph_id( uint& id_i, char *& gph, char *& gph_end );
+    bool parse_gph_op_lookahead( uint& s_i, char *& gph, char *& gph_end );
+    bool parse_gph_op( uint& op_i, char *& gph, char *& gph_end );
+    bool parse_gph_term( uint& term_i, char *& gph, char *& gph_end );
+    bool parse_gph_expr( uint& expr_i, char *& gph, char *& gph_end, uint curr_prec=0 );
 
     // BVH builder
     void bvh_build( BVH_TREE bvh_tree );
@@ -778,13 +878,17 @@ private:
 
 #define dprint( msg )
 //#define dprint( msg ) std::cout << (msg) << "\n"
+bool Model::debug = false;
+#define mdout if (Model::debug) std::cout 
 
 // these are done as macros to avoid evaluating msg (it makes a big difference)
 #include <assert.h>
-#define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << msg << "\n"; assert( false ); return false; }
-#define fsc_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << msg << "\n"; assert( false ); goto error;   }
-#define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << msg << "\n"; assert( false ); goto error;   }
-#define die_assert( bool, msg ) if ( !(bool) ) {                               std::cout << msg << "\n"; assert( false );               }
+#define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << "ERROR: " << msg << "\n"; assert( false ); return false; }
+#define fsc_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << "ERROR: " << msg << "\n"; assert( false ); goto error;   }
+#define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << "ERROR: " << msg << "\n"; assert( false ); goto error;   }
+#define gph_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << "ERROR: " << msg << "\n"; assert( false ); goto error;   }
+#define die_assert( bool, msg ) if ( !(bool) ) {                               std::cout << "ERROR: " << msg << "\n"; assert( false );               }
+#define die( msg )                             {                               std::cout << "ERROR: " << msg << "\n"; assert( false );               }
 
 inline std::istream& operator >> ( std::istream& is, Model::real3& v ) 
 {
@@ -798,9 +902,24 @@ inline std::ostream& operator << ( std::ostream& os, const Model::real4& v )
     return os;
 }
 
+inline std::string str( uint u )
+{
+    return std::to_string( u );
+}
+
+inline std::string str( Model::real r ) 
+{
+    return std::to_string( r );
+}
+
+inline std::string str( Model::real3 v ) 
+{
+    return "[" + str(v.c[0]) + "," + str(v.c[1]) + "," + str(v.c[2]) + "]";
+}
+
 inline std::ostream& operator << ( std::ostream& os, const Model::real3& v ) 
 {
-    os << "[" << v.c[0] << "," << v.c[1] << "," << v.c[2] << "]";
+    os << str( v );
     return os;
 }
 
@@ -855,10 +974,38 @@ inline std::ostream& operator << ( std::ostream& os, const Model::Material& mat 
     return os;
 }
 
+inline std::string str( const Model::GRAPH_NODE_KIND kind )
+{
+    return (kind == Model::GRAPH_NODE_KIND::BLOCK)  ? "BLOCK"  :
+           (kind == Model::GRAPH_NODE_KIND::ASSIGN) ? "ASSIGN" : 
+           (kind == Model::GRAPH_NODE_KIND::REAL)   ? "REAL"   :
+           (kind == Model::GRAPH_NODE_KIND::REAL3)  ? "REAL3"  :
+           (kind == Model::GRAPH_NODE_KIND::STR)    ? "STR"    :
+           (kind == Model::GRAPH_NODE_KIND::ID)     ? "ID"     :
+           (kind == Model::GRAPH_NODE_KIND::OP)     ? "OP"     :
+           (kind == Model::GRAPH_NODE_KIND::NARY)   ? "NARY"   : "<unknown>";
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::GRAPH_NODE_KIND& kind ) 
+{
+    os << str( kind );
+    return os;
+}
+
 inline std::ostream& operator << ( std::ostream& os, const Model::Texture& tex ) 
 {
     os << "name_i=" << tex.name_i << " width=" << tex.width << " height=" << tex.height << " nchan=" << tex.nchan <<
                     " texel_i=" << tex.texel_i << " bump_multiplier=" << tex.bump_multiplier;
+    return os;
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::Texture::ASTC_Header& hdr ) 
+{
+    uint w = (hdr.xsize[0] << 0) | (hdr.xsize[1] << 8) | (hdr.xsize[2] << 16);
+    uint h = (hdr.ysize[0] << 0) | (hdr.ysize[1] << 8) | (hdr.ysize[2] << 16);
+    uint d = (hdr.zsize[0] << 0) | (hdr.zsize[1] << 8) | (hdr.zsize[2] << 16);
+    os << "blockdim=[" << int(hdr.blockdim_x) << "," << int(hdr.blockdim_y) << "," << int(hdr.blockdim_z) << "] size=[" << 
+                          w << "," << h << "," << d << "]";
     return os;
 }
 
@@ -896,6 +1043,7 @@ Model::Model( std::string                top_file,
     hdr->texcoord_cnt = 1;
     hdr->mipmap_filter = mipmap_filter;
     hdr->texture_compression = texture_compression;
+         graph_root_i = uint(-1);
     hdr->lighting_scale = 1.0;
     hdr->ambient_intensity = real3( 0.1, 0.1, 0.1 );
     hdr->sky_box_tex_i = uint(-1);
@@ -904,6 +1052,7 @@ Model::Model( std::string                top_file,
     hdr->initial_camera_i = uint(-1);
     hdr->animation_speed = 1.0;
     hdr->background_color = real3( 0, 0, 0 );
+    hdr->bvh_root_i = uint(-1);
 
     //------------------------------------------------------------
     // Initial lengths of arrays are large in virtual memory
@@ -918,6 +1067,8 @@ Model::Model( std::string                top_file,
     max->norm_cnt    	   = max->vtx_cnt;
     max->texcoord_cnt	   = max->vtx_cnt;
     max->mipmap_filter	   = mipmap_filter;
+         graph_node_cnt_max= 1;
+         graph_node_cnt    = 0;
     max->tex_cnt     	   = max->mtl_cnt;
     max->texel_cnt   	   = max->mtl_cnt * 128*1024;
     max->char_cnt    	   = max->obj_cnt * 128;
@@ -941,6 +1092,7 @@ Model::Model( std::string                top_file,
     normals           = aligned_alloc<real3>(    max->norm_cnt );
     texcoords         = aligned_alloc<real2>(    max->texcoord_cnt );
     materials         = aligned_alloc<Material>( max->mtl_cnt );
+    graph_nodes       = aligned_alloc<Graph_Node>( graph_node_cnt_max );
     textures          = aligned_alloc<Texture>(  max->tex_cnt );
     texels            = aligned_alloc<unsigned char>( max->texel_cnt );
     bvh_nodes         = aligned_alloc<BVH_Node>( max->bvh_node_cnt );
@@ -962,6 +1114,8 @@ Model::Model( std::string                top_file,
         if ( !load_obj( top_file, dir_name ) ) return;
     } else if ( ext_name == std::string( ".fscene" ) || ext_name == std::string( ".FSCENE" ) ) {
         if ( !load_fsc( top_file, dir_name ) ) return;
+    } else if ( ext_name == std::string( ".gph" ) ) {
+        if ( !load_gph( top_file, dir_name, base_name, ext_name ) ) return;
     } else {
         error_msg = "unknown top file ext_name: " + ext_name;
         return;
@@ -1051,6 +1205,7 @@ Model::Model( std::string                top_file,
                     uint64( hdr->norm_cnt             ) * sizeof( normals[0] ) +
                     uint64( hdr->texcoord_cnt         ) * sizeof( texcoords[0] ) +
                     uint64( hdr->mtl_cnt              ) * sizeof( materials[0] ) +
+                    uint64( graph_node_cnt            ) * sizeof( graph_nodes[0] ) +
                     uint64( hdr->tex_cnt              ) * sizeof( textures[0] ) +
                     uint64( hdr->texel_cnt            ) * sizeof( texels[0] ) +
                     uint64( hdr->char_cnt             ) * sizeof( strings[0] ) + 
@@ -1069,75 +1224,101 @@ Model::Model( std::string model_path, bool is_compressed )
 {
     is_good = false;
     mapped_region = nullptr;
+    graph_node_cnt = 0;         // for now
     if ( !is_compressed ) {
         read_uncompressed( model_path );
-        return;
-    }
 
-    gzFile fd = gzopen( model_path.c_str(), "r" );
-    if ( fd == Z_NULL ) {
-        "Could not gzopen() file " + model_path + " for reading - gzopen() error: " + strerror( errno );
-        return;
-    }
+    } else {
+        gzFile fd = gzopen( model_path.c_str(), "r" );
+        if ( fd == Z_NULL ) {
+            "Could not gzopen() file " + model_path + " for reading - gzopen() error: " + strerror( errno );
+            return;
+        }
 
-    //------------------------------------------------------------
-    // Reader in header then individual arrays.
-    //------------------------------------------------------------
-    #define _read( array, type, cnt ) \
-        if ( cnt == 0 ) { \
-            array = nullptr; \
-        } else { \
-            array = aligned_alloc<type>( cnt ); \
-            if ( array == nullptr ) { \
-                gzclose( fd ); \
-                error_msg = "could not allocate " #array " array"; \
-                return; \
-            } \
-            char * _addr = reinterpret_cast<char *>( array ); \
-            for( uint64 _byte_cnt = (cnt)*sizeof(type); _byte_cnt != 0;  ) \
-            { \
-                uint64 _this_byte_cnt = 1024*1024*1024; \
-                if ( _byte_cnt < _this_byte_cnt ) _this_byte_cnt = _byte_cnt; \
-                if ( gzread( fd, _addr, _this_byte_cnt ) <= 0 ) { \
+        //------------------------------------------------------------
+        // Reader in header then individual arrays.
+        //------------------------------------------------------------
+        #define _read( array, type, cnt ) \
+            if ( cnt == 0 ) { \
+                array = nullptr; \
+            } else { \
+                array = aligned_alloc<type>( cnt ); \
+                if ( array == nullptr ) { \
                     gzclose( fd ); \
-                    error_msg = "could not gzread() file " + model_path + " - gzread() error: " + strerror( errno ); \
+                    error_msg = "could not allocate " #array " array"; \
                     return; \
                 } \
-                _byte_cnt -= _this_byte_cnt; \
-                _addr     += _this_byte_cnt; \
+                char * _addr = reinterpret_cast<char *>( array ); \
+                for( uint64 _byte_cnt = (cnt)*sizeof(type); _byte_cnt != 0;  ) \
+                { \
+                    uint64 _this_byte_cnt = 1024*1024*1024; \
+                    if ( _byte_cnt < _this_byte_cnt ) _this_byte_cnt = _byte_cnt; \
+                    if ( gzread( fd, _addr, _this_byte_cnt ) <= 0 ) { \
+                        gzclose( fd ); \
+                        error_msg = "could not gzread() file " + model_path + " - gzread() error: " + strerror( errno ); \
+                        return; \
+                    } \
+                    _byte_cnt -= _this_byte_cnt; \
+                    _addr     += _this_byte_cnt; \
+                } \
             } \
-        } \
 
-    _read( hdr,         Header,   1 );
-    if ( hdr->version != VERSION ) {
+        _read( hdr,         Header,   1 );
+        if ( hdr->version != VERSION ) {
+            gzclose( fd );
+            error_msg = "hdr->version does not match current VERSION " + std::to_string(VERSION) + ", got " + std::to_string(hdr->version) + 
+                        "; please re-generate (or re-download) your .model files"; 
+            die_assert( false, "aborting..." ); 
+            return;
+        }
+        max = aligned_alloc<Header>( 1 );
+        memcpy( max, hdr, sizeof( Header ) );
+        _read( strings,             char,          hdr->char_cnt );
+        _read( objects,             Object,        hdr->obj_cnt );
+        _read( polygons,            Polygon,       hdr->poly_cnt );
+        _read( emissive_polygons,   uint,          hdr->emissive_poly_cnt );
+        _read( vertexes,            Vertex,        hdr->vtx_cnt );
+        _read( positions,           real3,         hdr->pos_cnt );
+        _read( normals,             real3,         hdr->norm_cnt );
+        _read( texcoords,           real2,         hdr->texcoord_cnt );
+        _read( materials,           Material,      hdr->mtl_cnt );
+        _read( graph_nodes,         Graph_Node,    graph_node_cnt );
+        _read( textures,            Texture,       hdr->tex_cnt );
+        _read( texels,              unsigned char, hdr->texel_cnt );
+        _read( bvh_nodes,           BVH_Node,      hdr->bvh_node_cnt );
+        _read( matrixes,            Matrix,        hdr->matrix_cnt );
+        _read( instances,           Instance,      hdr->inst_cnt );
+        _read( lights,              Light,         hdr->light_cnt );
+        _read( cameras,             Camera,        hdr->camera_cnt );
+        _read( frames,              Frame,         hdr->frame_cnt );
+        _read( animations,          Animation,     hdr->animation_cnt );
+
         gzclose( fd );
-        error_msg = "hdr->version does not match current VERSION " + std::to_string(VERSION) + ", got " + std::to_string(hdr->version) + 
-                    "; please re-generate (or re-download) your .model files"; 
-        die_assert( false, "aborting..." ); 
-        return;
     }
-    max = aligned_alloc<Header>( 1 );
-    memcpy( max, hdr, sizeof( Header ) );
-    _read( strings,             char,          hdr->char_cnt );
-    _read( objects,             Object,        hdr->obj_cnt );
-    _read( polygons,            Polygon,       hdr->poly_cnt );
-    _read( emissive_polygons,   uint,          hdr->emissive_poly_cnt );
-    _read( vertexes,            Vertex,        hdr->vtx_cnt );
-    _read( positions,           real3,         hdr->pos_cnt );
-    _read( normals,             real3,         hdr->norm_cnt );
-    _read( texcoords,           real2,         hdr->texcoord_cnt );
-    _read( materials,           Material,      hdr->mtl_cnt );
-    _read( textures,            Texture,       hdr->tex_cnt );
-    _read( texels,              unsigned char, hdr->texel_cnt );
-    _read( bvh_nodes,           BVH_Node,      hdr->bvh_node_cnt );
-    _read( matrixes,            Matrix,        hdr->matrix_cnt );
-    _read( instances,           Instance,      hdr->inst_cnt );
-    _read( lights,              Light,         hdr->light_cnt );
-    _read( cameras,             Camera,        hdr->camera_cnt );
-    _read( frames,              Frame,         hdr->frame_cnt );
-    _read( animations,          Animation,     hdr->animation_cnt );
 
-    gzclose( fd );
+    //------------------------------------------------------------
+    // Recreate name maps.
+    //------------------------------------------------------------
+    for ( uint i = 0; i < hdr->obj_cnt; i++ )
+    {
+        std::string name = &strings[objects[i].name_i];
+        name_to_obj_i[name] = i;
+        mdout << "obj_i=" << i << " name_i=" << objects[i].name_i << " name=" << name << "\n";
+    }
+
+    for ( uint i = 0; i < hdr->mtl_cnt; i++ )
+    {
+        std::string name = &strings[materials[i].name_i];
+        name_to_mtl_i[name] = i;
+        mdout << "mtl_i=" << i << " name_i=" << materials[i].name_i << " name=" << name << "\n";
+    }
+
+    for ( uint i = 0; i < hdr->tex_cnt; i++ )
+    {
+        std::string name = &strings[textures[i].name_i];
+        name_to_tex_i[name] = i;
+        mdout << "tex_i=" << i << " name_i=" << textures[i].name_i << " name=" << name << "\n";
+    }
 
     is_good = true;
 }
@@ -1157,6 +1338,7 @@ Model::~Model()
         delete normals;
         delete texcoords;
         delete materials;
+        delete graph_nodes;
         delete textures;
         delete texels;
         delete bvh_nodes;
@@ -1205,6 +1387,7 @@ bool Model::write( std::string model_path, bool is_compressed )
     _write( normals,            hdr->norm_cnt           * sizeof(normals[0]) );
     _write( texcoords,          hdr->texcoord_cnt       * sizeof(texcoords[0]) );
     _write( materials,   	hdr->mtl_cnt       	* sizeof(materials[0]) );
+    _write( graph_nodes,   	graph_node_cnt  	* sizeof(graph_nodes[0]) );
     _write( textures,    	hdr->tex_cnt       	* sizeof(textures[0]) );
     _write( texels,      	hdr->texel_cnt     	* sizeof(texels[0]) );
     _write( bvh_nodes,   	hdr->bvh_node_cnt  	* sizeof(bvh_nodes[0]) );
@@ -1291,6 +1474,7 @@ bool Model::write_uncompressed( std::string model_path )
     _uwrite( normals,           hdr->norm_cnt           * sizeof(normals[0]) );
     _uwrite( texcoords,         hdr->texcoord_cnt       * sizeof(texcoords[0]) );
     _uwrite( materials,   	hdr->mtl_cnt       	* sizeof(materials[0]) );
+    _uwrite( graph_nodes,   	graph_node_cnt  	* sizeof(graph_nodes[0]) );
     _uwrite( textures,    	hdr->tex_cnt       	* sizeof(textures[0]) );
     _uwrite( texels,      	hdr->texel_cnt     	* sizeof(texels[0]) );
     _uwrite( bvh_nodes,   	hdr->bvh_node_cnt  	* sizeof(bvh_nodes[0]) );
@@ -1303,6 +1487,9 @@ bool Model::write_uncompressed( std::string model_path )
 
     fsync( fd ); // flush
     close( fd );
+    std::string c = "chmod 666 ";
+    c += model_path.c_str();
+    cmd( c );
 
     if ( 0 ) {
         for( uint32_t i = 0; i < hdr->bvh_node_cnt; i++ )
@@ -1353,6 +1540,7 @@ bool Model::read_uncompressed( std::string model_path )
     _uread( normals,             real3,         hdr->norm_cnt );
     _uread( texcoords,           real2,         hdr->texcoord_cnt );
     _uread( materials,           Material,      hdr->mtl_cnt );
+    _uread( graph_nodes,         Graph_Node,    graph_node_cnt );
     _uread( textures,            Texture,       hdr->tex_cnt );
     _uread( texels,              unsigned char, hdr->texel_cnt );
     _uread( bvh_nodes,           BVH_Node,      hdr->bvh_node_cnt );
@@ -1462,6 +1650,15 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
 
                 } else if ( strcmp( field, "background_color" ) == 0 ) {
                     if ( !parse_real3( hdr->background_color, fsc, fsc_end, true ) ) goto error;
+
+                } else if ( strcmp( field, "direct_V" ) == 0 ) {
+                    if ( !parse_uint( direct_V, fsc, fsc_end ) ) goto error;
+
+                } else if ( strcmp( field, "direct_M" ) == 0 ) {
+                    if ( !parse_uint( direct_M, fsc, fsc_end ) ) goto error;
+
+                } else if ( strcmp( field, "direct_N" ) == 0 ) {
+                    if ( !parse_uint( direct_N, fsc, fsc_end ) ) goto error;
 
                 } else if ( strcmp( field, "tone_white" ) == 0 ) {
                     if ( !parse_real( hdr->tone_white, fsc, fsc_end, true ) ) goto error;
@@ -2371,10 +2568,9 @@ bool Model::load_mtl( std::string mtl_file, std::string dir_name, bool replacing
     //------------------------------------------------------------
     // Map in .obj file
     //------------------------------------------------------------
-    char * mtl;
-    char * mtl_end;
     if ( dir_name != std::string( "" ) ) mtl_file = dir_name + "/" + mtl_file;
-    if ( !file_read( mtl_file, mtl, mtl_end ) ) return false;
+    if ( !file_read( mtl_file, mtl_start, mtl_end ) ) return false;
+    mtl = mtl_start;
 
     //------------------------------------------------------------
     // Parse .mtl file contents
@@ -2813,6 +3009,83 @@ bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Textur
     return true;
 }
 
+bool Model::load_gph( std::string gph_file, std::string dir_name, std::string base_name, std::string ext_name )
+{
+    (void)dir_name;
+    (void)base_name;
+    (void)ext_name;
+
+    //------------------------------------------------------------
+    // Map in .gph file
+    //------------------------------------------------------------
+    line_num = 1;
+    if ( !file_read( gph_file, gph_start, gph_end ) ) return false;
+    gph = gph_start;
+
+    uint block_i = gph_node_alloc( GRAPH_NODE_KIND::BLOCK );
+    graph_root_i = block_i;
+
+    //------------------------------------------------------------
+    // Parse .gph file contents
+    //------------------------------------------------------------
+    uint id_i;
+    uint op_i;
+    uint expr_i;
+    for( ;; ) 
+    {
+        skip_whitespace( gph, gph_end );
+        if ( gph == gph_end ) return true;
+
+        //---------------------------------------------
+        // Parse assign
+        //---------------------------------------------
+        if ( !parse_gph_id( id_i, gph, gph_end ) ) return false;
+        if ( !parse_gph_op( op_i, gph, gph_end ) ) return false;
+        die_assert( strcmp( &strings[graph_nodes[op_i].u.s_i], "=" ) == 0, "bad assignment operator" );
+        if ( !parse_gph_expr( expr_i, gph, gph_end ) ) return false;
+
+        //---------------------------------------------
+        // Add ASSIGN node
+        //---------------------------------------------
+        uint assign_i = gph_node_alloc( GRAPH_NODE_KIND::ASSIGN, block_i );
+        graph_nodes[assign_i].u.child_first_i = id_i;
+        graph_nodes[id_i].sibling_i = expr_i;
+        graph_nodes[id_i].parent_i = assign_i;
+        graph_nodes[expr_i].parent_i = assign_i;
+    }
+    return true;
+
+error:
+    error_msg += " (at line " + std::to_string( line_num ) + " of " + gph_file + ")";
+    die_assert( false, "aborting..." );
+    return false;
+}
+
+uint Model::gph_node_alloc( Model::GRAPH_NODE_KIND kind, uint parent_i )
+{
+    //mdout << "new node: kind=" << kind << "\n";
+    perhaps_realloc( graph_nodes, graph_node_cnt, graph_node_cnt_max, 1 );
+    uint node_i = graph_node_cnt++;
+    Graph_Node * node = &graph_nodes[node_i];
+    node->kind = kind;
+    node->u.child_first_i = uint(-1);
+    node->sibling_i = uint(-1);
+
+    // optionally add to tail of parent's child list
+    node->parent_i = parent_i;
+    if ( parent_i != uint(-1) ) {
+        Graph_Node * parent = &graph_nodes[parent_i];
+        for( uint * sibling_i_ptr = &parent->u.child_first_i; ; sibling_i_ptr = &graph_nodes[*sibling_i_ptr].sibling_i )
+        {
+            if ( *sibling_i_ptr == uint(-1) ) {
+                *sibling_i_ptr = node_i;
+                break;
+            }
+        }
+    }
+    return node_i;
+}
+
 void Model::dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ) 
 {
     // in case they are not found:
@@ -2980,7 +3253,15 @@ inline bool Model::skip_whitespace( char *& xxx, char *& xxx_end )
         if ( !in_comment && ch != ' ' && ch != '\n' && ch != '\r' && ch != '\t' ) break;
 
         if ( ch == '\n' || ch == '\r' ) {
-            if ( ch == '\n' && (xxx == fsc || xxx == obj) ) line_num++;
+            if ( ch == '\n' && xxx != mtl ) line_num++;
+            if ( Model::debug ) {
+                std::string line = "";
+                for( char * ccc = xxx+1; ccc != xxx_end && *ccc != '\n' && *ccc != '\r'; ccc++ )
+                {
+                    line += std::string( 1, *ccc );
+                }
+                mdout << "PARSING: " << line << "\n";
+            }
             in_comment = false;
         }
         xxx++;
@@ -3000,7 +3281,7 @@ inline bool Model::skip_whitespace_to_eol( char *& xxx, char *& xxx_end )
         if ( !in_comment && ch != ' ' && ch != '\n' && ch != '\r' && ch != '\t' ) break;
 
         if ( ch == '\n' || ch == '\r' ) {
-            if ( ch == '\n' && (xxx == fsc || xxx == obj) ) line_num++;
+            if ( ch == '\n' && xxx != mtl ) line_num++;
             break;
         }
         xxx++;
@@ -3027,7 +3308,7 @@ inline bool Model::eol( char *& xxx, char *& xxx_end )
 
     if ( xxx == xxx_end || *xxx == '\n' || *xxx == '\r' ) {
         if ( xxx != xxx_end ) {
-            if ( *xxx == '\n' && (xxx == fsc || xxx == obj) ) line_num++;
+            if ( *xxx == '\n' && xxx != mtl ) line_num++;
             xxx++;
         }
         dprint( "at eol" );
@@ -3092,17 +3373,23 @@ inline bool Model::parse_string( std::string& s, char *& xxx, char *& xxx_end )
     }
 }
 
+inline uint Model::string_alloc( std::string s )
+{
+    uint s_len = s.length();
+    perhaps_realloc( strings, hdr->char_cnt, max->char_cnt, s_len+1 );
+    uint s_i = hdr->char_cnt;
+    char * to_s = &strings[hdr->char_cnt];
+    hdr->char_cnt += s_len + 1;
+    memcpy( to_s, s.c_str(), s_len+1 );
+    return s_i;
+}
+
 inline bool Model::parse_string_i( uint& s_i, char *& xxx, char *& xxx_end )
 {
     std::string s;
     if ( !parse_string( s, xxx, xxx_end ) ) return false;
 
-    uint s_len = s.length();
-    perhaps_realloc( strings, hdr->char_cnt, max->char_cnt, s_len+1 );
-    s_i = hdr->char_cnt;
-    char * to_s = &strings[hdr->char_cnt];
-    hdr->char_cnt += s_len + 1;
-    memcpy( to_s, s.c_str(), s_len+1 );
+    s_i = string_alloc( s );
     return true;
 }
 
@@ -3157,6 +3444,20 @@ inline bool Model::parse_id( std::string& id, char *& xxx, char *& xxx_end )
         xxx++;
     }
 
+    return true;
+}
+
+inline bool Model::parse_id_i( uint& id_i, char *& xxx, char *& xxx_end )
+{
+    std::string id;
+    if ( !parse_id( id, xxx, xxx_end ) ) return false;
+
+    uint id_len = id.length();
+    perhaps_realloc( strings, hdr->char_cnt, max->char_cnt, id_len+1 );
+    id_i = hdr->char_cnt;
+    char * to_id = &strings[hdr->char_cnt];
+    hdr->char_cnt += id_len + 1;
+    memcpy( to_id, id.c_str(), id_len+1 );
     return true;
 }
 
@@ -3432,6 +3733,225 @@ inline bool Model::parse_mtl_cmd( mtl_cmd_t& cmd, char *& mtl, char *& mtl_end )
     }
 }
 
+inline bool Model::parse_gph_real( uint& r_i, char *& gph, char *& gph_end )
+{
+    real r;
+    if ( !parse_real( r, gph, gph_end, true ) ) return false;
+
+    r_i = gph_node_alloc( GRAPH_NODE_KIND::REAL );
+    mdout << "    " << r << "\n";
+    graph_nodes[r_i].u.r = r;
+
+    return true;
+}
+
+inline bool Model::parse_gph_real3( uint& r3_i, char *& gph, char *& gph_end )
+{
+    real3 r3;
+    if ( !parse_real3( r3, gph, gph_end, true ) ) return false;
+
+    r3_i = gph_node_alloc( GRAPH_NODE_KIND::REAL3 );
+    mdout << "    " << r3 << "\n";
+    graph_nodes[r3_i].u.r3 = r3;
+
+    return true;
+}
+
+inline bool Model::parse_gph_str( uint& s_i, char *& gph, char *& gph_end )
+{
+    uint str_i;
+    if ( !parse_string_i( str_i, gph, gph_end ) ) return false;
+
+    s_i = gph_node_alloc( GRAPH_NODE_KIND::STR );
+    mdout << "    " << &strings[str_i] << "\n";
+    graph_nodes[s_i].u.s_i = str_i;
+
+    return true;
+}
+
+inline bool Model::parse_gph_id( uint& id_i, char *& gph, char *& gph_end )
+{
+    uint s_i;
+    if ( !parse_id_i( s_i, gph, gph_end ) ) return false;
+
+    id_i = gph_node_alloc( GRAPH_NODE_KIND::ID );
+    mdout << "    " << &strings[s_i] << "\n";
+    graph_nodes[id_i].u.s_i = s_i;
+
+    return true;
+}
+
+inline bool Model::parse_gph_op_lookahead( uint& s_i, char *& gph, char *& gph_end )
+{
+    skip_whitespace( gph, gph_end );
+    if ( gph == gph_end ) return false;
+
+    char s[2] = { *gph, '\0' };
+    uint s_len = 1;
+    switch( s[0] )
+    {
+        case '=':     
+        case '+':    
+        case '-':     
+        case '*':    
+        case '/':   
+            break;
+
+        default:
+            return false;
+    }
+
+    perhaps_realloc( strings, hdr->char_cnt, max->char_cnt, s_len+1 );
+    s_i = hdr->char_cnt;
+    char * to_s = &strings[hdr->char_cnt];
+    hdr->char_cnt += s_len+1;
+    memcpy( to_s, s, s_len+1 );
+    return true;
+}
+
+inline bool Model::parse_gph_op( uint& op_i, char *& gph, char *& gph_end )
+{
+    uint s_i;
+    if ( !parse_gph_op_lookahead( s_i, gph, gph_end ) ) return false;
+    gph += strlen( &strings[s_i] );
+
+    op_i = gph_node_alloc( GRAPH_NODE_KIND::OP );
+    graph_nodes[op_i].u.s_i = s_i;
+    mdout << "    " << std::string(&strings[s_i]) << "\n";
+
+    return true;
+}
+
+bool Model::parse_gph_term( uint& term_i, char *& gph, char *& gph_end )
+{
+    skip_whitespace( gph, gph_end );
+    char ch = *gph;
+    if ( ch >= '0' && ch <= '9' ) {
+        // constant real
+        if ( !parse_gph_real( term_i, gph, gph_end ) ) return false;
+
+    } else if ( ch == '[' ) {
+        // constant real3
+        if ( !parse_gph_real3( term_i, gph, gph_end ) ) return false;
+
+    } else if ( ch == '"' ) {
+        // constant string
+        if ( !parse_gph_str( term_i, gph, gph_end ) ) return false;
+
+    } else if ( ch == '(' ) {
+        // parenthisized
+        gph++;
+        if ( !parse_gph_expr( term_i, gph, gph_end ) ) return false;
+        skip_whitespace( gph, gph_end );
+        rtn_assert( gph != gph_end, "missing ')' at end of .gph file " + surrounding_lines( gph, gph_end ) );
+        rtn_assert( *gph == ')', "missing ')' in .gph file , got '" + std::string( gph ) + "' (" + std::to_string(*gph) + ")" +
+                                 surrounding_lines( gph, gph_end ) );
+        gph++;
+
+    } else if ( (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '_' ) {
+        // identifier
+        if ( !parse_gph_id( term_i, gph, gph_end ) ) return false;
+        skip_whitespace( gph, gph_end );
+        if ( *gph == '(' ) {
+            // function call -> parse arguments
+            gph++;
+
+            uint id_i = term_i;
+            term_i = gph_node_alloc( GRAPH_NODE_KIND::NARY );
+            graph_nodes[term_i].u.child_first_i = id_i;
+            graph_nodes[id_i].parent_i = term_i;
+
+            uint last_i = id_i;
+            uint arg_i;
+            for( ;; ) 
+            {
+                skip_whitespace( gph, gph_end );
+                rtn_assert( gph != gph_end, "missing arguments and ')' in function call" + surrounding_lines( gph, gph_end ) );
+                if ( *gph == ')' ) {
+                    gph++;
+                    break;
+                }
+
+                if ( last_i != id_i ) {
+                    skip_whitespace( gph, gph_end );
+                    rtn_assert( *gph == ',', "missing comma in arguments to function call" + surrounding_lines( gph, gph_end ) );
+                    gph++;
+                }
+
+                if ( !parse_gph_expr( arg_i, gph, gph_end ) ) return false;
+                graph_nodes[last_i].sibling_i = arg_i;
+                graph_nodes[arg_i].parent_i = term_i;
+                last_i = arg_i;
+            }
+        }
+    } else {
+        rtn_assert( false, "could not parse gph term, got character '" + std::string( 1, ch ) + surrounding_lines( gph, gph_end ) );
+    }
+
+    return true;
+}
+
+inline bool Model::parse_gph_expr( uint& expr_i, char *& gph, char *& gph_end, uint curr_prec )
+{
+    //-------------------------------------------------------------------
+    // Parse one term
+    //-------------------------------------------------------------------
+    if ( !parse_gph_term( expr_i, gph, gph_end ) ) return false;
+
+    //-------------------------------------------------------------------
+    // Now see if we get a bunch of ops in a row that we can parse now.
+    //-------------------------------------------------------------------
+    for( ;; ) 
+    {
+        //-------------------------------------------------------------------
+        // See if there is an operator next that we can parse now.
+        //-------------------------------------------------------------------
+        uint s_i;
+        if ( !parse_gph_op_lookahead( s_i, gph, gph_end ) ) break;
+
+        //-------------------------------------------------------------------
+        // Get op precedence and check that it's high enough.
+        //-------------------------------------------------------------------
+        uint op_prec = 0;
+        if ( strcmp( &strings[s_i], "+" ) == 0 ||
+             strcmp( &strings[s_i], "-" ) == 0 ) {
+            op_prec = 10;
+        } else if ( strcmp( &strings[s_i], "*" ) == 0 ||
+                    strcmp( &strings[s_i], "/" ) == 0 ) {
+            op_prec = 20;
+        } else {
+            die( "bad operator in expression: " + std::string( &strings[s_i] ) );
+        }
+        mdout << "op_prec=" << op_prec << " curr_prec=" << curr_prec << "\n";
+        if ( op_prec < curr_prec ) break;
+        curr_prec = op_prec;
+
+        //-------------------------------------------------------------------
+        // Consume operator and parse term.
+        //-------------------------------------------------------------------
+        uint op_i;
+        if ( !parse_gph_op( op_i, gph, gph_end ) ) return false;
+
+        uint opnd1_i;
+        if ( !parse_gph_term( opnd1_i, gph, gph_end ) ) return false;
+
+        //-------------------------------------------------------------------
+        // Make an n-ary node out of this.
+        // expr_i still contains opnd0_i
+        //-------------------------------------------------------------------
+        uint nary_i = gph_node_alloc( GRAPH_NODE_KIND::NARY );
+        graph_nodes[nary_i].u.child_first_i = op_i;
+        graph_nodes[op_i].parent_i = nary_i;
+        graph_nodes[op_i].sibling_i = expr_i;
+        graph_nodes[expr_i].parent_i = nary_i;
+        graph_nodes[expr_i].sibling_i = opnd1_i;
+        graph_nodes[opnd1_i].parent_i = nary_i;
+        expr_i = nary_i;
+    }
+
+    return true;
+}
+
 inline bool Model::parse_real3( Model::real3& r3, char *& xxx, char *& xxx_end, bool has_brackets )
 {
     return (!has_brackets || expect_char( '[', xxx, xxx_end, true )) &&
@@ -3538,7 +4058,7 @@ inline bool Model::parse_int( _int& i, char *& xxx, char *& xxx_end )
     }
 
     if ( is_neg ) i = -i;
-    rtn_assert( vld, "unable to parse int in " + std::string( ((xxx == fsc) ? ".fscene" : (xxx == obj) ? ".obj" : ".mtl") ) + " file " + surrounding_lines( xxx, xxx_end ) );
+    rtn_assert( vld, "unable to parse int" + surrounding_lines( xxx, xxx_end ) );
     return true;
 }
 
@@ -3800,6 +4320,11 @@ inline Model::real4 Model::real4::operator / ( Model::real s ) const
     return r;
 }
 
+inline bool Model::real4::operator == ( const Model::real4 &v2 ) const
+{
+    return c[0] == v2.c[0] && c[1] == v2.c[1] && c[2] == v2.c[2] && c[3] == v2.c[3];
+}
+
 inline Model::real4& Model::real4::operator += ( const Model::real4 &v2 )
 {
     c[0] += v2.c[0];
@@ -3944,6 +4469,11 @@ inline Model::real3 Model::real3::operator / ( Model::real s ) const
     r.c[1] = c[1] / s;
     r.c[2] = c[2] / s;
     return r;
+}
+
+inline bool Model::real3::operator == ( const Model::real3 &v2 ) const
+{
+    return c[0] == v2.c[0] && c[1] == v2.c[1] && c[2] == v2.c[2];
 }
 
 inline Model::real3& Model::real3::operator += ( const Model::real3 &v2 )
@@ -4486,8 +5016,58 @@ bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real p
     return true;
 }
 
-bool Model::debug = false;
-#define mdout if (Model::debug) std::cout 
+inline std::string Model::Graph_Node::str( const Model * model, std::string indent ) const
+{
+    std::ostringstream s;
+    uint node_i = this - model->graph_nodes;
+    s << indent << kind << " node_i=" << node_i << " parent_i=" << parent_i << " sibling_i=" << sibling_i;
+    switch( kind ) 
+    {
+        case GRAPH_NODE_KIND::REAL:
+            s << " " << u.r << "\n";
+            break;
+
+        case GRAPH_NODE_KIND::REAL3:
+            s << " " << u.r3 << "\n";
+            break;
+
+        case GRAPH_NODE_KIND::STR:
+            if ( u.s_i == uint(-1) ) {
+                s << " <no value>\n";
+            } else {
+                s << " \"" << &model->strings[u.s_i] << "\"\n";
+            }
+            break;
+
+        case GRAPH_NODE_KIND::ID:
+        case GRAPH_NODE_KIND::OP:
+            if ( u.s_i == uint(-1) ) {
+                s << "<no value>\n";
+            } else {
+                s << " " << &model->strings[u.s_i] << "\n";
+            }
+            break;
+
+        case GRAPH_NODE_KIND::BLOCK:
+        case GRAPH_NODE_KIND::ASSIGN:
+        case GRAPH_NODE_KIND::NARY:
+        {
+            s << ":\n";
+            indent += "    ";
+            uint this_i = this - model->graph_nodes;
+            for( uint child_i = u.child_first_i; child_i != uint(-1); child_i = model->graph_nodes[child_i].sibling_i ) 
+            {
+                die_assert( model->graph_nodes[child_i].parent_i == this_i, "bad parent_i=" + std::to_string(model->graph_nodes[child_i].parent_i) );
+                s << model->graph_nodes[child_i].str( model, indent );    
+            }
+            break;
+        }
+
+        default:
+            break;
+    }
+    return s.str();
+}
 
 inline Model::real4 Model::Texture::texel_read( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt, bool do_srgb_to_linear ) const
 {
@@ -4572,7 +5152,7 @@ inline Model::real4 Model::Texture::texel_read_astc( const Model * model, uint m
     uint s  = ui - bx*astc_hdr->blockdim_x;
     uint t  = vi - by*astc_hdr->blockdim_y;
     uint r  = 0;
-    mdout << "astc: uv=[" << ui << "," << vi << "] bxy=[" << bx << "," << by << "] st=[" << s << "," << t << "]\n";
+    mdout << "\nastc: uv=[" << ui << "," << vi << "] bxy=[" << bx << "," << by << "] st=[" << s << "," << t << "]\n";
     uint bw = astc_hdr->blk_cnt_x();
     bdata += 16 * (bx + by*bw);
 
@@ -4589,42 +5169,453 @@ inline Model::real4 Model::Texture::texel_read_astc( const Model * model, uint m
     return rgba;
 }
 
-const Model::Texture::ASTC_Range_Encoding Model::Texture::astc_weight_range_encodings[16] = 
+const Model::Texture::ASTC_Range_Encoding Model::Texture::astc_range_encodings[21] = 
 {
-    // H=0
-    {  0, 0, 0, 0 },    // invalid
-    {  0, 0, 0, 0 },    // invalid
-    {  1, 0, 0, 1 },    
-    {  2, 1, 0, 0 },
-    {  3, 0, 0, 2 },
-    {  4, 0, 1, 0 },
-    {  5, 1, 0, 1 },
-    {  7, 0, 0, 3 },
-
-    // H=1
-    {  0, 0, 0, 0 },    // invalid
-    {  0, 0, 0, 0 },    // invalid
-    {  9, 0, 1, 1 },    
-    { 11, 1, 0, 2 },
-    { 15, 0, 0, 4 },
-    { 19, 0, 1, 2 },
-    { 23, 1, 0, 3 },
-    { 31, 0, 0, 5 },
+    // these are used for both weights and colors
+    {  2, 0, 0, 1 },    
+    {  3, 1, 0, 0 },
+    {  4, 0, 0, 2 },
+    {  5, 0, 1, 0 },
+    {  6, 1, 0, 1 },
+    {  8, 0, 0, 3 },
+    { 10, 0, 1, 1 },    
+    { 12, 1, 0, 2 },
+    { 16, 0, 0, 4 },
+    { 20, 0, 1, 2 },
+    { 24, 1, 0, 3 },
+    { 32, 0, 0, 5 },
+    { 40, 0, 1, 3 },
+    { 48, 1, 0, 4 },
+    { 64, 0, 0, 6 },
+    { 80, 0, 1, 4 },
+    { 96, 1, 0, 5 },
+    {128, 0, 0, 7 },
+    {160, 0, 1, 5 },
+    {192, 1, 0, 6 },
+    {256, 0, 0, 8 },
 };
 
-const Model::Texture::ASTC_Range_Encoding Model::Texture::astc_color_endpoint_range_encodings[11] = 
+Model::Texture::ASTC_Decimation_Encoding Model::Texture::astc_weight_decimation_encodings;
+
+const Model::uint Model::Texture::astc_color_quantization_mode[17][128] = 
 {
-    {  5, 1, 0, 1 },    
-    {  9, 0, 1, 1 },
-    { 11, 1, 0, 2 },
-    { 19, 0, 1, 2 },
-    { 23, 1, 0, 3 },
-    { 39, 0, 1, 3 },
-    { 47, 1, 0, 4 },
-    { 79, 0, 1, 4 },
-    { 95, 1, 0, 5 },
-    {159, 0, 1, 5 },
-    {191, 1, 0, 6 },
+    {
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,   // 255 == invalid
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+    },
+    {
+        255, 255, 0, 0, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+    },
+    {
+        255, 255, 255, 255, 0, 0, 0, 1, 2, 2, 3, 4, 5, 5, 6, 7, 
+        8, 8, 9, 10, 11, 11, 12, 13, 14, 14, 15, 16, 17, 17, 18, 19, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+    },
+    {
+        255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 
+        4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 
+        12, 12, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+    },
+    {
+        255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 1, 1, 1, 
+        2, 2, 2, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 7, 7, 7, 
+        8, 8, 8, 9, 9, 10, 10, 10, 11, 11, 11, 12, 12, 13, 13, 13, 
+        14, 14, 14, 15, 15, 16, 16, 16, 17, 17, 17, 18, 18, 19, 19, 19, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+    },
+    {
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 
+        1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 4, 4, 4, 4, 5, 5, 
+        5, 5, 6, 6, 7, 7, 7, 7, 8, 8, 8, 8, 9, 9, 10, 10, 
+        10, 10, 11, 11, 11, 11, 12, 12, 13, 13, 13, 13, 14, 14, 14, 14, 
+        15, 15, 16, 16, 16, 16, 17, 17, 17, 17, 18, 18, 19, 19, 19, 19, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+    },
+    {
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 
+        0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 
+        4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 
+        8, 8, 8, 8, 9, 9, 9, 9, 10, 10, 10, 10, 11, 11, 11, 11, 
+        12, 12, 12, 12, 13, 13, 13, 13, 14, 14, 14, 14, 15, 15, 15, 15, 
+        16, 16, 16, 16, 17, 17, 17, 17, 18, 18, 18, 18, 19, 19, 19, 19, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+    },
+    {
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 
+        0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 
+        2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 
+        6, 6, 6, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 9, 9, 9, 
+        9, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 12, 12, 12, 12, 13, 
+        13, 13, 13, 13, 14, 14, 14, 14, 14, 15, 15, 15, 15, 16, 16, 16, 
+        16, 16, 17, 17, 17, 17, 17, 18, 18, 18, 18, 19, 19, 19, 19, 19, 
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 
+    },
+    {
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 
+        2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 
+        5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 
+        8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10, 
+        11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 13, 13, 13, 13, 13, 13, 
+        14, 14, 14, 14, 14, 14, 15, 15, 15, 15, 16, 16, 16, 16, 16, 16, 
+        17, 17, 17, 17, 17, 17, 18, 18, 18, 18, 19, 19, 19, 19, 19, 19, 
+    },
+    {
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 
+        1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4, 
+        4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 
+        6, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 9, 9, 
+        9, 9, 9, 10, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 11, 
+        12, 12, 12, 12, 12, 13, 13, 13, 13, 13, 13, 13, 14, 14, 14, 14, 
+        14, 14, 15, 15, 15, 15, 15, 16, 16, 16, 16, 16, 16, 16, 17, 17, 
+    },
+    {
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+        1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 3, 
+        3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 
+        5, 5, 5, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 
+        8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 10, 10, 10, 10, 
+        10, 10, 10, 10, 11, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 12, 
+        13, 13, 13, 13, 13, 13, 13, 13, 14, 14, 14, 14, 14, 14, 14, 15, 
+    },
+    {
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+        0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 
+        2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 
+        4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 
+        7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 
+        9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10, 10, 10, 11, 11, 
+        11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 12, 12, 13, 13, 13, 13, 
+    },
+    {
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 
+        0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+        2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 
+        4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 
+        6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 
+        8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 10, 
+        10, 10, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 11, 11, 11, 
+    },
+    {
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 
+        1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 
+        3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 
+        5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 7, 7, 
+        7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 
+        8, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10, 10, 10, 
+    },
+    {
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 
+        1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 
+        2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 
+        4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 
+        6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 
+        8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 
+    },
+    {
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 
+        2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 
+        5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 
+        7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 
+    },
+    {
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
+        0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 
+        3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 
+        5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 
+        6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 
+    },
+};
+const Model::uint Model::Texture::astc_integer_trits[256][5] = 
+{
+    {0, 0, 0, 0, 0}, {1, 0, 0, 0, 0}, {2, 0, 0, 0, 0}, {0, 0, 2, 0, 0},
+    {0, 1, 0, 0, 0}, {1, 1, 0, 0, 0}, {2, 1, 0, 0, 0}, {1, 0, 2, 0, 0},
+    {0, 2, 0, 0, 0}, {1, 2, 0, 0, 0}, {2, 2, 0, 0, 0}, {2, 0, 2, 0, 0},
+    {0, 2, 2, 0, 0}, {1, 2, 2, 0, 0}, {2, 2, 2, 0, 0}, {2, 0, 2, 0, 0},
+    {0, 0, 1, 0, 0}, {1, 0, 1, 0, 0}, {2, 0, 1, 0, 0}, {0, 1, 2, 0, 0},
+    {0, 1, 1, 0, 0}, {1, 1, 1, 0, 0}, {2, 1, 1, 0, 0}, {1, 1, 2, 0, 0},
+    {0, 2, 1, 0, 0}, {1, 2, 1, 0, 0}, {2, 2, 1, 0, 0}, {2, 1, 2, 0, 0},
+    {0, 0, 0, 2, 2}, {1, 0, 0, 2, 2}, {2, 0, 0, 2, 2}, {0, 0, 2, 2, 2},
+    {0, 0, 0, 1, 0}, {1, 0, 0, 1, 0}, {2, 0, 0, 1, 0}, {0, 0, 2, 1, 0},
+    {0, 1, 0, 1, 0}, {1, 1, 0, 1, 0}, {2, 1, 0, 1, 0}, {1, 0, 2, 1, 0},
+    {0, 2, 0, 1, 0}, {1, 2, 0, 1, 0}, {2, 2, 0, 1, 0}, {2, 0, 2, 1, 0},
+    {0, 2, 2, 1, 0}, {1, 2, 2, 1, 0}, {2, 2, 2, 1, 0}, {2, 0, 2, 1, 0},
+    {0, 0, 1, 1, 0}, {1, 0, 1, 1, 0}, {2, 0, 1, 1, 0}, {0, 1, 2, 1, 0},
+    {0, 1, 1, 1, 0}, {1, 1, 1, 1, 0}, {2, 1, 1, 1, 0}, {1, 1, 2, 1, 0},
+    {0, 2, 1, 1, 0}, {1, 2, 1, 1, 0}, {2, 2, 1, 1, 0}, {2, 1, 2, 1, 0},
+    {0, 1, 0, 2, 2}, {1, 1, 0, 2, 2}, {2, 1, 0, 2, 2}, {1, 0, 2, 2, 2},
+    {0, 0, 0, 2, 0}, {1, 0, 0, 2, 0}, {2, 0, 0, 2, 0}, {0, 0, 2, 2, 0},
+    {0, 1, 0, 2, 0}, {1, 1, 0, 2, 0}, {2, 1, 0, 2, 0}, {1, 0, 2, 2, 0},
+    {0, 2, 0, 2, 0}, {1, 2, 0, 2, 0}, {2, 2, 0, 2, 0}, {2, 0, 2, 2, 0},
+    {0, 2, 2, 2, 0}, {1, 2, 2, 2, 0}, {2, 2, 2, 2, 0}, {2, 0, 2, 2, 0},
+    {0, 0, 1, 2, 0}, {1, 0, 1, 2, 0}, {2, 0, 1, 2, 0}, {0, 1, 2, 2, 0},
+    {0, 1, 1, 2, 0}, {1, 1, 1, 2, 0}, {2, 1, 1, 2, 0}, {1, 1, 2, 2, 0},
+    {0, 2, 1, 2, 0}, {1, 2, 1, 2, 0}, {2, 2, 1, 2, 0}, {2, 1, 2, 2, 0},
+    {0, 2, 0, 2, 2}, {1, 2, 0, 2, 2}, {2, 2, 0, 2, 2}, {2, 0, 2, 2, 2},
+    {0, 0, 0, 0, 2}, {1, 0, 0, 0, 2}, {2, 0, 0, 0, 2}, {0, 0, 2, 0, 2},
+    {0, 1, 0, 0, 2}, {1, 1, 0, 0, 2}, {2, 1, 0, 0, 2}, {1, 0, 2, 0, 2},
+    {0, 2, 0, 0, 2}, {1, 2, 0, 0, 2}, {2, 2, 0, 0, 2}, {2, 0, 2, 0, 2},
+    {0, 2, 2, 0, 2}, {1, 2, 2, 0, 2}, {2, 2, 2, 0, 2}, {2, 0, 2, 0, 2},
+    {0, 0, 1, 0, 2}, {1, 0, 1, 0, 2}, {2, 0, 1, 0, 2}, {0, 1, 2, 0, 2},
+    {0, 1, 1, 0, 2}, {1, 1, 1, 0, 2}, {2, 1, 1, 0, 2}, {1, 1, 2, 0, 2},
+    {0, 2, 1, 0, 2}, {1, 2, 1, 0, 2}, {2, 2, 1, 0, 2}, {2, 1, 2, 0, 2},
+    {0, 2, 2, 2, 2}, {1, 2, 2, 2, 2}, {2, 2, 2, 2, 2}, {2, 0, 2, 2, 2},
+    {0, 0, 0, 0, 1}, {1, 0, 0, 0, 1}, {2, 0, 0, 0, 1}, {0, 0, 2, 0, 1},
+    {0, 1, 0, 0, 1}, {1, 1, 0, 0, 1}, {2, 1, 0, 0, 1}, {1, 0, 2, 0, 1},
+    {0, 2, 0, 0, 1}, {1, 2, 0, 0, 1}, {2, 2, 0, 0, 1}, {2, 0, 2, 0, 1},
+    {0, 2, 2, 0, 1}, {1, 2, 2, 0, 1}, {2, 2, 2, 0, 1}, {2, 0, 2, 0, 1},
+    {0, 0, 1, 0, 1}, {1, 0, 1, 0, 1}, {2, 0, 1, 0, 1}, {0, 1, 2, 0, 1},
+    {0, 1, 1, 0, 1}, {1, 1, 1, 0, 1}, {2, 1, 1, 0, 1}, {1, 1, 2, 0, 1},
+    {0, 2, 1, 0, 1}, {1, 2, 1, 0, 1}, {2, 2, 1, 0, 1}, {2, 1, 2, 0, 1},
+    {0, 0, 1, 2, 2}, {1, 0, 1, 2, 2}, {2, 0, 1, 2, 2}, {0, 1, 2, 2, 2},
+    {0, 0, 0, 1, 1}, {1, 0, 0, 1, 1}, {2, 0, 0, 1, 1}, {0, 0, 2, 1, 1},
+    {0, 1, 0, 1, 1}, {1, 1, 0, 1, 1}, {2, 1, 0, 1, 1}, {1, 0, 2, 1, 1},
+    {0, 2, 0, 1, 1}, {1, 2, 0, 1, 1}, {2, 2, 0, 1, 1}, {2, 0, 2, 1, 1},
+    {0, 2, 2, 1, 1}, {1, 2, 2, 1, 1}, {2, 2, 2, 1, 1}, {2, 0, 2, 1, 1},
+    {0, 0, 1, 1, 1}, {1, 0, 1, 1, 1}, {2, 0, 1, 1, 1}, {0, 1, 2, 1, 1},
+    {0, 1, 1, 1, 1}, {1, 1, 1, 1, 1}, {2, 1, 1, 1, 1}, {1, 1, 2, 1, 1},
+    {0, 2, 1, 1, 1}, {1, 2, 1, 1, 1}, {2, 2, 1, 1, 1}, {2, 1, 2, 1, 1},
+    {0, 1, 1, 2, 2}, {1, 1, 1, 2, 2}, {2, 1, 1, 2, 2}, {1, 1, 2, 2, 2},
+    {0, 0, 0, 2, 1}, {1, 0, 0, 2, 1}, {2, 0, 0, 2, 1}, {0, 0, 2, 2, 1},
+    {0, 1, 0, 2, 1}, {1, 1, 0, 2, 1}, {2, 1, 0, 2, 1}, {1, 0, 2, 2, 1},
+    {0, 2, 0, 2, 1}, {1, 2, 0, 2, 1}, {2, 2, 0, 2, 1}, {2, 0, 2, 2, 1},
+    {0, 2, 2, 2, 1}, {1, 2, 2, 2, 1}, {2, 2, 2, 2, 1}, {2, 0, 2, 2, 1},
+    {0, 0, 1, 2, 1}, {1, 0, 1, 2, 1}, {2, 0, 1, 2, 1}, {0, 1, 2, 2, 1},
+    {0, 1, 1, 2, 1}, {1, 1, 1, 2, 1}, {2, 1, 1, 2, 1}, {1, 1, 2, 2, 1},
+    {0, 2, 1, 2, 1}, {1, 2, 1, 2, 1}, {2, 2, 1, 2, 1}, {2, 1, 2, 2, 1},
+    {0, 2, 1, 2, 2}, {1, 2, 1, 2, 2}, {2, 2, 1, 2, 2}, {2, 1, 2, 2, 2},
+    {0, 0, 0, 1, 2}, {1, 0, 0, 1, 2}, {2, 0, 0, 1, 2}, {0, 0, 2, 1, 2},
+    {0, 1, 0, 1, 2}, {1, 1, 0, 1, 2}, {2, 1, 0, 1, 2}, {1, 0, 2, 1, 2},
+    {0, 2, 0, 1, 2}, {1, 2, 0, 1, 2}, {2, 2, 0, 1, 2}, {2, 0, 2, 1, 2},
+    {0, 2, 2, 1, 2}, {1, 2, 2, 1, 2}, {2, 2, 2, 1, 2}, {2, 0, 2, 1, 2},
+    {0, 0, 1, 1, 2}, {1, 0, 1, 1, 2}, {2, 0, 1, 1, 2}, {0, 1, 2, 1, 2},
+    {0, 1, 1, 1, 2}, {1, 1, 1, 1, 2}, {2, 1, 1, 1, 2}, {1, 1, 2, 1, 2},
+    {0, 2, 1, 1, 2}, {1, 2, 1, 1, 2}, {2, 2, 1, 1, 2}, {2, 1, 2, 1, 2},
+    {0, 2, 2, 2, 2}, {1, 2, 2, 2, 2}, {2, 2, 2, 2, 2}, {2, 1, 2, 2, 2}
+};
+
+const Model::uint Model::Texture::astc_integer_quints[128][3] = 
+{
+    {0, 0, 0}, {1, 0, 0}, {2, 0, 0}, {3, 0, 0},
+    {4, 0, 0}, {0, 4, 0}, {4, 4, 0}, {4, 4, 4},
+    {0, 1, 0}, {1, 1, 0}, {2, 1, 0}, {3, 1, 0},
+    {4, 1, 0}, {1, 4, 0}, {4, 4, 1}, {4, 4, 4},
+    {0, 2, 0}, {1, 2, 0}, {2, 2, 0}, {3, 2, 0},
+    {4, 2, 0}, {2, 4, 0}, {4, 4, 2}, {4, 4, 4},
+    {0, 3, 0}, {1, 3, 0}, {2, 3, 0}, {3, 3, 0},
+    {4, 3, 0}, {3, 4, 0}, {4, 4, 3}, {4, 4, 4},
+    {0, 0, 1}, {1, 0, 1}, {2, 0, 1}, {3, 0, 1},
+    {4, 0, 1}, {0, 4, 1}, {4, 0, 4}, {0, 4, 4},
+    {0, 1, 1}, {1, 1, 1}, {2, 1, 1}, {3, 1, 1},
+    {4, 1, 1}, {1, 4, 1}, {4, 1, 4}, {1, 4, 4},
+    {0, 2, 1}, {1, 2, 1}, {2, 2, 1}, {3, 2, 1},
+    {4, 2, 1}, {2, 4, 1}, {4, 2, 4}, {2, 4, 4},
+    {0, 3, 1}, {1, 3, 1}, {2, 3, 1}, {3, 3, 1},
+    {4, 3, 1}, {3, 4, 1}, {4, 3, 4}, {3, 4, 4},
+    {0, 0, 2}, {1, 0, 2}, {2, 0, 2}, {3, 0, 2},
+    {4, 0, 2}, {0, 4, 2}, {2, 0, 4}, {3, 0, 4},
+    {0, 1, 2}, {1, 1, 2}, {2, 1, 2}, {3, 1, 2},
+    {4, 1, 2}, {1, 4, 2}, {2, 1, 4}, {3, 1, 4},
+    {0, 2, 2}, {1, 2, 2}, {2, 2, 2}, {3, 2, 2},
+    {4, 2, 2}, {2, 4, 2}, {2, 2, 4}, {3, 2, 4},
+    {0, 3, 2}, {1, 3, 2}, {2, 3, 2}, {3, 3, 2},
+    {4, 3, 2}, {3, 4, 2}, {2, 3, 4}, {3, 3, 4},
+    {0, 0, 3}, {1, 0, 3}, {2, 0, 3}, {3, 0, 3},
+    {4, 0, 3}, {0, 4, 3}, {0, 0, 4}, {1, 0, 4},
+    {0, 1, 3}, {1, 1, 3}, {2, 1, 3}, {3, 1, 3},
+    {4, 1, 3}, {1, 4, 3}, {0, 1, 4}, {1, 1, 4},
+    {0, 2, 3}, {1, 2, 3}, {2, 2, 3}, {3, 2, 3},
+    {4, 2, 3}, {2, 4, 3}, {0, 2, 4}, {1, 2, 4},
+    {0, 3, 3}, {1, 3, 3}, {2, 3, 3}, {3, 3, 3},
+    {4, 3, 3}, {3, 4, 3}, {0, 3, 4}, {1, 3, 4}
+};
+
+const Model::uint Model::Texture::astc_weight_unquantized[12][32] = 
+{
+    {0, 64},
+    {0, 32, 64},
+    {0, 21, 43, 64},
+    {0, 16, 32, 48, 64},
+    {0, 64, 12, 52, 25, 39},
+    {0, 9, 18, 27, 37, 46, 55, 64},
+    {0, 64, 7, 57, 14, 50, 21, 43, 28, 36},
+    {0, 64, 17, 47, 5, 59, 23, 41, 11, 53, 28, 36},
+    {0, 4, 8, 12, 17, 21, 25, 29, 35, 39, 43, 47, 52, 56, 60, 64},
+    {0, 64, 16, 48, 3, 61, 19, 45, 6, 58, 23, 41, 9, 55, 26, 38, 13, 51, 29, 35},
+    {0, 64, 8, 56, 16, 48, 24, 40, 2, 62, 11, 53, 19, 45, 27, 37, 5, 59, 13, 51, 22, 42, 30, 34},
+    {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62, 64},
+};
+
+const Model::uint Model::Texture::astc_color_unquantized[21][256] = 
+{
+    {
+        0, 255
+    },
+    {
+        0, 128, 255
+    },
+    {
+        0, 85, 170, 255
+    },
+    {
+        0, 64, 128, 192, 255
+    },
+    {
+        0, 255, 51, 204, 102, 153
+    },
+    {
+        0, 36, 73, 109, 146, 182, 219, 255
+    },
+    {
+        0, 255, 28, 227, 56, 199, 84, 171, 113, 142
+    },
+    {
+        0, 255, 69, 186, 23, 232, 92, 163, 46, 209, 116, 139
+    },
+    {
+        0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255
+    },
+    {
+        0, 255, 67, 188, 13, 242, 80, 175, 27, 228, 94, 161, 40, 215, 107, 148,
+        54, 201, 121, 134
+    },
+    {
+        0, 255, 33, 222, 66, 189, 99, 156, 11, 244, 44, 211, 77, 178, 110, 145,
+        22, 233, 55, 200, 88, 167, 121, 134
+    },
+    {
+        0, 8, 16, 24, 33, 41, 49, 57, 66, 74, 82, 90, 99, 107, 115, 123,
+        132, 140, 148, 156, 165, 173, 181, 189, 198, 206, 214, 222, 231, 239, 247, 255
+    },
+    {
+        0, 255, 32, 223, 65, 190, 97, 158, 6, 249, 39, 216, 71, 184, 104, 151,
+        13, 242, 45, 210, 78, 177, 110, 145, 19, 236, 52, 203, 84, 171, 117, 138,
+        26, 229, 58, 197, 91, 164, 123, 132
+    },
+    {
+        0, 255, 16, 239, 32, 223, 48, 207, 65, 190, 81, 174, 97, 158, 113, 142,
+        5, 250, 21, 234, 38, 217, 54, 201, 70, 185, 86, 169, 103, 152, 119, 136,
+        11, 244, 27, 228, 43, 212, 59, 196, 76, 179, 92, 163, 108, 147, 124, 131
+    },
+    {
+        0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60,
+        65, 69, 73, 77, 81, 85, 89, 93, 97, 101, 105, 109, 113, 117, 121, 125,
+        130, 134, 138, 142, 146, 150, 154, 158, 162, 166, 170, 174, 178, 182, 186, 190,
+        195, 199, 203, 207, 211, 215, 219, 223, 227, 231, 235, 239, 243, 247, 251, 255
+    },
+    {
+        0, 255, 16, 239, 32, 223, 48, 207, 64, 191, 80, 175, 96, 159, 112, 143,
+        3, 252, 19, 236, 35, 220, 51, 204, 67, 188, 83, 172, 100, 155, 116, 139,
+        6, 249, 22, 233, 38, 217, 54, 201, 71, 184, 87, 168, 103, 152, 119, 136,
+        9, 246, 25, 230, 42, 213, 58, 197, 74, 181, 90, 165, 106, 149, 122, 133,
+        13, 242, 29, 226, 45, 210, 61, 194, 77, 178, 93, 162, 109, 146, 125, 130
+    },
+    {
+        0, 255, 8, 247, 16, 239, 24, 231, 32, 223, 40, 215, 48, 207, 56, 199,
+        64, 191, 72, 183, 80, 175, 88, 167, 96, 159, 104, 151, 112, 143, 120, 135,
+        2, 253, 10, 245, 18, 237, 26, 229, 35, 220, 43, 212, 51, 204, 59, 196,
+        67, 188, 75, 180, 83, 172, 91, 164, 99, 156, 107, 148, 115, 140, 123, 132,
+        5, 250, 13, 242, 21, 234, 29, 226, 37, 218, 45, 210, 53, 202, 61, 194,
+        70, 185, 78, 177, 86, 169, 94, 161, 102, 153, 110, 145, 118, 137, 126, 129
+    },
+    {
+        0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30,
+        32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62,
+        64, 66, 68, 70, 72, 74, 76, 78, 80, 82, 84, 86, 88, 90, 92, 94,
+        96, 98, 100, 102, 104, 106, 108, 110, 112, 114, 116, 118, 120, 122, 124, 126,
+        129, 131, 133, 135, 137, 139, 141, 143, 145, 147, 149, 151, 153, 155, 157, 159,
+        161, 163, 165, 167, 169, 171, 173, 175, 177, 179, 181, 183, 185, 187, 189, 191,
+        193, 195, 197, 199, 201, 203, 205, 207, 209, 211, 213, 215, 217, 219, 221, 223,
+        225, 227, 229, 231, 233, 235, 237, 239, 241, 243, 245, 247, 249, 251, 253, 255
+    },
+    {
+        0, 255, 8, 247, 16, 239, 24, 231, 32, 223, 40, 215, 48, 207, 56, 199,
+        64, 191, 72, 183, 80, 175, 88, 167, 96, 159, 104, 151, 112, 143, 120, 135,
+        1, 254, 9, 246, 17, 238, 25, 230, 33, 222, 41, 214, 49, 206, 57, 198,
+        65, 190, 73, 182, 81, 174, 89, 166, 97, 158, 105, 150, 113, 142, 121, 134,
+        3, 252, 11, 244, 19, 236, 27, 228, 35, 220, 43, 212, 51, 204, 59, 196,
+        67, 188, 75, 180, 83, 172, 91, 164, 99, 156, 107, 148, 115, 140, 123, 132,
+        4, 251, 12, 243, 20, 235, 28, 227, 36, 219, 44, 211, 52, 203, 60, 195,
+        68, 187, 76, 179, 84, 171, 92, 163, 100, 155, 108, 147, 116, 139, 124, 131,
+        6, 249, 14, 241, 22, 233, 30, 225, 38, 217, 46, 209, 54, 201, 62, 193,
+        70, 185, 78, 177, 86, 169, 94, 161, 102, 153, 110, 145, 118, 137, 126, 129
+    },
+    {
+        0, 255, 4, 251, 8, 247, 12, 243, 16, 239, 20, 235, 24, 231, 28, 227,
+        32, 223, 36, 219, 40, 215, 44, 211, 48, 207, 52, 203, 56, 199, 60, 195,
+        64, 191, 68, 187, 72, 183, 76, 179, 80, 175, 84, 171, 88, 167, 92, 163,
+        96, 159, 100, 155, 104, 151, 108, 147, 112, 143, 116, 139, 120, 135, 124, 131,
+        1, 254, 5, 250, 9, 246, 13, 242, 17, 238, 21, 234, 25, 230, 29, 226,
+        33, 222, 37, 218, 41, 214, 45, 210, 49, 206, 53, 202, 57, 198, 61, 194,
+        65, 190, 69, 186, 73, 182, 77, 178, 81, 174, 85, 170, 89, 166, 93, 162,
+        97, 158, 101, 154, 105, 150, 109, 146, 113, 142, 117, 138, 121, 134, 125, 130,
+        2, 253, 6, 249, 10, 245, 14, 241, 18, 237, 22, 233, 26, 229, 30, 225,
+        34, 221, 38, 217, 42, 213, 46, 209, 50, 205, 54, 201, 58, 197, 62, 193,
+        66, 189, 70, 185, 74, 181, 78, 177, 82, 173, 86, 169, 90, 165, 94, 161,
+        98, 157, 102, 153, 106, 149, 110, 145, 114, 141, 118, 137, 122, 133, 126, 129
+    },
+    {
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+        16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+        32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+        48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
+        64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
+        80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95,
+        96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111,
+        112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127,
+        128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143,
+        144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159,
+        160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175,
+        176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191,
+        192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207,
+        208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223,
+        224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239,
+        240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255
+    }
 };
 
 static inline uint64_t _astc_bits( const unsigned char * bdata, uint start, uint len ) 
@@ -4665,12 +5656,136 @@ inline void Model::Texture::astc_blk_dims_get( uint width, uint height, uint& bl
     blk_dim_y = blk_dim_x;
 }
 
+void Model::Texture::astc_blk_addr_get( uint      ray_id,  
+                                        uint      blockdim_x, uint blockdim_y, uint blockdim_z,
+                                        uint      xsize,      uint ysize,      uint zsize,
+                                        real      u,          real v,          real w,
+                                        real      frac_uv_covg, 
+                                        uint      size_w,
+                                        uint      addr_w,
+                                        uint      uv_frac_w,
+                                        uint      covg_frac_w,
+                                        uint64_t  blks_addr,
+                                        uint64_t& blk_addr, uint& s, uint& t, uint& r )
+{
+    const uint64_t sqrt_xsize_ysize_zsize = std::sqrt( real(xsize) * real(ysize) * real(zsize) );
+    const uint64_t u_fxd = u * real( 1 << uv_frac_w );   
+    const uint64_t v_fxd = v * real( 1 << uv_frac_w );
+    const uint64_t w_fxd = w * real( 1 << uv_frac_w );
+    const uint64_t sqrt_frac_uv_covg_fxd = int( std::sqrt( frac_uv_covg ) * real(1 << covg_frac_w) );
+
+    mdout << "astc_blk_addr_get: ray_id=" << ray_id <<
+                               " blockdim_x=" << blockdim_x << " blockdim_y=" << blockdim_y << " blockdim_z=" << blockdim_z <<
+                               std::hex << " xsize=0x" << xsize << " ysize=0x" << ysize << " zsize=0x" << zsize << 
+                               " sqrt_xsize_ysize_zsize=0x" << sqrt_xsize_ysize_zsize << 
+                               std::dec << " u=" << u << " v=" << v << " w=" << w << 
+                               std::hex << " u_fxd=0x" << u_fxd << " v_fxd=0x" << v_fxd << " w_fxd=0x" << w_fxd << 
+                               " frac_uv_covg=" << frac_uv_covg << " sqrt_frac_uv_covg_fxd=0x" << sqrt_frac_uv_covg_fxd <<
+                               std::dec << " size_w=" << size_w << " addr_w=" << addr_w << " uv_frac_w=" << uv_frac_w << 
+                               " covg_frac_w=" << covg_frac_w << 
+                               std::hex << " blks_addr=0x" << blks_addr << std::dec << "\n";
+
+    //---------------------------------------------------------------
+    // MIP LEVEL
+    // Find the proper mip level.  We compute which mip levels are viable, in parallel,' )
+    // then use a priority encoder to pixel the first viable one.' )
+    // Mip level 0 is the finest level of the texture.' )
+    //---------------------------------------------------------------
+    const uint64_t iwidth_of_footprint = (sqrt_frac_uv_covg_fxd * sqrt_xsize_ysize_zsize) >> covg_frac_w; // integer width
+    const uint64_t iwidth_of_footprint_lg2 = uint( std::log2( real(iwidth_of_footprint) ) );
+    uint64_t mip_xsize = xsize;
+    uint64_t mip_ysize = ysize;
+    uint64_t mip_zsize = zsize;
+    uint64_t mip_blk_cnt_x = 0;
+    uint64_t mip_blk_cnt_y = 0;
+    uint64_t mip_blk_cnt_z = 0;
+    uint64_t mip_blk_cnt = 0;
+    uint64_t mip_blk0_offset = 0;
+    uint i = 0;
+    for( ; i < size_w; i++ )
+    {
+        mip_blk_cnt_x = (mip_xsize + blockdim_x - 1) / blockdim_x;
+        mip_blk_cnt_y = (mip_ysize + blockdim_y - 1) / blockdim_y;
+        mip_blk_cnt_z = (mip_zsize + blockdim_z - 1) / blockdim_z;
+        mip_blk_cnt   = mip_blk_cnt_x * mip_blk_cnt_y * mip_blk_cnt_z;
+
+        mdout << "mip" << i << ": ray_id=" << ray_id << 
+                std::hex << " mip_blk0_offset=0x" << mip_blk0_offset << " mip_blk_cnt_x=0x" << mip_blk_cnt_x << " mip_blk_cnt_y=0x" << mip_blk_cnt_y << " mip_blk_cnt_z=0x" << mip_blk_cnt_z << 
+                " mip_blk_cnt=0x" << mip_blk_cnt << 
+                std::dec << "\n";
+
+        if ( i == (size_w-1) || i >= iwidth_of_footprint_lg2 ) break;
+
+        mip_blk0_offset += mip_blk_cnt;
+        mip_xsize >>= 1;
+        mip_ysize >>= 1;
+        mip_zsize >>= 1;
+        if ( mip_xsize == 0 ) mip_xsize = 1;
+        if ( mip_ysize == 0 ) mip_ysize = 1;
+        if ( mip_zsize == 0 ) mip_zsize = 1;
+    }
+
+    mdout << "astc_blk_addr_get: ray_id=" << ray_id << 
+            std::hex << " iwidth_of_footprint=0x" << iwidth_of_footprint << std::dec <<
+            " iwidth_of_footprint_lg2=" << iwidth_of_footprint_lg2 << " mip_i=" << i <<
+            std::hex << " mip_xsize=0x" << mip_xsize << " mip_ysize=0x" << mip_ysize << " mip_zsize=0x" << mip_zsize << 
+            std::hex << " mip_blk_cnt_x=0x" << mip_blk_cnt_x << " mip_blk_cnt_y=0x" << mip_blk_cnt_y << " mip_blk_cnt_z=0x" << mip_blk_cnt_z << 
+            std::hex << " mip_blk_cnt=0x" << mip_blk_cnt << " mip_blk0_offset=0x" << mip_blk0_offset <<
+            std::dec << "\n";
+
+    //---------------------------------------------------------------' )
+    // Find block bx,by within map texture, block address, and texel offsets s,t within block.' )
+    //---------------------------------------------------------------' )
+    uint64_t ui = (u_fxd * mip_xsize) >> uv_frac_w;
+    uint64_t vi = (v_fxd * mip_ysize) >> uv_frac_w;
+    uint64_t wi = (w_fxd * mip_zsize) >> uv_frac_w;
+    uint64_t bx = ui / blockdim_x;
+    uint64_t by = vi / blockdim_y;
+    uint64_t bz = wi / blockdim_z;
+
+    mdout << "astc_blk_addr_get: ray_id=" << ray_id << 
+                        std::hex << " u_fxd=0x" << u_fxd << " v_fxd=0x" << v_fxd << " w_fxd=0x" << w_fxd <<
+                        " ui=0x" << ui << " vi=0x" << vi << " wi=0x" << wi <<
+                        " bx=0x" << bx << " by=0x" << by << " bz=0x" << bz << std::dec << "\n";
+
+    blk_addr = blks_addr + mip_blk0_offset + bx + by*mip_blk_cnt_x + bz*mip_blk_cnt_x*mip_blk_cnt_y;
+    s = ui - bx*blockdim_x;
+    t = vi - by*blockdim_y;
+    r = wi - bz*blockdim_z;
+
+    mdout << "astc_blk_addr_get: ray_id=" << ray_id <<
+                               std::hex << " blk_addr=0x" << blk_addr << std::dec <<
+                               " s=" << s << " t=" << t << " r=" << r << "\n";
+
+    die_assert( s < blockdim_x, "s >= blockdim_x" );
+    die_assert( t < blockdim_y, "t >= blockdim_y" );
+    die_assert( r < blockdim_z, "r >= blockdim_z" );
+}
+
 #define _bits(  start, len ) _astc_bits( bdata,  start, len )
 #define _rbits( start, len ) _astc_bits( rbdata, start, len )
 
+inline std::string Model::Texture::astc_dat_str( const unsigned char * bdata ) 
+{
+    static const char * digits[] = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f" };
+
+    std::string s = "";
+    for( uint i = 0; i < 16; i++ )
+    {
+        uint b = bdata[i];
+        for( uint j = 0; j < 2; j++ )
+        {
+            uint n = (b >> (j*4)) & 0xf;
+            s = digits[n] + s;
+        }
+    }
+    return "0x" + s;
+}
+
 inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, uint s, uint t, uint r, bool do_srgb_to_linear ) const
 {
-    mdout << "astc: s=" << s << " t=" << t << " r=" << r << "\n";
+    mdout << "astc: " << *astc_hdr << " s=" << s << " t=" << t << " r=" << r << 
+             " do_srgb_to_linear=" << do_srgb_to_linear << " dat=" << astc_dat_str( bdata ) << "\n";
 
     //---------------------------------------------------------------
     // Determine if void-extent.
@@ -4721,8 +5836,9 @@ inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, co
     uint weights_d;  // Q
     uint R; // R = range encoding
     uint H; // H = high-precision?
+    uint weights_qmode;
 
-    astc_decode_block_mode( bdata, rbdata, plane_cnt, partition_cnt, weights_w, weights_h, weights_d, R, H );
+    astc_decode_block_mode( bdata, rbdata, plane_cnt, partition_cnt, weights_w, weights_h, weights_d, R, H, weights_qmode );
 
     uint plane_weights_cnt = weights_w * weights_h * weights_d;  // per-plane
     uint weights_cnt = plane_weights_cnt * plane_cnt;            // total
@@ -4733,17 +5849,16 @@ inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, co
              " plane_weights_cnt=" << plane_weights_cnt << " weights_cnt=" << weights_cnt << "\n";
 
     //---------------------------------------------------------------
-    // Use H and R to determine max weight, and weight trits, quints, and bits.
-    // See Table 11.
-    // We use our own table for this decode.
+    // Use lookup table based on weights_qmode, which is derived from R and H.
+    // Retrive trits, quints, and bits.
+    // Color endpoints use the same table, which is a superset of our needs.
     //---------------------------------------------------------------
-    die_assert( R >= 2, "ASTC: bad R range encoding" );
-    R |= H << 3;
-    const ASTC_Range_Encoding& enc = astc_weight_range_encodings[R];
+    die_assert( R >= 2, "astc: bad R range encoding" );
+    const ASTC_Range_Encoding& enc = astc_range_encodings[weights_qmode];
     uint weight_trits  = enc.trits;
     uint weight_quints = enc.quints;
     uint weight_bits   = enc.bits;
-    mdout << "astc: weight max=" << enc.max << " trits=" << weight_trits << " quints=" << weight_quints << " bits=" << weight_bits << "\n";
+    mdout << "astc: weight qmode=" << weights_qmode << " max_p1=" << enc.max_p1 << " trits=" << weight_trits << " quints=" << weight_quints << " bits=" << weight_bits << "\n";
 
     //---------------------------------------------------------------
     // See section 3.16.
@@ -4762,7 +5877,6 @@ inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, co
     // Decode partition for our texel.
     //---------------------------------------------------------------
     uint partition = astc_decode_partition( bdata, s, t, r, partition_cnt, texel_cnt );
-    mdout << "astc: partition=" << partition << "\n";
 
     //---------------------------------------------------------------
     // Determine the Color Endpoint Mode (CEM) for our partition.
@@ -4772,20 +5886,28 @@ inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, co
     // See Table 15 and section 3.7.
     //---------------------------------------------------------------
     uint cem;
+    uint cem_qmode;
     uint cem_trits;
     uint cem_quints;
     uint cem_bits;
+    uint color_endpoints_cnt;
     uint color_endpoints_start;
+    uint color_endpoints_v_first;  // for our partition
+    uint color_endpoints_v_cnt;    // for our partition
     astc_decode_color_endpoint_mode( bdata, plane_cnt, partition, partition_cnt, weights_bit_cnt, below_weights_start, 
-                                     cem, cem_trits, cem_quints, cem_bits, color_endpoints_start );
-    mdout << "astc: cem=" << cem << " trits=" << cem_trits << " quints=" << cem_quints << " bits=" << cem_bits << 
-             " color_endpoints_start=" << color_endpoints_start << "\n";
+                                     cem, cem_qmode, cem_trits, cem_quints, cem_bits, 
+                                     color_endpoints_cnt, color_endpoints_start, color_endpoints_v_first, color_endpoints_v_cnt );
+    mdout << "astc: cem=" << cem << " cem_qmode=" << cem_qmode << " trits=" << cem_trits << " quints=" << cem_quints << " bits=" << cem_bits << 
+            " color_endpoints_cnt=" << color_endpoints_cnt << " color_endpoints_start=" << color_endpoints_start << 
+            " color_endpoints_v_first=" << color_endpoints_v_first << " color_endpoints_v_cnt=" << color_endpoints_v_cnt << "\n";
 
     //---------------------------------------------------------------
     // Decode the endpoints for our partition.
     //---------------------------------------------------------------
     uint color_endpoints[4][2];
-    astc_decode_color_endpoints( bdata, cem, cem_trits, cem_quints, cem_bits, color_endpoints_start, color_endpoints );
+    astc_decode_color_endpoints( bdata, cem, cem_qmode, cem_trits, cem_quints, cem_bits, 
+                                 color_endpoints_cnt, color_endpoints_start, color_endpoints_v_first, color_endpoints_v_cnt,
+                                 color_endpoints );
 
     //---------------------------------------------------------------
     // If dual-plane, find which channel is the dual-plane one.
@@ -4793,9 +5915,9 @@ inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, co
     //---------------------------------------------------------------
     uint plane1_chan = 0;
     if ( plane_cnt == 2 ) {
-        uint plane1_chan_start = weights_start + weights_bit_cnt;
+        uint plane1_chan_start = below_weights_start - 2;
         die_assert( plane1_chan_start < 127, "ASTC bad plane1_chan_start" );
-        plane1_chan = _rbits(plane1_chan_start, 2); 
+        plane1_chan = _bits(plane1_chan_start, 2); 
     }
 
     //---------------------------------------------------------------
@@ -4806,7 +5928,8 @@ inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, co
                          astc_hdr->blockdim_x, astc_hdr->blockdim_y, astc_hdr->blockdim_z,
                          weights_w, weights_h, weights_d,
                          s, t, r,
-                         weight_trits, weight_quints, weight_bits, plane_weights );
+                         weight_trits, weight_quints, weight_bits, weights_qmode,
+                         plane_weights );
     mdout << "astc: plane_weights[0]=" << plane_weights[0];
     if ( plane_cnt == 2 ) mdout << " plane_weights[1]=" << plane_weights[1];
     mdout << "\n";
@@ -4831,7 +5954,11 @@ inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, co
         } else {
             rgba.c[c] = (C == 0xffff) ? 1.0 : (real(C) / real(1 << 16));
         }
-        mdout << "astc: c=" << c << " C0=" << C0 << " C1=" << C1 << " pi=" << pi << " w=" << w << " C=" << C << " rgba[c]=" << rgba.c[c] << "\n";
+        uint rgba_fp = rgba.c[c] * 0x10000;
+        mdout << "astc: c=" << c << " endpoint0=" << color_endpoints[c][0] << " endpoint1=" << color_endpoints[c][1] <<
+                        std::hex << " C0=0x" << C0 << " C1=0x" << C1 << 
+                        std::dec << " plane1_chan=" << plane1_chan << " pi=" << pi << " w=" << w << 
+                        std::hex << " C=0x" << C << " rgba_fp[c]=0x" << rgba_fp << std::dec << " rgba[c]=" << rgba.c[c] << "\n";
     }
     return rgba;
 }
@@ -4839,7 +5966,7 @@ inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, co
 inline void Model::Texture::astc_decode_block_mode( const unsigned char * bdata, unsigned char * rbdata, 
                                                     uint& plane_cnt, uint& partition_cnt, 
                                                     uint& weights_w, uint& weights_h, uint& weights_d, 
-                                                    uint& R, uint& H )
+                                                    uint& R, uint& H, uint& weights_qmode )
 {
     //---------------------------------------------------------------
     // Refer to the ASTC Specification 1.0, which we follow here.
@@ -4862,7 +5989,7 @@ inline void Model::Texture::astc_decode_block_mode( const unsigned char * bdata,
 
     uint a = _bits(5, 2);  
     uint b = _bits(7, 2); 
-    R = _bits(4, 1);
+    R = _bits(4, 1);  // base qmode
     H = _bits(9, 1);  // high-precision?
     weights_d = 1;
     if ( _bits(0, 2) != 0 ) {
@@ -4907,7 +6034,7 @@ inline void Model::Texture::astc_decode_block_mode( const unsigned char * bdata,
             // A2_12
             weights_w = a + 2;
             weights_h = 12;
-        } else if ( (mode_bits & 0xc) == 4 ) {
+        } else if ( mode_bits == 0xc ) {
             // 6_10
             weights_w = 6;
             weights_h = 10;
@@ -4930,7 +6057,9 @@ inline void Model::Texture::astc_decode_block_mode( const unsigned char * bdata,
         }
     }
 
-    die_assert( plane_cnt == 1 || partition_cnt <= 3, "ASTC: dual-plane mode must have no more than 3 partitions" );
+    weights_qmode = (R - 2) + 6 * H;
+
+    die_assert( plane_cnt == 1 || partition_cnt <= 3, "astc: dual-plane mode must have no more than 3 partitions" );
 }
 
 inline uint Model::Texture::astc_decode_partition( const unsigned char * bdata, uint s, uint t, uint r, uint partition_cnt, uint texel_cnt )
@@ -5025,20 +6154,29 @@ inline uint Model::Texture::astc_decode_partition( const unsigned char * bdata, 
     if ( partition_cnt <= 3 ) d = 0;
     if ( partition_cnt <= 2 ) c = 0;
 
+    uint p;
     if ( a >= b && a >= c && a >= d ) {
-        return 0;
+        p = 0;
     } else if ( b >= c && b >= d ) {
-        return 1;
+        p = 1;
     } else if ( c >= d ) {
-        return 2;
+        p = 2;
     } else {
-        return 3;
+        p = 3;
     }
+
+    mdout << "astc_decode_partition: partition=" << p << 
+                        " rnum=0x" << std::hex << rnum << std::dec << " seed=" << seed << " sh1=" << sh1 << " sh2=" << sh2 << 
+                        " seed1=" << int(seed1) << " seed2=" << int(seed2) << " seed3=" << int(seed3) << " seed4=" << int(seed4) <<
+                        " seed5=" << int(seed5) << " seed6=" << int(seed6) << " seed7=" << int(seed7) << " seed8=" << int(seed8) <<
+                        " pa=" << a << " pb=" << b << " pc=" << c << " pd=" << d << "\n";
+    return p;
 }
 
 inline void Model::Texture::astc_decode_color_endpoint_mode( const unsigned char * bdata, uint plane_cnt, uint partition, uint partition_cnt, 
                                                              uint weights_bit_cnt, uint below_weights_start, 
-                                                             uint& cem, uint& trits, uint& quints, uint& bits, uint& endpoints_start )
+                                                             uint& cem, uint& qmode, uint& trits, uint& quints, uint& bits, 
+                                                             uint& endpoints_cnt, uint& endpoints_start, uint& endpoints_v_first, uint& endpoints_v_cnt )
 {
     //---------------------------------------------------------------
     // See Section 3.5.
@@ -5049,7 +6187,9 @@ inline void Model::Texture::astc_decode_color_endpoint_mode( const unsigned char
     // Determine the Color Endpoint Mode (CEM) for our partition.
     //---------------------------------------------------------------
     uint encoded_type_highpart_bit_cnt = 0;
-    uint cems[4];
+    uint cems[4] = { 0, 0, 0, 0 };
+    uint encoded_type = 0;
+    uint base_class = 0;
     if ( partition_cnt == 1 ) {
         //---------------------------------------------------------------
         // One partition, so one set of CEM
@@ -5061,8 +6201,8 @@ inline void Model::Texture::astc_decode_color_endpoint_mode( const unsigned char
         //---------------------------------------------------------------
         // This is easier when we concatenate all the bits.
         //---------------------------------------------------------------
-        uint encoded_type = _bits(23, 6) | (_bits(below_weights_start, encoded_type_highpart_bit_cnt) << 6);
-        uint base_class = encoded_type & 3;
+        encoded_type = _bits(23, 6) | (_bits(below_weights_start, encoded_type_highpart_bit_cnt) << 6);
+        base_class = encoded_type & 3;
         if ( base_class == 0 ) {
             //---------------------------------------------------------------
             // All partitions have same CEM.
@@ -5072,16 +6212,14 @@ inline void Model::Texture::astc_decode_color_endpoint_mode( const unsigned char
                 cems[i] = (encoded_type >> 2) & 0xf;
             }
             below_weights_start += encoded_type_highpart_bit_cnt;
-            encoded_type_highpart_bit_cnt = 0;
         } else {
             //---------------------------------------------------------------
             // See Table 15.
             //---------------------------------------------------------------
             uint bit_pos = 2;
-            base_class--;
             for( uint i = 0; i < partition_cnt; i++, bit_pos++ )
             {
-                cems[i] = (((encoded_type >> bit_pos) & 1) + base_class) << 2;
+                cems[i] = (((encoded_type >> bit_pos) & 1) + base_class - 1) << 2;
             }
             for( uint i = 0; i < partition_cnt; i++, bit_pos += 2 )
             {
@@ -5093,69 +6231,100 @@ inline void Model::Texture::astc_decode_color_endpoint_mode( const unsigned char
 
     //---------------------------------------------------------------
     // Determine number of integers we need to unpack if we were getting
-    // all of the endpoint pairs.
+    // all of the endpoint pairs.  
+    //
+    // Also, record the v_first and v_cnt for our partition.
     //
     // Then figure out the number of bits available for color endpoints.
+    //
+    // From that, we can then get the color quantization mode which 
+    // is used by table lookups to unquantize color values.
     //---------------------------------------------------------------
-    uint color_integer_cnt = 0;
+    endpoints_cnt = 0;
     for( uint i = 0; i < partition_cnt; i++ )
     {
-        uint endpoint_class = cems[i] >> 2;                     // only reason we computed all cems[] above
-        color_integer_cnt += (endpoint_class + 1) * 2;
+        uint v_cnt = 2 * (cems[i] >> 2) + 2;
+        if ( i == partition ) {
+            endpoints_v_first = endpoints_cnt;
+            endpoints_v_cnt   = v_cnt;
+        }
+        endpoints_cnt += v_cnt;
     }
-    die_assert( color_integer_cnt <= 18, "ASTC: too many color endpoint pairs" );
+    die_assert( endpoints_cnt <= 18, "astc: too many color endpoint pairs" );
 
     int color_bits_cnt = (partition_cnt <= 1) ? (115 - 4) : (113 - 4 - 10);
-    color_bits_cnt -= weights_bit_cnt - encoded_type_highpart_bit_cnt - (plane_cnt-1)*2;
+    color_bits_cnt -= weights_bit_cnt + ((base_class != 0) ? encoded_type_highpart_bit_cnt : 0) + (plane_cnt-1)*2;
     if ( color_bits_cnt < 0 ) color_bits_cnt = 0;
+
+    qmode = astc_color_quantization_mode[endpoints_cnt/2][color_bits_cnt];
+
     endpoints_start = (partition_cnt == 1) ? 17 : 29;
-    mdout << "astc: cem=" << cem << " encoded_type_highpart_bit_cnt=" << encoded_type_highpart_bit_cnt << 
-                    " color_integer_cnt=" << color_integer_cnt << " color_bits_cnt=" << color_bits_cnt << 
-                    " color_endpoints_start=" << endpoints_start << "\n";
+    mdout << "astc: cem=" << cem << 
+                    " partition_cnt=" << partition_cnt << 
+                    " weights_bit_cnt=" << weights_bit_cnt << 
+                    " encoded_type_highpart_bit_cnt=" << encoded_type_highpart_bit_cnt << 
+                    " plane_cnt=" << plane_cnt << 
+                    " color_bits_cnt=" << color_bits_cnt << 
+                    " cem_qmode=" << qmode << 
+                    " endpoints_cnt=" << endpoints_cnt << 
+                    " endpoints_start=" << endpoints_start << 
+                    " endpoints_v_cnt=" << endpoints_v_cnt << 
+                    " endpoints_v_first=" << endpoints_v_first << 
+                    " encoded_type=" << encoded_type << 
+                    " base_class=" << base_class << 
+                    " cem0=" << cems[0] << " cem1=" << cems[1] << " cem2=" << cems[2] << " cem3=" << cems[3] << "\n";
+
+    die_assert( qmode < 22, "astc: invalid color quantization mode, not < 22\n" );
 
     //---------------------------------------------------------------
-    // See section 3.16.
     // Figure out the number of trits, quints, and bits for our partition's CEM.
-    // This is implicit based on color_bits_cnt.
+    // Use table lookup.
     //---------------------------------------------------------------
-    const uint astc_color_endpoint_range_encodings_cnt = sizeof(Model::Texture::astc_color_endpoint_range_encodings) / 
-                                                         sizeof(Model::Texture::astc_color_endpoint_range_encodings[0]);
-    for( int i = astc_color_endpoint_range_encodings_cnt-1; i >= 0; i-- )
-    {
-        const ASTC_Range_Encoding& enc = astc_color_endpoint_range_encodings[i];
-        uint cem_bit_cnt = (color_integer_cnt*8*enc.trits  + 4) / 5 +
-                           (color_integer_cnt*7*enc.quints + 2) / 3 + 
-                           (color_integer_cnt*1*enc.bits   + 0) / 1;
-        if ( cem_bit_cnt <= uint(color_bits_cnt) ) {
-            trits  = enc.trits;
-            quints = enc.quints;
-            bits   = enc.bits;
-            return;
-        }
-    }
-
-    die_assert( false, "ASTC could not find CEM range encoding that fits in remaining bits" );
+    const ASTC_Range_Encoding& enc = astc_range_encodings[qmode];
+    trits  = enc.trits;
+    quints = enc.quints;
+    bits   = enc.bits; 
+    mdout << "astc: chosen range encoding: qmode=" << qmode << " max_p1=" << enc.max_p1 << " trits=" << trits << " quints=" << quints << " bits=" << bits << "\n";
 }
 
-inline void Model::Texture::astc_decode_color_endpoints( const unsigned char * bdata, uint cem, uint trits, uint quints, uint bits, uint endpoints_start,
+inline void Model::Texture::astc_decode_color_endpoints( const unsigned char * bdata, uint cem, uint cem_qmode, 
+                                                         uint trits, uint quints, uint bits, 
+                                                         uint endpoints_cnt, uint endpoints_start, uint endpoints_v_first, uint endpoints_v_cnt,
                                                          uint endpoints[4][2] )
 {
     //---------------------------------------------------------------
     // See Section 3.8 and table 20.
     // 
-    // Read the unquantized v0, v1, etc. values.
+    // Read the unquantized v0, v1, etc. values starting at endpoints_v_first.
     // Keep them around as signed values.
     //---------------------------------------------------------------
-    uint v_cnt = (cem <= 3) ? 2 : (cem <= 6) ? 4 : (cem <= 11) ? 6 : 8;
+    die_assert( endpoints_v_cnt <= 8, "astc: endpoints_v_cnt is > 8" );
     int  v[8];
-    for( uint i = 0; i < v_cnt; i++ )
+    for( uint i = 0; i < endpoints_v_cnt; i++ )
     {
         //---------------------------------------------------------------
         // Read quantized value.
         // Unquantize it.
         //---------------------------------------------------------------
-        uint qv = astc_decode_integer( bdata, endpoints_start, i, trits, quints, bits );
-        v[i] = astc_decode_unquantize_color_endpoint( qv, trits, quints, bits );
+        uint ii = endpoints_v_first + i;
+        uint qv = astc_decode_integer( bdata, endpoints_start, endpoints_cnt, ii, trits, quints, bits );
+        v[i] = astc_color_unquantized[cem_qmode][qv];
+        mdout << "astc_decode_color_endpoints: v" << i << "=" << v[i] << " v_first=" << endpoints_v_first << " v_cnt=" << endpoints_v_cnt << " i=" << i << " ii=" << ii << " qv=" << qv << "\n";
+    }
+
+    //---------------------------------------------------------------
+    // Precompute these for debug.
+    //---------------------------------------------------------------
+    int v_bts[8] = { v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7] };
+    astc_decode_bit_transfer_signed( v_bts[1], v_bts[0] );
+    astc_decode_bit_transfer_signed( v_bts[3], v_bts[2] );
+    astc_decode_bit_transfer_signed( v_bts[5], v_bts[4] );
+    astc_decode_bit_transfer_signed( v_bts[7], v_bts[6] );
+
+    for( uint i = 0; i < endpoints_v_cnt; i++ )
+    {
+        int bts = (v_bts[i] < 0) ? (0x200 + v_bts[i]) : v_bts[i];
+        mdout << "astc_decode_color_endpoints: v" << i << "=" << v[i] << " v" << i << "_bts=" << bts << " real_bts=" << v_bts[i] << "\n";
     }
 
     //---------------------------------------------------------------
@@ -5166,6 +6335,7 @@ inline void Model::Texture::astc_decode_color_endpoints( const unsigned char * b
     {
         case 0:
         {
+            // Luminance
             endpoints[0][0] = v[0];
             endpoints[0][1] = v[1];
             endpoints[1][0] = v[0];
@@ -5179,6 +6349,7 @@ inline void Model::Texture::astc_decode_color_endpoints( const unsigned char * b
 
         case 1:
         {
+            // Luminance Delta
             uint L0 = (v[0] >> 2) | (v[1] & 0xc0);
             uint L1 = L0 + (v[1] & 0x3f);
             if ( L1 > 0xff ) L1 = 0xff;
@@ -5195,6 +6366,7 @@ inline void Model::Texture::astc_decode_color_endpoints( const unsigned char * b
            
         case 4:
         {
+            // Luminance Alpha
             endpoints[0][0] = v[0];
             endpoints[0][1] = v[1];
             endpoints[1][0] = v[0];
@@ -5208,21 +6380,21 @@ inline void Model::Texture::astc_decode_color_endpoints( const unsigned char * b
 
         case 5:
         {
-            astc_decode_bit_transfer_signed( v[1], v[0] );
-            astc_decode_bit_transfer_signed( v[3], v[2] );
-            endpoints[0][0] = astc_decode_clamp_unorm8( v[0] );
-            endpoints[0][1] = astc_decode_clamp_unorm8( v[0] + v[1] );
+            // Luminance Alpha Delta
+            endpoints[0][0] = astc_decode_clamp_unorm8( v_bts[0] );
+            endpoints[0][1] = astc_decode_clamp_unorm8( v_bts[0] + v_bts[1] );
             endpoints[1][0] = endpoints[0][0];
             endpoints[1][1] = endpoints[0][1];
             endpoints[2][0] = endpoints[0][0];
             endpoints[2][1] = endpoints[0][1];
-            endpoints[3][0] = astc_decode_clamp_unorm8( v[2] );
-            endpoints[3][1] = astc_decode_clamp_unorm8( v[2] + v[3] );
+            endpoints[3][0] = astc_decode_clamp_unorm8( v_bts[2] );
+            endpoints[3][1] = astc_decode_clamp_unorm8( v_bts[2] + v_bts[3] );
             break;
         }
 
         case 6:
         {
+            // RGB Scale
             endpoints[0][0] = (v[0]*v[3]) >> 8;
             endpoints[0][1] = v[0];
             endpoints[1][0] = (v[1]*v[3]) >> 8;
@@ -5236,9 +6408,13 @@ inline void Model::Texture::astc_decode_color_endpoints( const unsigned char * b
 
         case 8:
         {
+            // RGB 
             int s0 = v[0] + v[2] + v[4];
             int s1 = v[1] + v[3] + v[5];
+            mdout << "astc_decode_color_endpoints: RGB: rgb0=[" << v[0] << "," << v[2] << "," << v[4] << 
+                                                     "] rgb1=[" << v[1] << "," << v[3] << "," << v[5] << "]\n";
             if ( s1 >= s0 ) {
+                // no blue contraction
                 endpoints[0][0] = astc_decode_clamp_unorm8( v[0] );
                 endpoints[0][1] = astc_decode_clamp_unorm8( v[1] );
                 endpoints[1][0] = astc_decode_clamp_unorm8( v[2] );
@@ -5247,7 +6423,9 @@ inline void Model::Texture::astc_decode_color_endpoints( const unsigned char * b
                 endpoints[2][1] = astc_decode_clamp_unorm8( v[5] );
                 endpoints[3][0] = 0xff;
                 endpoints[3][1] = 0xff;
+                mdout << "astc_decode_color_endpoints: RGB: no blue contraction\n";
             } else {
+                // blue contraction
                 int a = 0xff;
                 astc_decode_blue_contract( v[1], v[3], v[5], a );
                 endpoints[0][0] = astc_decode_clamp_unorm8( v[1] );
@@ -5257,29 +6435,33 @@ inline void Model::Texture::astc_decode_color_endpoints( const unsigned char * b
 
                 a = 0xff;
                 astc_decode_blue_contract( v[0], v[2], v[4], a );
-                endpoints[0][0] = astc_decode_clamp_unorm8( v[0] );
-                endpoints[1][0] = astc_decode_clamp_unorm8( v[2] );
-                endpoints[2][0] = astc_decode_clamp_unorm8( v[4] );
-                endpoints[3][0] = a;
+                endpoints[0][1] = astc_decode_clamp_unorm8( v[0] );
+                endpoints[1][1] = astc_decode_clamp_unorm8( v[2] );
+                endpoints[2][1] = astc_decode_clamp_unorm8( v[4] );
+                endpoints[3][1] = a;
+
+                mdout << "astc_decode_color_endpoints: RGB: blue contraction: rgb0=[" << v[0] << "," << v[2] << "," << v[4] << 
+                                                                           "] rgb1=[" << v[1] << "," << v[3] << "," << v[5] << "]\n";
             }
             break;
         }
 
         case 9:
         {
-            astc_decode_bit_transfer_signed( v[1], v[0] );
-            astc_decode_bit_transfer_signed( v[3], v[2] );
-            astc_decode_bit_transfer_signed( v[5], v[4] );
-            int r = v[0] + v[1];
-            int g = v[2] + v[3];
-            int b = v[4] + v[5];
+            // RGB Delta
+            int r = v_bts[0] + v_bts[1];
+            int g = v_bts[2] + v_bts[3];
+            int b = v_bts[4] + v_bts[5];
             int a = 0xff;
             endpoints[3][0] = a;
             endpoints[3][1] = a;
-            if ( (v[1] + v[3] + v[5]) >= 0 ) {
-                endpoints[0][0] = astc_decode_clamp_unorm8( v[0] );
-                endpoints[1][0] = astc_decode_clamp_unorm8( v[2] );
-                endpoints[2][0] = astc_decode_clamp_unorm8( v[4] );
+            int rgbsum = v_bts[1] + v_bts[3] + v_bts[5];
+            mdout << "astc_decode_color_endpoints: RGB Delta: brgb0=[" << v_bts[0] << "," << v_bts[2] << "," << v_bts[4] << "]" <<
+                                                            " brgb1=[" << r    << "," << g    << "," << b    << "] rgbsum=" << rgbsum << "\n";
+            if ( rgbsum >= 0 ) {
+                endpoints[0][0] = astc_decode_clamp_unorm8( v_bts[0] );
+                endpoints[1][0] = astc_decode_clamp_unorm8( v_bts[2] );
+                endpoints[2][0] = astc_decode_clamp_unorm8( v_bts[4] );
                 endpoints[0][1] = astc_decode_clamp_unorm8( r );
                 endpoints[1][1] = astc_decode_clamp_unorm8( g );
                 endpoints[2][1] = astc_decode_clamp_unorm8( b );
@@ -5289,9 +6471,9 @@ inline void Model::Texture::astc_decode_color_endpoints( const unsigned char * b
                 endpoints[1][0] = astc_decode_clamp_unorm8( g );
                 endpoints[2][0] = astc_decode_clamp_unorm8( b );
 
-                r = v[0];
-                g = v[2];
-                b = v[4];
+                r = v_bts[0];
+                g = v_bts[2];
+                b = v_bts[4];
                 astc_decode_blue_contract( r, g, b, a );
                 endpoints[0][1] = astc_decode_clamp_unorm8( r );
                 endpoints[1][1] = astc_decode_clamp_unorm8( g );
@@ -5302,6 +6484,7 @@ inline void Model::Texture::astc_decode_color_endpoints( const unsigned char * b
 
         case 10:
         {
+            // RGB Scale Alpha
             endpoints[0][0] = (v[0]*v[3]) >> 8;
             endpoints[0][1] = v[0];
             endpoints[1][0] = (v[1]*v[3]) >> 8;
@@ -5315,64 +6498,62 @@ inline void Model::Texture::astc_decode_color_endpoints( const unsigned char * b
 
         case 12:
         {
+            // RGBA
             if ( (v[1] + v[3] + v[5]) >= (v[0] + v[2] + v[4]) ) {
                 endpoints[0][0] = v[0];
                 endpoints[1][0] = v[2];
                 endpoints[2][0] = v[4];
-                endpoints[2][0] = v[6];
+                endpoints[3][0] = v[6];
 
                 endpoints[0][1] = v[1];
                 endpoints[1][1] = v[3];
                 endpoints[2][1] = v[5];
-                endpoints[2][1] = v[7];
+                endpoints[3][1] = v[7];
             } else {
                 astc_decode_blue_contract( v[1], v[3], v[5], v[7] );
                 endpoints[0][0] = v[1];
                 endpoints[1][0] = v[3];
                 endpoints[2][0] = v[5];
-                endpoints[2][0] = v[7];
+                endpoints[3][0] = v[7];
 
                 astc_decode_blue_contract( v[0], v[2], v[4], v[6] );
                 endpoints[0][1] = v[0];
                 endpoints[1][1] = v[2];
                 endpoints[2][1] = v[4];
-                endpoints[2][1] = v[6];
+                endpoints[3][1] = v[6];
             }
             break;
         }
 
         case 13:
         {
-            astc_decode_bit_transfer_signed( v[1], v[0] );
-            astc_decode_bit_transfer_signed( v[3], v[2] );
-            astc_decode_bit_transfer_signed( v[5], v[4] );
-            astc_decode_bit_transfer_signed( v[7], v[6] );
-            if ( (v[1] + v[3] + v[5]) >= 0 ) {
-                endpoints[0][0] = v[0];
-                endpoints[1][0] = v[2];
-                endpoints[2][0] = v[4];
-                endpoints[2][0] = v[6];
+            // RGBA Delta
+            if ( (v_bts[1] + v_bts[3] + v_bts[5]) >= 0 ) {
+                endpoints[0][0] = v_bts[0];
+                endpoints[1][0] = v_bts[2];
+                endpoints[2][0] = v_bts[4];
+                endpoints[3][0] = v_bts[6];
 
-                endpoints[0][0] = astc_decode_clamp_unorm8( v[0] + v[1] );
-                endpoints[1][1] = astc_decode_clamp_unorm8( v[2] + v[3] );
-                endpoints[2][1] = astc_decode_clamp_unorm8( v[4] + v[5] );
-                endpoints[3][1] = astc_decode_clamp_unorm8( v[6] + v[7] );
+                endpoints[0][1] = astc_decode_clamp_unorm8( v_bts[0] + v_bts[1] );
+                endpoints[1][1] = astc_decode_clamp_unorm8( v_bts[2] + v_bts[3] );
+                endpoints[2][1] = astc_decode_clamp_unorm8( v_bts[4] + v_bts[5] );
+                endpoints[3][1] = astc_decode_clamp_unorm8( v_bts[6] + v_bts[7] );
             } else {
-                int r = v[0] + v[1];
-                int g = v[2] + v[3];
-                int b = v[4] + v[5];
-                int a = v[6] + v[7];
+                int r = v_bts[0] + v_bts[1];
+                int g = v_bts[2] + v_bts[3];
+                int b = v_bts[4] + v_bts[5];
+                int a = v_bts[6] + v_bts[7];
                 astc_decode_blue_contract( r, g, b, a );
                 endpoints[0][0] = r;
                 endpoints[1][0] = g;
                 endpoints[2][0] = b;
-                endpoints[2][0] = a;
+                endpoints[3][0] = a;
 
-                astc_decode_blue_contract( v[0], v[2], v[4], v[6] );
-                endpoints[0][1] = v[0];
-                endpoints[1][1] = v[2];
-                endpoints[2][1] = v[4];
-                endpoints[2][1] = v[6];
+                astc_decode_blue_contract( v_bts[0], v_bts[2], v_bts[4], v_bts[6] );
+                endpoints[0][1] = v_bts[0];
+                endpoints[1][1] = v_bts[2];
+                endpoints[2][1] = v_bts[4];
+                endpoints[3][1] = v_bts[6];
             }
             break;
         }
@@ -5383,6 +6564,9 @@ inline void Model::Texture::astc_decode_color_endpoints( const unsigned char * b
             break;
         }
     }
+
+    mdout << "astc_decode_color_endpoints: final: rgba0=[" << endpoints[0][0] << "," << endpoints[1][0] << "," << endpoints[2][0] << "," << endpoints[3][0] << 
+                                               "] rgba1=[" << endpoints[0][1] << "," << endpoints[1][1] << "," << endpoints[2][1] << "," << endpoints[3][1] << "]\n";
 }
 
 inline void Model::Texture::astc_decode_bit_transfer_signed( int& a, int& b )
@@ -5390,11 +6574,14 @@ inline void Model::Texture::astc_decode_bit_transfer_signed( int& a, int& b )
     //---------------------------------------------------------------
     // See code below Table 20.
     //---------------------------------------------------------------
+    uint a_orig = a;
+    uint b_orig = b;
+    b |= (a & 0x80) << 1;
+    a &= 0x7f;
+    if ( (a & 0x40) != 0 ) a -= 0x80;
     b >>= 1;
-    b  |= a & 0x80;
     a >>= 1;
-    a  &= 0x3f;
-    if ( (a & 0x20) != 0 ) a -= 0x40;
+    mdout << "bts: a_orig=" << a_orig << " b_orig=" << b_orig << " a=" << a << " b=" << b << "\n";
 }
 
 inline void Model::Texture::astc_decode_blue_contract( int& r, int& g, int& b, int& a )
@@ -5416,317 +6603,231 @@ inline uint Model::Texture::astc_decode_clamp_unorm8( int v )
     return (v < 0) ? 0 : (v > 255) ? 255 : v;
 }
 
-inline uint Model::Texture::astc_decode_unquantize_color_endpoint( uint v, uint trits, uint quints, uint bits )
-{
-    //---------------------------------------------------------------
-    // Note: v is the value returned from astc_decode_integer().
-    // This routine completes the decode.
-    //---------------------------------------------------------------
-    if ( trits == 0 && quints == 0 ) {
-        //---------------------------------------------------------------
-        // Replicate MSB and return.
-        //---------------------------------------------------------------
-        uint msb = (v >> (bits-1)) & 0x1;
-        for( uint b = bits; b < 8; b++ ) 
-        {
-            v |= msb << b;
-        }
-    } else {
-        //---------------------------------------------------------------
-        // First compute A,B,C,D using Table 19 in section 3.7.
-        //---------------------------------------------------------------
-        uint a = (bits >> 0) & 0x1;
-        uint b = (bits >> 1) & 0x1;
-        uint c = (bits >> 2) & 0x2;
-        uint d = (bits >> 3) & 0x3;
-        uint e = (bits >> 4) & 0x4;
-        uint f = (bits >> 5) & 0x5;
-
-        uint D = v >> bits;  // trit or quint value
-        uint A = 0;  for( uint i = 0; i < 9; i++ ) A |= a << i;
-        uint B;
-        uint C;
-        if ( bits == 1 ) {
-            B = 0;
-            C = trits ? 204 : 113;
-        } else if ( bits == 2 ) {
-            B = (b << 8) | ((b&quints) << 4) | (b << 2) | ((b&trits) << 1);
-            C = trits ? 93 : 54;
-        } else if ( bits == 3 ) {
-            B = (c << 8) | (b << 7) | (trits ? ((c << 3) | (b << 2) | (c << 1) | (b << 0)) : ((c << 2) | (b << 1) | (c << 1)));
-            C = trits ? 44 : 26;
-        } else if ( bits == 4 ) {
-            B = (d << 8) | (c << 7) | (b << 6) | (trits ? ((d << 2) | (c << 1) | (b << 0)) : ((d << 1) | (c << 0)));
-            C = trits ? 22 : 13;
-        } else if ( bits == 5 ) {
-            B = (e << 8) | (d << 7) | (c << 6) | (b << 5) | (trits ? ((e << 1) | (d << 0)) : (e << 0));
-            C = trits ? 11 : 6;
-        } else if ( bits == 6 ) {
-            die_assert( trits, "ASTC: should have trits=1 when bits=6" );
-            B = (f << 8) | (e << 7) | (d << 6) | (c << 5) || (f << 0);
-            C = 5;
-        } else {
-            die_assert( false, "ASTC: bits > 6" );
-            B = 0;
-            C = 0;
-        }
-        v  = D*C + B;
-        v ^= A;
-        v  = (A & 0x80) | (v >> 2);
-    }
-
-    return v;
-}
-
 inline void Model::Texture::astc_decode_weights( const unsigned char * rbdata, uint weights_start, uint plane_cnt,
-                                                 uint Bs, uint Bt, uint Br, uint N, uint M, uint Q, uint s, uint t, uint r,
-                                                 uint trits, uint quints, uint bits, 
+                                                 uint blk_w, uint blk_h, uint blk_d, uint weights_w, uint weights_h, uint weights_d,
+                                                 uint s, uint t, uint r, uint trits, uint quints, uint bits, uint qmode,
                                                  uint plane_weights[2] )
 {
-    (void)Q;
-    (void)r;
+
+    die_assert( blk_d == 1 && weights_d == 1 && r == 0, "can't handle 3D textures right now" );
+    mdout << "astc_decode_weights: blk_whd=[" << blk_w << "," << blk_h << "," << blk_d << "]" <<
+                                 " weights_whd=[" << weights_w << "," << weights_h << "," << weights_d << "]\n";
+
     //---------------------------------------------------------------
-    // See sections 3.10 and 3.11.
-    // The texel coordinates within the block are s,t,r.
-    // Figure out which weights we're going to interpolate.
-    // Note that the weight grid dimensions (N,M,Q) are not the same
-    // as the block dimensions (Bs,Bt,Br).
+    // DECIMATE
+    //
+    // Look up the decimation encodings for this combination of 
+    // block and weights dimensions.  It will tell us which
+    // weights to pull out for this texel and decimation factors.
     //---------------------------------------------------------------
-    uint Ds = ( (1024 + (Bs/2) ) / (Bs-1) );
-    uint Dt = ( (1024 + (Bt/2) ) / (Bt-1) );
-//  uint Dr = ( (1024 + (Br/2) ) / (Br-1) );
-    uint cs = Ds * s;
-    uint ct = Dt * t;
-//  uint cr = Dr * r;
-    uint gs = (cs*(N-1) + 32) >> 6;
-    uint gt = (ct*(M-1) + 32) >> 6;
-//  uint gr = (cr*(Q-1) + 32) >> 6;
-    uint js = gs >> 4;
-    uint jt = gt >> 4;
-//  uint jr = gr >> 4;
-    uint fs = gs & 0xf;
-    uint ft = gt & 0xf;
-//  uint fr = gr & 0xf;
-    if ( Br == 1 ) {
-        //---------------------------------------------------------------
-        // 2D
-        //
-        // Need to interpolate for 1 or 2 sets of weights.
-        //---------------------------------------------------------------
-        die_assert( r == 0, "ASTC 2D mode requires that r=0" );
-        uint v0 = js + jt*N;
-        uint v1 = v0 + 1;
-        uint v2 = v0 + N;
-        uint v3 = v0 + N + 1;
-        uint w11 = (fs*ft + 8) >> 4;
-        uint w10 = ft - w11;
-        uint w01 = fs - w11;
-        uint w00 = 16 - fs - ft + w11;
-        for( uint p = 0; p < plane_cnt; p++ )
+    uint texel_i = s + t*blk_w;
+    const ASTC_Block_Weights_Decimation_Encoding& decimations = astc_block_weights_decimation_encoding( blk_w, blk_h, weights_w, weights_h );
+    const ASTC_Texel_Decimation_Encoding&         decimation  = decimations[texel_i];
+    uint weight_cnt = decimation.weight_cnt;
+    uint real_weight_cnt = plane_cnt * weights_w * weights_h * weights_d;
+    mdout << "astc_decode_weights: texel_i=" << texel_i << " decimation_weight_cnt=" << weight_cnt << " real_weight_cnt=" << real_weight_cnt << 
+                                 " weights_start=" << weights_start << "\n";
+    for( uint p = 0; p < plane_cnt; p++ )
+    {
+        uint sum = 8;
+        for( uint i = 0; i < weight_cnt; i++ )
         {
-            uint p00 = astc_decode_integer( rbdata, weights_start, v0*plane_cnt + p, trits, quints, bits );
-            uint p01 = astc_decode_integer( rbdata, weights_start, v1*plane_cnt + p, trits, quints, bits );
-            uint p10 = astc_decode_integer( rbdata, weights_start, v2*plane_cnt + p, trits, quints, bits );
-            uint p11 = astc_decode_integer( rbdata, weights_start, v3*plane_cnt + p, trits, quints, bits );
-            p00 = astc_decode_unquantize_weight( p00, trits, quints, bits );
-            p01 = astc_decode_unquantize_weight( p01, trits, quints, bits );
-            p10 = astc_decode_unquantize_weight( p10, trits, quints, bits );
-            p11 = astc_decode_unquantize_weight( p11, trits, quints, bits );
-
-            plane_weights[p] = (p00*w00 + p01+w01 + p10*w10 + p11*w11) >> 4;
+            //---------------------------------------------------------------
+            // Read quantized weight wi.
+            // Then unquantize it using a table lookup.
+            //---------------------------------------------------------------
+            uint wi  = decimation.weight_i[i];
+            uint wf  = decimation.weight_factor[i];
+            uint wii = plane_cnt*wi + p;
+            uint qw  = astc_decode_integer( rbdata, weights_start, real_weight_cnt, wii, trits, quints, bits );
+            die_assert( qw < 32, "astc_decode_weights: qw=" + std::to_string(qw) + " which is >= 32" );
+            uint w   = astc_weight_unquantized[qmode][qw];
+            sum += w * wf;
+            mdout << "astc_decode_weights: p=" << p << " i=" << i << " wi=" << wi << " wf=" << wf << " wii=" << wii << 
+                                        " qmode=" << qmode << " qw=" << qw << " w=" << w << " sum=" << sum << "\n";
         }
-    } else {
-        die_assert( Br == 1, "ASTC cannot handle 3D yet Br=" + std::to_string(Br) );
-    } 
-
+        plane_weights[p] = sum >> 4;
+        mdout << "astc_decode_weights: plane_weights[" << p << "]=" << plane_weights[p] << "\n";
+    }
 }
 
-inline uint Model::Texture::astc_decode_unquantize_weight( uint v, uint trits, uint quints, uint bits )
+const Model::Texture::ASTC_Block_Weights_Decimation_Encoding& 
+                    Model::Texture::astc_block_weights_decimation_encoding( uint blk_w, uint blk_h, uint weights_w, uint weights_h )
 {
     //---------------------------------------------------------------
-    // See section 3.11.
-    // Note: v is the value returned from astc_decode_integer().
-    // This routine completes the decode.
+    // If the table for this combo has already been created, then 
+    // return it quickly.
     //---------------------------------------------------------------
-    if ( trits == 0 && quints == 0 ) {
-        //---------------------------------------------------------------
-        // Replicate MSB and return.
-        //---------------------------------------------------------------
-        die_assert( bits <= 6, "ASTC quantized weight must have <= 6 bits" );
-        uint msb = (v >> (bits-1)) & 0x1;
-        for( uint b = bits; b < 6; b++ ) 
-        {
-            v |= msb << b;
+    uint blk_i     = 16*blk_h     + blk_w;
+    uint weights_i = 16*weights_h + weights_w;
+    uint texel_cnt = blk_w * blk_h;
+    if ( astc_weight_decimation_encodings.size() > blk_i ) {
+        ASTC_Block_Decimation_Encoding& blk_encodings = astc_weight_decimation_encodings[blk_i];
+        if ( blk_encodings.size() > weights_i ) {
+            Model::Texture::ASTC_Block_Weights_Decimation_Encoding& encodings = blk_encodings[weights_i];
+            if ( encodings.size() != 0 ) {
+                die_assert( encodings.size() == texel_cnt, "encodings inconsistency detected" );
+                return encodings;
+            }
         }
-    } else {
-        //---------------------------------------------------------------
-        // First compute A,B,C,D using Table 29.
-        //---------------------------------------------------------------
-        uint a = (bits >> 0) & 0x1;
-        uint b = (bits >> 1) & 0x1;
-        uint c = (bits >> 2) & 0x2;
-
-        uint D = v >> bits;  // trit or quint value
-        uint A = 0;  for( uint i = 0; i < 7; i++ ) A |= a << i;
-        uint B;
-        uint C;
-        if ( bits == 1 ) {
-            B = 0;
-            C = trits ? 50 : 28 ;
-        } else if ( bits == 2 ) {
-            B = (b << 7) | ((b&trits) << 2) | ((b&quints) << 1) | ((b&trits) << 0);
-            C = trits ? 23 : 13;
-        } else if ( bits == 3 ) {
-            die_assert( trits, "ASTC: should have trits=1 when bits=3" );
-            B = (c << 7) | (b << 6) | (c << 1) || (b << 0);
-            C = 11;
-        } else {
-            die_assert( trits, "ASTC: should have trits=1 when bits=0" );
-            B = 0;
-            C = 0;
-        }
-        v  = D*C + B;
-        v ^= A;
-        v  = (A & 0x20) | (v >> 2);
     }
 
-    if ( v > 32 ) v++; // expand to 0 .. 64 range
-    return v;
+    //---------------------------------------------------------------
+    // No luck.  
+    // First make sure all the parent arrays are there.
+    //---------------------------------------------------------------
+    if ( astc_weight_decimation_encodings.size() <= blk_i ) {
+        astc_weight_decimation_encodings.resize( blk_i+1 );
+    }
+    ASTC_Block_Decimation_Encoding& blk_encodings = astc_weight_decimation_encodings[blk_i];
+    if ( blk_encodings.size() <= weights_i ) {
+        blk_encodings.resize( weights_i+1 );
+    }
+    Model::Texture::ASTC_Block_Weights_Decimation_Encoding& encodings = blk_encodings[weights_i];
+    
+    //---------------------------------------------------------------
+    // Now fill in this combo.
+    //---------------------------------------------------------------
+    mdout << "Decimations for blk_whd=[" << blk_w << "," << blk_h << ",1]" <<
+             " weights_whd=[" << weights_w << "," << weights_h << ",1] weights_i=" << weights_i << "\n";
+    die_assert( encodings.size() == 0, "encodings should have been empty" );
+    encodings.resize( texel_cnt );
+
+    for( uint y = 0; y < blk_h; y++ )
+    {
+        for( uint x = 0; x < blk_w; x++ )
+        {
+            uint texel_i = y*blk_w + x;
+
+            uint x_weight = (((1024 + blk_w / 2) / (blk_w - 1)) * x * (weights_w - 1) + 32) >> 6;
+            uint y_weight = (((1024 + blk_h / 2) / (blk_h - 1)) * y * (weights_h - 1) + 32) >> 6;
+
+            uint x_weight_frac = x_weight & 0xF;
+            uint y_weight_frac = y_weight & 0xF;
+            uint x_weight_int  = x_weight >> 4;
+            uint y_weight_int  = y_weight >> 4;
+
+            uint qweight[4];
+            qweight[0] = x_weight_int + y_weight_int * weights_w;
+            qweight[1] = qweight[0] + 1;
+            qweight[2] = qweight[0] + x_weight;
+            qweight[3] = qweight[2] + 1;
+
+            uint prod = x_weight_frac * y_weight_frac;
+
+            uint weight[4];
+            weight[3] = (prod + 8) >> 4;
+            weight[1] = x_weight_frac - weight[3];
+            weight[2] = y_weight_frac - weight[3];
+            weight[0] = 16 - x_weight_frac - y_weight_frac + weight[3];
+
+            mdout << "    [" << x << "," << y << "]: x_weight=" << x_weight << " y_weight=" << y_weight << " prod=" << prod << 
+                        " qweight[]=[" << qweight[0] << "," << qweight[1] << "," << qweight[2] << "," << qweight[3] << "]" << 
+                        " weight[]=["  << weight[0]  << "," << weight[1]  << "," << weight[2]  << "," << weight[3]  << "]\n";
+
+            ASTC_Texel_Decimation_Encoding& encoding = encodings[texel_i];
+            encoding.weight_cnt = 0;
+            for( uint i = 0; i < 4; i++ )
+            {
+                if ( weight[i] != 0 ) {
+                    encoding.weight_i[encoding.weight_cnt] = qweight[i];
+                    encoding.weight_factor[encoding.weight_cnt++] = weight[i];
+                }
+            }
+        }
+    }
+    return encodings;
 }
 
-inline uint Model::Texture::astc_decode_integer( const unsigned char * bdata, uint start, uint i, uint trits, uint quints, uint bits )
+inline uint Model::Texture::astc_decode_integer( const unsigned char * bdata, uint start, uint cnt, uint vi, uint trits, uint quints, uint bits )
 {
     //---------------------------------------------------------------
     // See SPEC Section 3.6.
-    // bits == n == number of LSBs in each value
-    // This is coded a little differently from the spec because we
-    // only care about pulling out value i.
+    // See decode_ise() from open-source ASTC implementation.
+    // This is tricky stuff so we follow decode_ise() rather than the spec.
+    //
+    // Note: bits == n == number of LSBs in each value
+    //       trits and quints can add other MSBs.
+    //
+    // One difference between this routine and decode_ise() is that
+    // we care about only one integer, so we skip all values until value vi.
+    // We currently use loops to do this skipping, but later we will likely 
+    // add lookup tables (LUTs) to avoid these loops.
     //---------------------------------------------------------------
+    mdout << "astc_decode_integer: start=" << start << " cnt=" << cnt << " vi=" << vi << 
+             " trits=" << trits << " quints=" << quints << " bits=" << bits << " dat=" << astc_dat_str( bdata ) << "\n";
+    const uint TQ_SIZE = 22;
+    uint tq_blocks[TQ_SIZE];		// trit-blocks or quint-blocks
+    for( uint i = 0; i < TQ_SIZE; i++ )
+        tq_blocks[i] = 0;
+
+    uint lcounter = 0;
+    uint hcounter = 0;
+
+    // collect bits for element vi, as well as bits for any trit-blocks and quint-blocks.
     uint v;
-    if ( trits != 0 ) {
-        //---------------------------------------------------------------
-        // TRITS
-        //
-        // See Table 17.
-        // Pull out trit and bits ii = (i % 5).
-        // T0 .. T7 bit locations depends on bits (n).
-        //---------------------------------------------------------------
-        uint tstart = start + (i / 5) * (8 + 5 * bits);
-        uint t0     = _astc_bits( bdata, tstart + 1*bits + 0, 1 );
-        uint t1     = _astc_bits( bdata, tstart + 1*bits + 1, 1 );
-        uint t2     = _astc_bits( bdata, tstart + 2*bits + 2, 1 );
-        uint t3     = _astc_bits( bdata, tstart + 2*bits + 3, 1 );
-        uint t4     = _astc_bits( bdata, tstart + 3*bits + 4, 1 );
-        uint t5     = _astc_bits( bdata, tstart + 4*bits + 5, 1 );
-        uint t6     = _astc_bits( bdata, tstart + 4*bits + 6, 1 );
-        uint t7     = _astc_bits( bdata, tstart + 5*bits + 7, 1 );
-
-        uint t65     = (t6 << 1) | (t5 << 0);
-        uint t42     = (t4 << 2) | (t3 << 1) | (t2 << 0);
-        uint c4      = (t42 == 0b111) ? t7 : t4;
-        uint c32     = (t42 == 0b111) ? ((t6 << 1) | (t5 << 0)) : ((t3 << 1) | (t2 << 0));
-        uint c10     = (t1 << 1) | t0;
-        uint c3      = c32 >> 1;
-        uint c1      = c10 >> 1;
-
-        uint ii = i % 5;
-        uint m;
-        uint t;
-        switch( ii ) 
-        {
-            case 0: 
-                m = _astc_bits( bdata, tstart, bits );
-                t = (c10 == 0b11) ? (c32 & ~c3) : (c32 == 0b11) ? c10 : (c10 & ~c1);
-                break;
-
-            case 1:
-                m = _astc_bits( bdata, tstart + 1*bits + 2, bits );
-                t = (c10 == 0b11) ? c4 : (c32 == 0b11) ? 2 : c32;
-                break;
-
-            case 2:
-                m = _astc_bits( bdata, tstart + 2*bits + 4, bits );
-                t = (c10 == 0b11 || c32 == 0b11) ? 2 : c4;
-                break;
-
-            case 3:
-                m = _astc_bits( bdata, tstart + 3*bits + 5, bits );
-                t = (t42 == 0b111) ? 2 : (t65 == 0b11) ? t7 : t65;
-                break;
-
-            case 4:
-                m = _astc_bits( bdata, tstart + 4*bits + 7, bits );
-                t = (t42 == 0b111 || t65 == 0b11) ? 2 : t7;
-                break;
-
-            default:
-                die_assert( false, "ASTC integer decode unexpected ii value" );
-                m = 0;
-                t = 0;
-                break;
+    die_assert( vi < cnt, "astc_decode_integer vi >= cnt" );
+    for( uint i = 0; i < cnt; i++ )  // should be able to short-circuit this better later
+    {
+        if ( i == vi ) {
+            v = _astc_bits( bdata, start, bits );
+            mdout << "astc_decode_integer: i=" << i << " initial v=" << v << " start=" << start << " bits=" << bits << "\n";
         }
-        v = (t << bits) | m;
-    
-    } else if ( quints != 1 ) {
-        //---------------------------------------------------------------
-        // QUINTS
-        //
-        // See Table 17.
-        // Pull out quint ii = (i % 3).
-        // Q0 .. Q6 bit locations depends on bits (n).
-        //---------------------------------------------------------------
-        uint qstart = start + (i / 3) * (7 + 3 * bits);
-        uint q0     = _astc_bits( bdata, qstart + 1*bits + 0, 1 );
-        uint q1     = _astc_bits( bdata, qstart + 1*bits + 1, 1 );
-        uint q2     = _astc_bits( bdata, qstart + 2*bits + 2, 1 );
-        uint q3     = _astc_bits( bdata, qstart + 2*bits + 3, 1 );
-        uint q4     = _astc_bits( bdata, qstart + 2*bits + 4, 1 );
-        uint q5     = _astc_bits( bdata, qstart + 3*bits + 5, 1 );
-        uint q6     = _astc_bits( bdata, qstart + 3*bits + 6, 1 );
+        start += bits;
 
-        uint q65     = (q6 << 1) | (q5 << 0);
-        uint q43     = (q4 << 1) | (q3 << 0);
-        uint q21     = (q2 << 1) | (q1 << 0);
-        uint c43     = q43;
-        uint c20     = (q21 == 0b11) ? (((~q65 & 0x3) << 1) | q0) : ((q2 << 2) | (q1 << 1) | (q0 << 0));
-
-        uint ii = i % 3;
-        uint m;
-        uint q;
-        switch( ii ) 
-        {
-            case 0: 
-                m = _astc_bits( bdata, qstart, bits );
-                q = (q21 == 0b11 && q65 == 0b00) ? 4 : (c20 == 0b101) ? c43 : c20;
-                break;
-
-            case 1:
-                m = _astc_bits( bdata, qstart + 1*bits + 3, bits );
-                q = ((q21 == 0b11 && q65 == 0b00) || (c20 == 0b101)) ? 4 : c43;
-                break;
-
-            case 2:
-                m = _astc_bits( bdata, qstart + 2*bits + 5, bits );
-                q = (q21 == 0b11 && q65 == 0b00) ? ((q0 << 2) | ((q4 & ~q0) << 1)) | ((q3 & ~q0) << 0) : (q21 == 0b11) ? 4 : q65;
-                break;
-
-            default:
-                die_assert( false, "ASTC integer decode unexpected ii value" );
-                m = 0;
-                q = 0;
-                break;
+        if( trits ) {
+            static const uint bits_to_read[5]  = { 2, 2, 1, 2, 1 };
+            static const uint block_shift[5]   = { 0, 2, 4, 5, 7 };
+            static const uint next_lcounter[5] = { 1, 2, 3, 4, 0 };
+            static const uint hcounter_incr[5] = { 0, 0, 0, 0, 1 };
+            uint t = _astc_bits( bdata, start, bits_to_read[lcounter] );
+            die_assert( hcounter < TQ_SIZE, "trits tq_blocks[] overflow vi=" + std::to_string(vi) );
+            tq_blocks[hcounter] |= t << block_shift[lcounter];
+            mdout << "astc_decode_integer: i=" << i << " trit t=" << t << " start=" << start << " bits_to_read=" << bits_to_read[lcounter] <<
+                                         " hcounter=" << hcounter << " lcounter=" << lcounter << 
+                                         " tq_blocks[" << hcounter << "]=" << tq_blocks[hcounter] << "\n";
+            start += bits_to_read[lcounter];
+            hcounter += hcounter_incr[lcounter];
+            lcounter  = next_lcounter[lcounter];
         }
-        v = (q << bits) | m;
 
-    } else {
-        //---------------------------------------------------------------
-        // BITS
-        //
-        // trivial case
-        //---------------------------------------------------------------
-        uint bstart = start + i*bits;
-        v = _astc_bits( bdata, bstart, bits);
+        if( quints ) {
+            static const uint bits_to_read[3]  = { 3, 2, 2 };
+            static const uint block_shift[3]   = { 0, 3, 5 };
+            static const uint next_lcounter[3] = { 1, 2, 0 };
+            static const uint hcounter_incr[3] = { 0, 0, 1 };
+            uint q = _astc_bits( bdata, start, bits_to_read[lcounter] );
+            die_assert( hcounter < TQ_SIZE, "quints tq_blocks[] overflow vi=" + std::to_string(vi) );
+            tq_blocks[hcounter] |= q << block_shift[lcounter];
+            mdout << "astc_decode_integer: i=" << i << " quint q=" << q << " start=" << start << " bits_to_read=" << bits_to_read[lcounter] <<
+                                         " hcounter=" << hcounter << " lcounter=" << lcounter << 
+                                         " tq_block[" << hcounter << "]=" << tq_blocks[hcounter] << "\n";
+            start += bits_to_read[lcounter];
+            hcounter += hcounter_incr[lcounter];
+            lcounter  = next_lcounter[lcounter];
+        }
     }
+
+    // unpack trit or quint block that we need for value vi
+    if( trits )
+    {
+        uint ti = vi / 5;
+        uint to = vi % 5;
+        die_assert( ti < TQ_SIZE, "reading beyond end of trits tq_blocks[] ti=" + std::to_string(ti) );
+        uint tq = tq_blocks[ti];
+        uint tt = astc_integer_trits[tq][to];
+        v |= tt << bits;
+        mdout << "astc_decode_integer: trits[" << tq << "][" << to << "]=tt=" << tt << " << " << bits << " = " << v << "\n";
+    } else if ( quints ) {
+        uint qi = vi / 3;
+        uint qo = vi % 3;
+        die_assert( qi < TQ_SIZE, "reading beyond end of quints tq_blocks[] qi=" + std::to_string(qi) );
+        uint tq = tq_blocks[qi];
+        uint qq = astc_integer_quints[tq][qo];
+        v |= qq << bits;
+        mdout << "astc_decode_integer: quints[" << tq << "][" << qo << "]=qq=" << qq << " << " << bits << " = " << v << "\n";
+    } 
+
     return v;
 }
 
@@ -5894,12 +6995,14 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
                 hit_info.poly_i = poly_i;
                 hit_info.t = t;
 
+                 hit_info.normal = normal;
                 if ( vertexes[0].vn_i != uint(-1) ) {
-                    hit_info.normal = n0*alpha + n1*gamma + n2*beta;
-                    hit_info.normal.normalize();
+                    hit_info.shading_normal = n0*alpha + n1*gamma + n2*beta;
+                    hit_info.shading_normal.normalize();
                 } else {
-                    hit_info.normal = normal;
+                    hit_info.shading_normal = normal;
                 }
+                    hit_info.normal = normal;
                 // epsilon to get it off the polygon
                 // may cause trouble in two-sided... move to shader?
             //    hit_info.p = p + 0.01*hit_info.normal;;
@@ -5924,6 +7027,7 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
 
                 real r = 1.0 / (deltaU1 * deltaV2 - deltaV1 * deltaU2);
                 hit_info.tangent = (deltaPos1 * deltaV2   - deltaPos2 * deltaV1)*r;
+                hit_info.tangent_normalized = hit_info.tangent.normalize();
                 hit_info.bitangent = (deltaPos2 * deltaU1   - deltaPos1 * deltaU2)*r;
 
                 if (mtl_i != uint(-1) && model->materials[mtl_i].map_d_i != uint(-1)) {
@@ -5980,7 +7084,7 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
                     while (i >= mx) i -= mx;
                     while (j >= my) j -= my;
 
-                    float opacity = float(mdata[nchan*i + nchan*mx*j+0]) / 255.0;
+                    float opacity = float(mdata[nchan*i + nchan*mx*j+3]) / 255.0;
 
                     if (float(uniform()) > opacity) {
                         return false;

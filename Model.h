@@ -83,7 +83,7 @@
 //     3) Parse .obj file using custom parser that goes character-by-character and does its own number conversions. 
 //     4) Add elements to 1D arrays.  Load any .mtl file encounted in .obj file.  
 //     5) Optionally generate mipmap textures.  
-//     6) Optionally compress textures.
+//     6) Optionally compress textures using ARM's ASTC compressor program: astcenc.
 //     7) Optionally generate BVH tree.
 //     8) Write to  uncompressed file is fast because all structures are aligned on a page boundary in mem and in file.
 //     9) Read from uncompressed file is fast because all structures are aligned on a page boundary in mem and in file.

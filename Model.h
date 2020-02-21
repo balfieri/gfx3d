@@ -507,7 +507,8 @@ public:
         real4           texel_read_astc(         const Model * model, uint mip_level, uint64 ui, uint64 vi, 
                                                  uint64 * vaddr, uint64 * byte_cnt, bool do_srgb_to_linear ) const;
 
-        real4           astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, uint s, uint t, uint r, bool do_srgb_to_linear ) const;
+        static real4    astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, 
+                                     uint s, uint t, uint r, bool do_srgb_to_linear );
         static void     astc_decode_block_mode( const unsigned char * bdata, unsigned char * rbdata, uint& plane_cnt, uint& partition_cnt, 
                                                 uint& weights_w, uint& weights_h, uint& weights_d, uint& R, uint& H, uint& weights_qmode );
         static uint     astc_decode_partition( const unsigned char * bdata, uint x, uint y, uint z, uint partition_cnt, uint texel_cnt );
@@ -5791,7 +5792,7 @@ inline std::string Model::Texture::astc_dat_str( const unsigned char * bdata )
     return "0x" + s;
 }
 
-inline Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, uint s, uint t, uint r, bool do_srgb_to_linear ) const
+Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, uint s, uint t, uint r, bool do_srgb_to_linear )
 {
     mdout << "astc: " << *astc_hdr << " s=" << s << " t=" << t << " r=" << r << 
              " do_srgb_to_linear=" << do_srgb_to_linear << " dat=" << astc_dat_str( bdata ) << "\n";

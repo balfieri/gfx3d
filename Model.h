@@ -92,11 +92,12 @@
 // To Do:
 //
 //     0) Add some example programs to illustrate and test features.
-//     1) Support the .fbx binary and text formats.
-//     2) Perhaps support other formats such as UE4 and MAX.
-//     3) Test against more complex models, such as Disney Moana and Disney Cloud open-source models.
-//     4) Add support for curves, patches, hair, etc.
-//     5) Add a simple ray-tracing renderer as a separate file for an example and test.
+//     1) ASTC texture decompression needs a lot more testing against ARM's reference model.
+//     2) Support the .fbx binary and text formats.
+//     3) Perhaps support other formats such as UE4 and MAX.
+//     4) Test against more complex models, such as Disney Moana and Disney Cloud open-source models.
+//     5) Add support for curves, patches, hair, etc.
+//     6) Add a simple ray-tracing renderer as a separate file for an example and test.
 //
 #ifndef _Model_h
 #define _Model_h

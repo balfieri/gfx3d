@@ -92,12 +92,17 @@
 // To Do:
 //
 //     0) Add some example programs to illustrate and test features.
+//        This is always the best way for someone new to come up to speed.
 //     1) ASTC texture decompression needs a lot more testing against ARM's reference model.
 //     2) Support the .fbx binary and text formats.
 //     3) Perhaps support other formats such as UE4 and MAX.
 //     4) Test against more complex models, such as Disney Moana and Disney Cloud open-source models.
 //     5) Add support for curves, patches, hair, etc.
 //     6) Add a simple ray-tracing renderer as a separate file for an example and test.
+//     7) We have a generic material shading graph parser, but it doesn't check semantics 
+//        (that's proprietary). The semantic checking could be made more generic.
+//        Graph execution would still need to be part of a renderer and we could give an
+//        example of how to do it in the ray-tracing renderer.
 //
 #ifndef _Model_h
 #define _Model_h

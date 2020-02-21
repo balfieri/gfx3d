@@ -460,24 +460,6 @@ public:
         real3           offset;             // uvw offset of texture map on surface (w is 0 for 2D textures)
         real3           scale;              // uvw scale  of texture map on surface (w is 0 for 2D textures)
 
-        real4           texel_read(              const Model * model, uint mip_level, uint64 ui, uint64 vi, 
-                                                 uint64 * vaddr=nullptr, uint64 * byte_cnt=nullptr,
-                                                 bool do_srgb_to_linear=false ) const;
-        static void     astc_blk_dims_get( uint width, uint height, uint& blk_dim_x, uint& blk_dim_y );
-
-        // self-contained functions for implementing mip-based addressing 
-        static void     astc_blk_addr_get( uint      ray_id,
-                                           uint      blockdim_x, uint blockdim_y, uint blockdim_z,
-                                           uint      xsize,      uint ysize,      uint zsize,
-                                           real      u,          real v,          real w,
-                                           real      frac_uv_covg, 
-                                           uint      size_w,
-                                           uint      addr_w,
-                                           uint      uv_frac_w,
-                                           uint      covg_frac_w,
-                                           uint64_t  blks_addr,
-                                           uint64_t& blk_addr, uint& s, uint& t, uint& r );
-
         // for ARM .astc files and our internal format
         struct ASTC_Header                      
         {
@@ -501,14 +483,35 @@ public:
             uint        byte_cnt( void ) const;               // blk_cnt() * 16
         };
 
+        real4           texel_read(              const Model * model, uint mip_level, uint64 ui, uint64 vi, 
+                                                 uint64 * vaddr=nullptr, uint64 * byte_cnt=nullptr,
+                                                 bool do_srgb_to_linear=false ) const;
+        static void     astc_blk_dims_get( uint width, uint height, uint& blk_dim_x, uint& blk_dim_y );
+
+        // self-contained static function for implementing mip-based addressing 
+        static void     astc_blk_addr_get( uint      ray_id,
+                                           uint      blockdim_x, uint blockdim_y, uint blockdim_z,
+                                           uint      xsize,      uint ysize,      uint zsize,
+                                           real      u,          real v,          real w,
+                                           real      frac_uv_covg, 
+                                           uint      size_w,
+                                           uint      addr_w,
+                                           uint      uv_frac_w,
+                                           uint      covg_frac_w,
+                                           uint64_t  blks_addr,
+                                           uint64_t& blk_addr, uint& s, uint& t, uint& r );
+
+        // self-contained static function for decoding a singled texel in a block whose data is supplied
+        // note: only blockdim* need to be set in the ASTC_Header (nothing else is used or checked)
+        static real4    astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, 
+                                     uint s, uint t, uint r, bool do_srgb_to_linear );
+
     private:
         real4           texel_read_uncompressed( const Model * model, uint mip_level, uint64 ui, uint64 vi, 
                                                  uint64 * vaddr, uint64 * byte_cnt, bool do_srgb_to_linear ) const;
         real4           texel_read_astc(         const Model * model, uint mip_level, uint64 ui, uint64 vi, 
                                                  uint64 * vaddr, uint64 * byte_cnt, bool do_srgb_to_linear ) const;
 
-        static real4    astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, 
-                                     uint s, uint t, uint r, bool do_srgb_to_linear );
         static void     astc_decode_block_mode( const unsigned char * bdata, unsigned char * rbdata, uint& plane_cnt, uint& partition_cnt, 
                                                 uint& weights_w, uint& weights_h, uint& weights_d, uint& R, uint& H, uint& weights_qmode );
         static uint     astc_decode_partition( const unsigned char * bdata, uint x, uint y, uint z, uint partition_cnt, uint texel_cnt );

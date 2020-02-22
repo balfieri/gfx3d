@@ -1099,6 +1099,122 @@ inline std::string Model::Graph_Node::str( const Model * model, std::string inde
 //--------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------
 //
+// SYSTEM UTILITIES
+//
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+void Model::dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ) 
+{
+    // in case they are not found:
+    dir_name = "";
+    base_name = "";
+    ext_name = "";
+
+    // ext_name 
+    const int len = path.length();
+    int pos = len - 1;
+    for( ; pos >= 0; pos-- )
+    {
+        if ( path[pos] == '.' ) {
+            ext_name = path.substr( pos );
+            pos--;
+            break;
+        }
+    } 
+    if ( pos < 0 ) pos = len - 1;  // no ext_name, so reset for base_name
+    
+    // base_name
+    int base_len = 0;
+    for( ; pos >= 0; pos--, base_len++ )
+    {
+        if ( path[pos] == '/' ) {
+            if ( base_len != 0 ) base_name = path.substr( pos+1, base_len );
+            pos--;
+            break;
+        }
+    }
+    if ( pos < 0 ) pos = len - 1;  // no base_name, so reset for dir_name
+
+    // dir_name is whatever's left
+    if ( pos >= 0 ) dir_name = path.substr( 0, pos+1 );
+}
+
+bool Model::file_exists( std::string file_path )
+{
+    struct stat ss;
+    return stat( file_path.c_str(), &ss ) == 0;
+}
+
+bool Model::file_read( std::string file_path, char *& start, char *& end )
+{
+    const char * fname = file_path.c_str();
+    int fd = open( fname, O_RDONLY );
+    if ( fd < 0 ) std::cout << "file_read() error reading " << file_path << ": " << strerror( errno ) << "\n";
+    rtn_assert( fd >= 0, "could not open file " + file_path + " - open() error: " + strerror( errno ) );
+
+    struct stat file_stat;
+    int status = fstat( fd, &file_stat );
+    if ( status < 0 ) {
+        close( fd );
+        rtn_assert( 0, "could not stat file " + std::string(fname) + " - stat() error: " + strerror( errno ) );
+    }
+    size_t size = file_stat.st_size;
+
+    // this large read should behave like an mmap() inside the o/s kernel and be as fast
+    start = aligned_alloc<char>( size );
+    if ( start == nullptr ) {
+        close( fd );
+        rtn_assert( 0, "could not read file " + std::string(fname) + " - malloc() error: " + strerror( errno ) );
+    }
+    end = start + size;
+
+    char * addr = start;
+    while( size != 0 ) 
+    {
+        size_t _this_size = 1024*1024*1024;
+        if ( size < _this_size ) _this_size = size;
+        if ( ::read( fd, addr, _this_size ) <= 0 ) {
+            close( fd );
+            rtn_assert( 0, "could not read() file " + std::string(fname) + " - read error: " + strerror( errno ) );
+        }
+        size -= _this_size;
+        addr += _this_size;
+    }
+    close( fd );
+    return true;
+}
+
+void Model::file_write( std::string file_path, const unsigned char * data, uint64_t byte_cnt )
+{
+    cmd( "rm -f '" + file_path + "'" );
+
+    int fd = open( file_path.c_str(), O_WRONLY|O_CREAT );
+    die_assert( fd >= 0, "file_write() error opening " + file_path + " for writing: " + strerror( errno ) );
+
+    while( byte_cnt != 0 ) 
+    {
+        size_t _this_byte_cnt = 1024*1024*1024;
+        if ( byte_cnt < _this_byte_cnt ) _this_byte_cnt = byte_cnt;
+        if ( ::write( fd, data, _this_byte_cnt ) <= 0 ) {
+            close( fd );
+            die_assert( 0, "could not write() file " + file_path + ": " + strerror( errno ) );
+        }
+        byte_cnt -= _this_byte_cnt;
+        data     += _this_byte_cnt;
+    }
+    close( fd );
+    cmd( "chmod +rw " + file_path );
+}
+
+void Model::cmd( std::string c, std::string error )
+{
+    std::cout << c << "\n";
+    if ( std::system( c.c_str() ) != 0 ) die_assert( false, "ERROR: " + error + ": " + c );
+}
+
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+//
 // TOP-LEVEL METHODS FOR PARSING FILES
 //
 //--------------------------------------------------------------------------------------
@@ -3270,123 +3386,9 @@ Model::real Model::linear8_to_srgb_gamma( uint8_t linear )
 //--------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------
 //
-// SYSTEM UTILITIES
+// MATRIX MATH - 2D, 3D, or 4D
 //
-//--------------------------------------------------------------------------------------
-//--------------------------------------------------------------------------------------
-void Model::dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ) 
-{
-    // in case they are not found:
-    dir_name = "";
-    base_name = "";
-    ext_name = "";
-
-    // ext_name 
-    const int len = path.length();
-    int pos = len - 1;
-    for( ; pos >= 0; pos-- )
-    {
-        if ( path[pos] == '.' ) {
-            ext_name = path.substr( pos );
-            pos--;
-            break;
-        }
-    } 
-    if ( pos < 0 ) pos = len - 1;  // no ext_name, so reset for base_name
-    
-    // base_name
-    int base_len = 0;
-    for( ; pos >= 0; pos--, base_len++ )
-    {
-        if ( path[pos] == '/' ) {
-            if ( base_len != 0 ) base_name = path.substr( pos+1, base_len );
-            pos--;
-            break;
-        }
-    }
-    if ( pos < 0 ) pos = len - 1;  // no base_name, so reset for dir_name
-
-    // dir_name is whatever's left
-    if ( pos >= 0 ) dir_name = path.substr( 0, pos+1 );
-}
-
-bool Model::file_exists( std::string file_path )
-{
-    struct stat ss;
-    return stat( file_path.c_str(), &ss ) == 0;
-}
-
-bool Model::file_read( std::string file_path, char *& start, char *& end )
-{
-    const char * fname = file_path.c_str();
-    int fd = open( fname, O_RDONLY );
-    if ( fd < 0 ) std::cout << "file_read() error reading " << file_path << ": " << strerror( errno ) << "\n";
-    rtn_assert( fd >= 0, "could not open file " + file_path + " - open() error: " + strerror( errno ) );
-
-    struct stat file_stat;
-    int status = fstat( fd, &file_stat );
-    if ( status < 0 ) {
-        close( fd );
-        rtn_assert( 0, "could not stat file " + std::string(fname) + " - stat() error: " + strerror( errno ) );
-    }
-    size_t size = file_stat.st_size;
-
-    // this large read should behave like an mmap() inside the o/s kernel and be as fast
-    start = aligned_alloc<char>( size );
-    if ( start == nullptr ) {
-        close( fd );
-        rtn_assert( 0, "could not read file " + std::string(fname) + " - malloc() error: " + strerror( errno ) );
-    }
-    end = start + size;
-
-    char * addr = start;
-    while( size != 0 ) 
-    {
-        size_t _this_size = 1024*1024*1024;
-        if ( size < _this_size ) _this_size = size;
-        if ( ::read( fd, addr, _this_size ) <= 0 ) {
-            close( fd );
-            rtn_assert( 0, "could not read() file " + std::string(fname) + " - read error: " + strerror( errno ) );
-        }
-        size -= _this_size;
-        addr += _this_size;
-    }
-    close( fd );
-    return true;
-}
-
-void Model::file_write( std::string file_path, const unsigned char * data, uint64_t byte_cnt )
-{
-    cmd( "rm -f '" + file_path + "'" );
-
-    int fd = open( file_path.c_str(), O_WRONLY|O_CREAT );
-    die_assert( fd >= 0, "file_write() error opening " + file_path + " for writing: " + strerror( errno ) );
-
-    while( byte_cnt != 0 ) 
-    {
-        size_t _this_byte_cnt = 1024*1024*1024;
-        if ( byte_cnt < _this_byte_cnt ) _this_byte_cnt = byte_cnt;
-        if ( ::write( fd, data, _this_byte_cnt ) <= 0 ) {
-            close( fd );
-            die_assert( 0, "could not write() file " + file_path + ": " + strerror( errno ) );
-        }
-        byte_cnt -= _this_byte_cnt;
-        data     += _this_byte_cnt;
-    }
-    close( fd );
-    cmd( "chmod +rw " + file_path );
-}
-
-void Model::cmd( std::string c, std::string error )
-{
-    std::cout << c << "\n";
-    if ( std::system( c.c_str() ) != 0 ) die_assert( false, "ERROR: " + error + ": " + c );
-}
-
-//--------------------------------------------------------------------------------------
-//--------------------------------------------------------------------------------------
-//
-// MATRIX MATH - 2D, 3D, 4D
+// 3D is used the most so has the most methods, including matrix inversion.
 //
 //--------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------
@@ -4159,6 +4161,483 @@ double Model::Matrix::subdeterminant( uint exclude_row, uint exclude_col ) const
       double(m[_row[0]][_col[0]]) * cofactor00 +
       double(m[_row[0]][_col[1]]) * cofactor10 +
       double(m[_row[0]][_col[2]]) * cofactor20;
+}
+
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+//
+// ACCESS ALIGNED BOUNDING BOXES (AABB) AND BOUNDING VOLUME HIERARCHIES (BVH)
+//
+// These are used extensively in ray tracing.  See the hit() methods for 
+// how tests are made against AABBs, BVH, and polygons.
+//
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+inline Model::AABB::AABB( const Model::real3& p )
+{
+    min = p;
+    max = p;
+}  
+
+inline Model::AABB::AABB( const Model::real3& p0, const Model::real3& p1, const Model::real3& p2 ) 
+{
+    min = p0;
+    max = p0;
+    expand( p1 );
+    expand( p2 );
+}  
+
+inline void Model::AABB::pad( Model::real p ) 
+{
+    min -= real3( p, p, p );
+    max += real3( p, p, p );
+}
+
+inline void Model::AABB::expand( const Model::AABB& other )
+{
+    for( uint i = 0; i < 3; i++ )
+    {
+        if ( other.min.c[i] < min.c[i] ) min.c[i] = other.min.c[i];
+        if ( other.max.c[i] > max.c[i] ) max.c[i] = other.max.c[i];
+    }
+}
+
+inline void Model::AABB::expand( const Model::real3& p ) 
+{
+    if ( p.c[0] < min.c[0] ) min.c[0] = p.c[0];
+    if ( p.c[1] < min.c[1] ) min.c[1] = p.c[1];
+    if ( p.c[2] < min.c[2] ) min.c[2] = p.c[2];
+    if ( p.c[0] > max.c[0] ) max.c[0] = p.c[0];
+    if ( p.c[1] > max.c[1] ) max.c[1] = p.c[1];
+    if ( p.c[2] > max.c[2] ) max.c[2] = p.c[2];
+}
+
+inline bool Model::AABB::encloses( const AABB& other ) const
+{
+    return min.c[0] <= other.min.c[0] &&
+           min.c[1] <= other.min.c[1] &&
+           min.c[2] <= other.min.c[2] &&
+           max.c[0] >= other.max.c[0] &&
+           max.c[1] >= other.max.c[1] &&
+           max.c[2] >= other.max.c[2];
+}
+
+inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& direction, const Model::real3& direction_inv, 
+                              Model::real tmin, Model::real tmax ) const 
+{
+    mdout << "Model::AABB::hit: " << *this << " tmin=" << tmin << " tmax=" << tmax << "\n";
+    (void)direction;
+    for( uint a = 0; a < 3; a++ ) 
+    {
+        real dir_inv = direction_inv.c[a];
+        real v0 = (min.c[a] - origin.c[a]) * dir_inv;
+        real v1 = (max.c[a] - origin.c[a]) * dir_inv;
+        tmin = std::fmax( tmin, std::fmin( v0, v1 ) );
+        tmax = std::fmin( tmax, std::fmax( v0, v1 ) );
+        mdout << "Model::AABB::hit:     " << a << ": min=" << min.c[a] << " max=" << max.c[a] << 
+                                   " dir_inv=" << dir_inv << " origin=" << origin.c[a] << 
+                                   " v0=" << v0 << " v1=" << v1 << " tmin=" << tmin << " tmax=" << tmax << "\n";
+    }
+    bool r = tmax >= std::fmax( tmin, real(0.0) );
+    mdout << "Model::AABB::hit: return=" << r << "\n";
+    return r;
+}
+
+bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real padding ) const 
+{
+    const Vertex * vertexes = &model->vertexes[vtx_i];
+    for( uint32_t i = 0; i < vtx_cnt; i++ )
+    {
+        const real3& p = model->positions[vertexes[i].v_i];
+        if ( i == 0 ) {
+            box = AABB( p );
+        } else {
+            box.expand( p );
+        }
+    }
+    box.pad( padding );
+    return true;
+}
+
+inline bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
+        real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const
+{
+    (void)direction_inv;
+    if ( vtx_cnt == 3 ) {
+        // triangle - this code comes originally from Peter Shirley
+        const Vertex * vertexes = &model->vertexes[vtx_i];
+        const real3 * positions = model->positions;
+        const real3& p0 = positions[vertexes[0].v_i];
+
+        // plane equation (p - corner) dot N = 0
+        // (o + t*v - corner) dot N = 0
+        // t*dot(v,N) = (corner-o) dot N
+        // t = dot(corner - o, N) / dot(v,N)
+        real d = direction.dot( normal );
+        real t = (p0 - origin).dot( normal ) / d;
+        uint poly_i = this - model->polygons;
+        mdout << "Model::Polygon::hit: poly_i=" << poly_i << " origin=" << origin << 
+                                     " direction=" << direction << " direction_inv=" << direction_inv << " solid_angle=" << solid_angle <<
+                                     " d=" << d << " t=" << t << " t_min=" << t_min << " t_max=" << t_max << "\n";
+        if ( t > t_min && t < t_max ) {
+            // compute barycentrics, see if it's in triangle
+            const real3& p1 = positions[vertexes[1].v_i];
+            const real3& p2 = positions[vertexes[2].v_i];
+            const real3 p = origin + direction*t;
+            // careful about order!
+            const real3 p_m_p0  = p  - p0;
+            const real3 p1_m_p0 = p1 - p0;
+            const real3 p2_m_p0 = p2 - p0;
+            real area1 = p1_m_p0.cross( p_m_p0 ).dot( normal );
+            real area2 = p_m_p0.cross( p2_m_p0 ).dot( normal );
+            real area_2x = area * 2.0;
+            real beta    = area1/area_2x;
+            real gamma   = area2/area_2x;
+            mdout << "Model::Polygon::hit: poly_i=" << poly_i << " beta=" << beta << " gamma=" << gamma << "\n";
+            if ( beta >= 0.0 && gamma >= 0.0 && (beta + gamma) <= 1.0 ) {
+                real alpha = 1.0 - beta - gamma;
+
+                const real3 * normals   = model->normals;
+                const real2 * texcoords = model->texcoords;
+                const real3& n0 = normals[vertexes[0].vn_i];
+                const real3& n1 = normals[vertexes[1].vn_i];
+                const real3& n2 = normals[vertexes[2].vn_i];
+                real u0, u1, u2, v0, v1, v2;
+                if ( vertexes[0].vt_i != uint(-1) ) {
+                    u0 = texcoords[vertexes[0].vt_i].c[0];
+                    u1 = texcoords[vertexes[1].vt_i].c[0];
+                    u2 = texcoords[vertexes[2].vt_i].c[0];
+                    v0 = texcoords[vertexes[0].vt_i].c[1];
+                    v1 = texcoords[vertexes[1].vt_i].c[1];
+                    v2 = texcoords[vertexes[2].vt_i].c[1];
+                } else {
+                    u0 = 0.0;
+                    u1 = 0.0;
+                    u2 = 0.0;
+                    v0 = 0.0;
+                    v1 = 0.0;
+                    v2 = 0.0;
+                }
+                hit_info.poly_i = poly_i;
+                hit_info.t = t;
+
+                 hit_info.normal = normal;
+                if ( vertexes[0].vn_i != uint(-1) ) {
+                    hit_info.shading_normal = n0*alpha + n1*gamma + n2*beta;
+                    hit_info.shading_normal.normalize();
+                } else {
+                    hit_info.shading_normal = normal;
+                }
+                    hit_info.normal = normal;
+                // epsilon to get it off the polygon
+                // may cause trouble in two-sided... move to shader?
+            //    hit_info.p = p + 0.01*hit_info.normal;;
+                hit_info.p = p;
+
+                real distance_squared = t*t / direction.length_sqr();
+                real ray_footprint_area_on_triangle = solid_angle*distance_squared;
+                real twice_uv_area_of_triangle = std::abs(0.5*(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1));
+                hit_info.frac_uv_cov = ray_footprint_area_on_triangle * twice_uv_area_of_triangle / (2.0*area);
+
+
+                hit_info.u = alpha*u0 + gamma*u1 + beta*u2 ;
+                hit_info.v = alpha*v0 + gamma*v1 + beta*v2 ;
+
+                real3 deltaPos1 = p1-p0;
+                real3 deltaPos2 = p2-p0;
+
+                real deltaU1 = u1-u0;
+                real deltaU2 = u2-u0;
+                real deltaV1 = v1-v0;
+                real deltaV2 = v2-v0;
+
+                real r = 1.0 / (deltaU1 * deltaV2 - deltaV1 * deltaU2);
+                hit_info.tangent = (deltaPos1 * deltaV2   - deltaPos2 * deltaV1)*r;
+                hit_info.tangent_normalized = hit_info.tangent.normalize();
+                hit_info.bitangent = (deltaPos2 * deltaU1   - deltaPos1 * deltaU2)*r;
+
+                if (mtl_i != uint(-1) && model->materials[mtl_i].map_d_i != uint(-1)) {
+                    // code slightly modified from texture.h   We only need one compoent
+                    // From there, the first texel will be at &texels[texel_i]. 
+                    // Pull out the map_d_i.  If it's -1, there's no alpha texture.  Also use that to get to the Texture using model->textures[map_d_i].
+                    uint texel_i = model->textures[model->materials[mtl_i].map_d_i].texel_i; 
+                    unsigned char *mdata = &(model->texels[texel_i]);
+                    int nx = model->textures[model->materials[mtl_i].map_d_i].width;
+                    int ny = model->textures[model->materials[mtl_i].map_d_i].height;
+                    int mx = nx;
+                    int my = ny;
+                    real u = hit_info.u;
+                    real v = hit_info.v;
+                    real sqrt_nx_ny = std::sqrt(nx*ny);
+                    real width_of_footprint = std::sqrt(hit_info.frac_uv_cov) * sqrt_nx_ny;
+                    real mip_level = std::log2( width_of_footprint );
+                    int nchan = model->textures->nchan;
+                    for (int imip_level = mip_level; imip_level > 0 && !(mx == 1 && my == 1); imip_level--)
+                    {
+                        // find the proper mip texture
+                        mdata += nchan * mx * my;
+                        if ( mx != 1 ) mx >>= 1;
+                        if ( my != 1 ) my >>= 1;
+                    }
+                    if (std::isnan(u)) {
+                        u = 0.0;
+                    }
+                    if (std::isnan(v)) {
+                        v = 0.0;
+                    }
+                    if (u < 0.0) {
+                        int64_t i = u;
+                        u -= i-1;
+                    }
+                    if (v < 0.0) {
+                        int64_t i = v;
+                        v -= i-1;
+                    }
+                    if (u >= 1.0) {
+                        int64_t i = u;
+                        u -= i;
+                    }
+                    if (v >= 1.0) {
+                        int64_t i = v;
+                        v -= i;
+                    }
+                    int i = (    u)*real(mx);
+                    int j = (1.0-v)*real(my);
+                    /*
+                    if (i >= mx) i -= mx;
+                    if (j >= my) j -= my;
+                    */
+                    while (i >= mx) i -= mx;
+                    while (j >= my) j -= my;
+
+                    float opacity = float(mdata[nchan*i + nchan*mx*j+3]) / 255.0;
+
+                    if (float(uniform()) > opacity) {
+                        return false;
+                    }
+                }
+
+                hit_info.model = model;
+
+                mdout << "Model::Polygon::hit: poly_i=" << poly_i << " HIT t=" << hit_info.t << 
+                         " p=" << hit_info.p << " normal=" << hit_info.normal << 
+                         " frac_uv_cov=" << hit_info.frac_uv_cov << 
+                         " u=" << hit_info.u << " v=" << hit_info.v << " mtl_i=" << mtl_i << "\n";
+                return true;
+            }
+        }
+    }
+    mdout << "Model::Polygon::hit: NOT a hit, poly_i=" << (this - model->polygons) << "\n";
+    return false;
+}
+
+bool Model::Instance::bounding_box( const Model * model, AABB& b, real padding ) const
+{
+    (void)model;
+    b = box;
+    b.pad( padding );
+    return true;
+}
+
+bool Model::Instance::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
+                           real solid_angle, real t_min, real t_max, HitInfo& hit_info )
+{
+    die_assert( sizeof(real) == 4, "real is not float" );
+    die_assert( kind == INSTANCE_KIND::MODEL_PTR, "did not get model_ptr instance" );
+
+    //-----------------------------------------------------------
+    // Use inverse matrix to transform origin, direction, and direction_inv into target model's space.
+    // Then call model's root BVH hit node.
+    //-----------------------------------------------------------
+    Model  *   t_model         = u.model_ptr;
+    Matrix *   M_inv           = &model->matrixes[matrix_inv_i];
+    real3      t_origin, t_direction, t_direction_inv;
+    M_inv->transform( origin, t_origin );
+    M_inv->transform( direction, t_direction );
+    M_inv->transform( direction_inv, t_direction_inv );
+    mdout << "Model::Instance::hit: M_inv=" << *M_inv << 
+                                  " origin="   << origin   << " direction="   << direction   << " direction_inv="   << direction_inv << 
+                                  " t_origin=" << t_origin << " t_direction=" << t_direction << " t_direction_inv=" << t_direction_inv << "\n";
+
+    BVH_Node * t_bvh = &t_model->bvh_nodes[t_model->hdr->bvh_root_i];
+    if ( !t_bvh->hit( t_model, t_origin, t_direction, t_direction_inv, solid_angle, t_min, t_max, hit_info ) ) return false;
+
+    //-----------------------------------------------------------
+    // Use matrix to transform hit_info.p back to global world space.
+    // Use transposed inverse matrix to transform hit_info.normal correctly (ask Pete Shirley).
+    //-----------------------------------------------------------
+    Matrix * M           = &model->matrixes[matrix_i];
+    Matrix * M_inv_trans = &model->matrixes[matrix_inv_trans_i];
+    real3 p = hit_info.p;
+    real3 normal = hit_info.normal;
+    M->transform( p, hit_info.p );
+    M_inv_trans->transform( normal, hit_info.normal );
+    return true;
+}
+
+inline bool Model::BVH_Node::bounding_box( const Model * model, Model::AABB& b ) const
+{
+    (void)model;
+    b = box;
+    return true;
+}
+
+void Model::bvh_build( Model::BVH_TREE bvh_tree )
+{
+    (void)bvh_tree;
+    if ( hdr->poly_cnt != 0 ) {
+        die_assert( hdr->inst_cnt == 0, "inst_cnt should be 0" );
+        hdr->bvh_root_i = bvh_node( true, 0, hdr->poly_cnt, 1 );
+
+        if ( hdr->emissive_poly_cnt != 0 ) {
+            // need to rebuild this due to changes in poly indexes
+            // should end up with the same number of emissive polys
+            //
+            uint epoly_cnt = 0;
+            for( uint i = 0; i < hdr->poly_cnt; i++ )
+            {
+                uint mtl_i = polygons[i].mtl_i;
+                if ( mtl_i != uint(-1) && materials[mtl_i].is_emissive() ) {
+                    emissive_polygons[epoly_cnt++] = i;
+                }
+            }
+            if ( epoly_cnt != hdr->emissive_poly_cnt ) {
+                std::cout << "ERROR: after BVH build, new emissive_poly_cnt=" << epoly_cnt << 
+                             " != old emissive_poly_cnt=" << hdr->emissive_poly_cnt << "\n";
+                exit( 1 );
+            }
+        }
+    } else {
+        die_assert( hdr->inst_cnt != 0 && hdr->poly_cnt == 0, "poly_cnt should be 0" );
+        hdr->bvh_root_i = bvh_node( false, 0, hdr->inst_cnt, 1 );
+    }
+}
+
+inline Model::uint Model::bvh_qsplit( bool for_polys, Model::uint first, Model::uint n, Model::real pivot, Model::uint axis )
+{
+   uint m = first;
+
+   for( uint i = first; i < (first+n); i++ )
+   {
+       AABB box;
+       polygons[i].bounding_box( this, box );
+       real centroid = (box.min.c[axis] + box.max.c[axis]) * 0.5;
+       if ( centroid < pivot ) {
+           if ( for_polys ) {
+               Polygon temp = polygons[i];
+               polygons[i]  = polygons[m];
+               polygons[m]  = temp;
+           } else {
+               Instance temp = instances[i];
+               instances[i]  = instances[m];
+               instances[m]  = temp;
+           }
+           m++;
+       }
+    }
+
+    die_assert( m >= first && m <= (first+n), "qsplit has gone mad" );
+    if ( m == first || m == (first +n) ) m = first + n/2;
+    return m;
+}
+
+Model::uint Model::bvh_node( bool for_polys, Model::uint first, Model::uint n, Model::uint axis ) 
+{
+    perhaps_realloc( bvh_nodes, hdr->bvh_node_cnt, max->bvh_node_cnt, 1 );
+    uint bvh_i = hdr->bvh_node_cnt++;
+    BVH_Node * node = &bvh_nodes[bvh_i];
+
+    if ( for_polys ) {
+        polygons[first].bounding_box( this, node->box );
+    } else {
+        instances[first].bounding_box( this, node->box );
+    }
+    for( uint i = 1; i < n; i++ )
+    {
+        AABB new_box;
+        if ( for_polys ) {
+            polygons[first+i].bounding_box( this, new_box );
+        } else {
+            instances[first+i].bounding_box( this, new_box );
+        }
+        node->box.expand( new_box );
+    }
+
+    if ( n == 1 || n == 2 ) {
+        node->left_i = first;
+        AABB new_box;
+        if ( for_polys ) {
+            node->left_kind  = Model::BVH_NODE_KIND::POLYGON;
+            node->right_kind = Model::BVH_NODE_KIND::POLYGON;
+            polygons[first+0].bounding_box( this, new_box );
+        } else {
+            node->left_kind  = Model::BVH_NODE_KIND::INSTANCE;
+            node->right_kind = Model::BVH_NODE_KIND::INSTANCE;
+            instances[first+0].bounding_box( this, new_box );
+        }
+        die_assert( node->box.encloses( new_box ), "box should enclose new_box" );
+        if ( n == 2 ) {
+            if ( for_polys ) {
+                polygons[first+1].bounding_box( this, new_box );
+            } else {
+                instances[first+1].bounding_box( this, new_box );
+            }
+            die_assert( node->box.encloses( new_box ), "box should enclose new_box" );
+            node->right_i = first + 1;
+        } else {
+            node->right_i = first;
+        }
+
+    } else {
+        node->left_kind = Model::BVH_NODE_KIND::BVH_NODE;
+        node->right_kind = Model::BVH_NODE_KIND::BVH_NODE;
+        real pivot = (node->box.min.c[axis] + node->box.max.c[axis]) * 0.5;
+        uint m = bvh_qsplit( for_polys, first, n, pivot, axis );
+        uint nm = m - first;
+        uint left_i  = bvh_node( for_polys, first, nm,   (axis + 1) % 3 );
+        uint right_i = bvh_node( for_polys, m,     n-nm, (axis + 1) % 3 );
+        node = &bvh_nodes[bvh_i];  // could change after previous calls
+        node->left_i  = left_i;
+        node->right_i = right_i;
+        die_assert( node->box.encloses( bvh_nodes[left_i].box ) && node->box.encloses( bvh_nodes[right_i].box ), "box does not enclose left and right boxes" );
+    }
+
+    return bvh_i;
+}
+
+inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origin, 
+                                  const Model::real3& direction, const Model::real3& direction_inv,
+                                  Model::real solid_angle, Model::real t_min, Model::real t_max, Model::HitInfo& hit_info ) const
+{
+    bool r = false;
+    uint bvh_i = this - model->bvh_nodes;
+    mdout << "Model::BVH_Node::hit: bvh_i=" << bvh_i << "\n";
+    if ( box.hit( origin, direction, direction_inv, t_min, t_max ) ) {
+        HitInfo left_hit_info;
+        HitInfo right_hit_info;
+        bool hit_left  = (left_kind == BVH_NODE_KIND::POLYGON)   ? model->polygons[left_i].hit(    model, origin, direction, direction_inv,   
+                                                                                                   solid_angle, t_min, t_max, left_hit_info  ) :
+                         (left_kind == BVH_NODE_KIND::INSTANCE)  ? model->instances[left_i].hit(   model, origin, direction, direction_inv, 
+                                                                                                   solid_angle, t_min, t_max, left_hit_info  ) :
+                                                                   model->bvh_nodes[left_i].hit(   model, origin, direction, direction_inv, 
+                                                                                                   solid_angle, t_min, t_max, left_hit_info  );
+        bool hit_right = (left_i == right_i)                     ? false :   // lone leaf
+                         (right_kind == BVH_NODE_KIND::POLYGON)  ? model->polygons[right_i].hit(   model, origin, direction, direction_inv, 
+                                                                                                   solid_angle, t_min, t_max, right_hit_info ) :
+                         (right_kind == BVH_NODE_KIND::INSTANCE) ? model->instances[right_i].hit(  model, origin, direction, direction_inv, 
+                                                                                                   solid_angle, t_min, t_max, right_hit_info ) :
+                                                                   model->bvh_nodes[right_i].hit(  model, origin, direction, direction_inv, 
+                                                                                                   solid_angle, t_min, t_max, right_hit_info );
+        if ( hit_left && (!hit_right || left_hit_info.t < right_hit_info.t) ) {
+            hit_info = left_hit_info;
+            r = true;
+        } else if ( hit_right ) {
+            hit_info = right_hit_info;
+            r = true;
+        }
+    }
+    mdout << "Model::BVH_Node::hit: bvh_i=" << bvh_i << " return=" << r << "\n";
+    return r;
 }
 
 //--------------------------------------------------------------------------------------
@@ -5025,483 +5504,6 @@ std::string Model::surrounding_lines( char *& xxx, char *& xxx_end )
         xxx++;
     }
     return s;
-}
-
-//--------------------------------------------------------------------------------------
-//--------------------------------------------------------------------------------------
-//
-// ACCESS ALIGNED BOUNDING BOXES (AABB) AND BOUNDING VOLUME HIERARCHIES (BVH)
-//
-// These are used extensively in ray tracing.  See the hit() methods for 
-// how tests are made against the BVH.
-//
-//--------------------------------------------------------------------------------------
-//--------------------------------------------------------------------------------------
-inline Model::AABB::AABB( const Model::real3& p )
-{
-    min = p;
-    max = p;
-}  
-
-inline Model::AABB::AABB( const Model::real3& p0, const Model::real3& p1, const Model::real3& p2 ) 
-{
-    min = p0;
-    max = p0;
-    expand( p1 );
-    expand( p2 );
-}  
-
-void Model::bvh_build( Model::BVH_TREE bvh_tree )
-{
-    (void)bvh_tree;
-    if ( hdr->poly_cnt != 0 ) {
-        die_assert( hdr->inst_cnt == 0, "inst_cnt should be 0" );
-        hdr->bvh_root_i = bvh_node( true, 0, hdr->poly_cnt, 1 );
-
-        if ( hdr->emissive_poly_cnt != 0 ) {
-            // need to rebuild this due to changes in poly indexes
-            // should end up with the same number of emissive polys
-            //
-            uint epoly_cnt = 0;
-            for( uint i = 0; i < hdr->poly_cnt; i++ )
-            {
-                uint mtl_i = polygons[i].mtl_i;
-                if ( mtl_i != uint(-1) && materials[mtl_i].is_emissive() ) {
-                    emissive_polygons[epoly_cnt++] = i;
-                }
-            }
-            if ( epoly_cnt != hdr->emissive_poly_cnt ) {
-                std::cout << "ERROR: after BVH build, new emissive_poly_cnt=" << epoly_cnt << 
-                             " != old emissive_poly_cnt=" << hdr->emissive_poly_cnt << "\n";
-                exit( 1 );
-            }
-        }
-    } else {
-        die_assert( hdr->inst_cnt != 0 && hdr->poly_cnt == 0, "poly_cnt should be 0" );
-        hdr->bvh_root_i = bvh_node( false, 0, hdr->inst_cnt, 1 );
-    }
-}
-
-inline Model::uint Model::bvh_qsplit( bool for_polys, Model::uint first, Model::uint n, Model::real pivot, Model::uint axis )
-{
-   uint m = first;
-
-   for( uint i = first; i < (first+n); i++ )
-   {
-       AABB box;
-       polygons[i].bounding_box( this, box );
-       real centroid = (box.min.c[axis] + box.max.c[axis]) * 0.5;
-       if ( centroid < pivot ) {
-           if ( for_polys ) {
-               Polygon temp = polygons[i];
-               polygons[i]  = polygons[m];
-               polygons[m]  = temp;
-           } else {
-               Instance temp = instances[i];
-               instances[i]  = instances[m];
-               instances[m]  = temp;
-           }
-           m++;
-       }
-    }
-
-    die_assert( m >= first && m <= (first+n), "qsplit has gone mad" );
-    if ( m == first || m == (first +n) ) m = first + n/2;
-    return m;
-}
-
-Model::uint Model::bvh_node( bool for_polys, Model::uint first, Model::uint n, Model::uint axis ) 
-{
-    perhaps_realloc( bvh_nodes, hdr->bvh_node_cnt, max->bvh_node_cnt, 1 );
-    uint bvh_i = hdr->bvh_node_cnt++;
-    BVH_Node * node = &bvh_nodes[bvh_i];
-
-    if ( for_polys ) {
-        polygons[first].bounding_box( this, node->box );
-    } else {
-        instances[first].bounding_box( this, node->box );
-    }
-    for( uint i = 1; i < n; i++ )
-    {
-        AABB new_box;
-        if ( for_polys ) {
-            polygons[first+i].bounding_box( this, new_box );
-        } else {
-            instances[first+i].bounding_box( this, new_box );
-        }
-        node->box.expand( new_box );
-    }
-
-    if ( n == 1 || n == 2 ) {
-        node->left_i = first;
-        AABB new_box;
-        if ( for_polys ) {
-            node->left_kind  = Model::BVH_NODE_KIND::POLYGON;
-            node->right_kind = Model::BVH_NODE_KIND::POLYGON;
-            polygons[first+0].bounding_box( this, new_box );
-        } else {
-            node->left_kind  = Model::BVH_NODE_KIND::INSTANCE;
-            node->right_kind = Model::BVH_NODE_KIND::INSTANCE;
-            instances[first+0].bounding_box( this, new_box );
-        }
-        die_assert( node->box.encloses( new_box ), "box should enclose new_box" );
-        if ( n == 2 ) {
-            if ( for_polys ) {
-                polygons[first+1].bounding_box( this, new_box );
-            } else {
-                instances[first+1].bounding_box( this, new_box );
-            }
-            die_assert( node->box.encloses( new_box ), "box should enclose new_box" );
-            node->right_i = first + 1;
-        } else {
-            node->right_i = first;
-        }
-
-    } else {
-        node->left_kind = Model::BVH_NODE_KIND::BVH_NODE;
-        node->right_kind = Model::BVH_NODE_KIND::BVH_NODE;
-        real pivot = (node->box.min.c[axis] + node->box.max.c[axis]) * 0.5;
-        uint m = bvh_qsplit( for_polys, first, n, pivot, axis );
-        uint nm = m - first;
-        uint left_i  = bvh_node( for_polys, first, nm,   (axis + 1) % 3 );
-        uint right_i = bvh_node( for_polys, m,     n-nm, (axis + 1) % 3 );
-        node = &bvh_nodes[bvh_i];  // could change after previous calls
-        node->left_i  = left_i;
-        node->right_i = right_i;
-        die_assert( node->box.encloses( bvh_nodes[left_i].box ) && node->box.encloses( bvh_nodes[right_i].box ), "box does not enclose left and right boxes" );
-    }
-
-    return bvh_i;
-}
-
-inline void Model::AABB::pad( Model::real p ) 
-{
-    min -= real3( p, p, p );
-    max += real3( p, p, p );
-}
-
-inline void Model::AABB::expand( const Model::AABB& other )
-{
-    for( uint i = 0; i < 3; i++ )
-    {
-        if ( other.min.c[i] < min.c[i] ) min.c[i] = other.min.c[i];
-        if ( other.max.c[i] > max.c[i] ) max.c[i] = other.max.c[i];
-    }
-}
-
-inline void Model::AABB::expand( const Model::real3& p ) 
-{
-    if ( p.c[0] < min.c[0] ) min.c[0] = p.c[0];
-    if ( p.c[1] < min.c[1] ) min.c[1] = p.c[1];
-    if ( p.c[2] < min.c[2] ) min.c[2] = p.c[2];
-    if ( p.c[0] > max.c[0] ) max.c[0] = p.c[0];
-    if ( p.c[1] > max.c[1] ) max.c[1] = p.c[1];
-    if ( p.c[2] > max.c[2] ) max.c[2] = p.c[2];
-}
-
-inline bool Model::AABB::encloses( const AABB& other ) const
-{
-    return min.c[0] <= other.min.c[0] &&
-           min.c[1] <= other.min.c[1] &&
-           min.c[2] <= other.min.c[2] &&
-           max.c[0] >= other.max.c[0] &&
-           max.c[1] >= other.max.c[1] &&
-           max.c[2] >= other.max.c[2];
-}
-
-inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& direction, const Model::real3& direction_inv, 
-                              Model::real tmin, Model::real tmax ) const 
-{
-    mdout << "Model::AABB::hit: " << *this << " tmin=" << tmin << " tmax=" << tmax << "\n";
-    (void)direction;
-    for( uint a = 0; a < 3; a++ ) 
-    {
-        real dir_inv = direction_inv.c[a];
-        real v0 = (min.c[a] - origin.c[a]) * dir_inv;
-        real v1 = (max.c[a] - origin.c[a]) * dir_inv;
-        tmin = std::fmax( tmin, std::fmin( v0, v1 ) );
-        tmax = std::fmin( tmax, std::fmax( v0, v1 ) );
-        mdout << "Model::AABB::hit:     " << a << ": min=" << min.c[a] << " max=" << max.c[a] << 
-                                   " dir_inv=" << dir_inv << " origin=" << origin.c[a] << 
-                                   " v0=" << v0 << " v1=" << v1 << " tmin=" << tmin << " tmax=" << tmax << "\n";
-    }
-    bool r = tmax >= std::fmax( tmin, real(0.0) );
-    mdout << "Model::AABB::hit: return=" << r << "\n";
-    return r;
-}
-
-inline bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
-        real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const
-{
-    (void)direction_inv;
-    if ( vtx_cnt == 3 ) {
-        // triangle - this code comes originally from Peter Shirley
-        const Vertex * vertexes = &model->vertexes[vtx_i];
-        const real3 * positions = model->positions;
-        const real3& p0 = positions[vertexes[0].v_i];
-
-        // plane equation (p - corner) dot N = 0
-        // (o + t*v - corner) dot N = 0
-        // t*dot(v,N) = (corner-o) dot N
-        // t = dot(corner - o, N) / dot(v,N)
-        real d = direction.dot( normal );
-        real t = (p0 - origin).dot( normal ) / d;
-        uint poly_i = this - model->polygons;
-        mdout << "Model::Polygon::hit: poly_i=" << poly_i << " origin=" << origin << 
-                                     " direction=" << direction << " direction_inv=" << direction_inv << " solid_angle=" << solid_angle <<
-                                     " d=" << d << " t=" << t << " t_min=" << t_min << " t_max=" << t_max << "\n";
-        if ( t > t_min && t < t_max ) {
-            // compute barycentrics, see if it's in triangle
-            const real3& p1 = positions[vertexes[1].v_i];
-            const real3& p2 = positions[vertexes[2].v_i];
-            const real3 p = origin + direction*t;
-            // careful about order!
-            const real3 p_m_p0  = p  - p0;
-            const real3 p1_m_p0 = p1 - p0;
-            const real3 p2_m_p0 = p2 - p0;
-            real area1 = p1_m_p0.cross( p_m_p0 ).dot( normal );
-            real area2 = p_m_p0.cross( p2_m_p0 ).dot( normal );
-            real area_2x = area * 2.0;
-            real beta    = area1/area_2x;
-            real gamma   = area2/area_2x;
-            mdout << "Model::Polygon::hit: poly_i=" << poly_i << " beta=" << beta << " gamma=" << gamma << "\n";
-            if ( beta >= 0.0 && gamma >= 0.0 && (beta + gamma) <= 1.0 ) {
-                real alpha = 1.0 - beta - gamma;
-
-                const real3 * normals   = model->normals;
-                const real2 * texcoords = model->texcoords;
-                const real3& n0 = normals[vertexes[0].vn_i];
-                const real3& n1 = normals[vertexes[1].vn_i];
-                const real3& n2 = normals[vertexes[2].vn_i];
-                real u0, u1, u2, v0, v1, v2;
-                if ( vertexes[0].vt_i != uint(-1) ) {
-                    u0 = texcoords[vertexes[0].vt_i].c[0];
-                    u1 = texcoords[vertexes[1].vt_i].c[0];
-                    u2 = texcoords[vertexes[2].vt_i].c[0];
-                    v0 = texcoords[vertexes[0].vt_i].c[1];
-                    v1 = texcoords[vertexes[1].vt_i].c[1];
-                    v2 = texcoords[vertexes[2].vt_i].c[1];
-                } else {
-                    u0 = 0.0;
-                    u1 = 0.0;
-                    u2 = 0.0;
-                    v0 = 0.0;
-                    v1 = 0.0;
-                    v2 = 0.0;
-                }
-                hit_info.poly_i = poly_i;
-                hit_info.t = t;
-
-                 hit_info.normal = normal;
-                if ( vertexes[0].vn_i != uint(-1) ) {
-                    hit_info.shading_normal = n0*alpha + n1*gamma + n2*beta;
-                    hit_info.shading_normal.normalize();
-                } else {
-                    hit_info.shading_normal = normal;
-                }
-                    hit_info.normal = normal;
-                // epsilon to get it off the polygon
-                // may cause trouble in two-sided... move to shader?
-            //    hit_info.p = p + 0.01*hit_info.normal;;
-                hit_info.p = p;
-
-                real distance_squared = t*t / direction.length_sqr();
-                real ray_footprint_area_on_triangle = solid_angle*distance_squared;
-                real twice_uv_area_of_triangle = std::abs(0.5*(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1));
-                hit_info.frac_uv_cov = ray_footprint_area_on_triangle * twice_uv_area_of_triangle / (2.0*area);
-
-
-                hit_info.u = alpha*u0 + gamma*u1 + beta*u2 ;
-                hit_info.v = alpha*v0 + gamma*v1 + beta*v2 ;
-
-                real3 deltaPos1 = p1-p0;
-                real3 deltaPos2 = p2-p0;
-
-                real deltaU1 = u1-u0;
-                real deltaU2 = u2-u0;
-                real deltaV1 = v1-v0;
-                real deltaV2 = v2-v0;
-
-                real r = 1.0 / (deltaU1 * deltaV2 - deltaV1 * deltaU2);
-                hit_info.tangent = (deltaPos1 * deltaV2   - deltaPos2 * deltaV1)*r;
-                hit_info.tangent_normalized = hit_info.tangent.normalize();
-                hit_info.bitangent = (deltaPos2 * deltaU1   - deltaPos1 * deltaU2)*r;
-
-                if (mtl_i != uint(-1) && model->materials[mtl_i].map_d_i != uint(-1)) {
-                    // code slightly modified from texture.h   We only need one compoent
-                    // From there, the first texel will be at &texels[texel_i]. 
-                    // Pull out the map_d_i.  If it's -1, there's no alpha texture.  Also use that to get to the Texture using model->textures[map_d_i].
-                    uint texel_i = model->textures[model->materials[mtl_i].map_d_i].texel_i; 
-                    unsigned char *mdata = &(model->texels[texel_i]);
-                    int nx = model->textures[model->materials[mtl_i].map_d_i].width;
-                    int ny = model->textures[model->materials[mtl_i].map_d_i].height;
-                    int mx = nx;
-                    int my = ny;
-                    real u = hit_info.u;
-                    real v = hit_info.v;
-                    real sqrt_nx_ny = std::sqrt(nx*ny);
-                    real width_of_footprint = std::sqrt(hit_info.frac_uv_cov) * sqrt_nx_ny;
-                    real mip_level = std::log2( width_of_footprint );
-                    int nchan = model->textures->nchan;
-                    for (int imip_level = mip_level; imip_level > 0 && !(mx == 1 && my == 1); imip_level--)
-                    {
-                        // find the proper mip texture
-                        mdata += nchan * mx * my;
-                        if ( mx != 1 ) mx >>= 1;
-                        if ( my != 1 ) my >>= 1;
-                    }
-                    if (std::isnan(u)) {
-                        u = 0.0;
-                    }
-                    if (std::isnan(v)) {
-                        v = 0.0;
-                    }
-                    if (u < 0.0) {
-                        int64_t i = u;
-                        u -= i-1;
-                    }
-                    if (v < 0.0) {
-                        int64_t i = v;
-                        v -= i-1;
-                    }
-                    if (u >= 1.0) {
-                        int64_t i = u;
-                        u -= i;
-                    }
-                    if (v >= 1.0) {
-                        int64_t i = v;
-                        v -= i;
-                    }
-                    int i = (    u)*real(mx);
-                    int j = (1.0-v)*real(my);
-                    /*
-                    if (i >= mx) i -= mx;
-                    if (j >= my) j -= my;
-                    */
-                    while (i >= mx) i -= mx;
-                    while (j >= my) j -= my;
-
-                    float opacity = float(mdata[nchan*i + nchan*mx*j+3]) / 255.0;
-
-                    if (float(uniform()) > opacity) {
-                        return false;
-                    }
-                }
-
-                hit_info.model = model;
-
-                mdout << "Model::Polygon::hit: poly_i=" << poly_i << " HIT t=" << hit_info.t << 
-                         " p=" << hit_info.p << " normal=" << hit_info.normal << 
-                         " frac_uv_cov=" << hit_info.frac_uv_cov << 
-                         " u=" << hit_info.u << " v=" << hit_info.v << " mtl_i=" << mtl_i << "\n";
-                return true;
-            }
-        }
-    }
-    mdout << "Model::Polygon::hit: NOT a hit, poly_i=" << (this - model->polygons) << "\n";
-    return false;
-}
-
-bool Model::Instance::bounding_box( const Model * model, AABB& b, real padding ) const
-{
-    (void)model;
-    b = box;
-    b.pad( padding );
-    return true;
-}
-
-bool Model::Instance::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
-                           real solid_angle, real t_min, real t_max, HitInfo& hit_info )
-{
-    die_assert( sizeof(real) == 4, "real is not float" );
-    die_assert( kind == INSTANCE_KIND::MODEL_PTR, "did not get model_ptr instance" );
-
-    //-----------------------------------------------------------
-    // Use inverse matrix to transform origin, direction, and direction_inv into target model's space.
-    // Then call model's root BVH hit node.
-    //-----------------------------------------------------------
-    Model  *   t_model         = u.model_ptr;
-    Matrix *   M_inv           = &model->matrixes[matrix_inv_i];
-    real3      t_origin, t_direction, t_direction_inv;
-    M_inv->transform( origin, t_origin );
-    M_inv->transform( direction, t_direction );
-    M_inv->transform( direction_inv, t_direction_inv );
-    mdout << "Model::Instance::hit: M_inv=" << *M_inv << 
-                                  " origin="   << origin   << " direction="   << direction   << " direction_inv="   << direction_inv << 
-                                  " t_origin=" << t_origin << " t_direction=" << t_direction << " t_direction_inv=" << t_direction_inv << "\n";
-
-    BVH_Node * t_bvh = &t_model->bvh_nodes[t_model->hdr->bvh_root_i];
-    if ( !t_bvh->hit( t_model, t_origin, t_direction, t_direction_inv, solid_angle, t_min, t_max, hit_info ) ) return false;
-
-    //-----------------------------------------------------------
-    // Use matrix to transform hit_info.p back to global world space.
-    // Use transposed inverse matrix to transform hit_info.normal correctly (ask Pete Shirley).
-    //-----------------------------------------------------------
-    Matrix * M           = &model->matrixes[matrix_i];
-    Matrix * M_inv_trans = &model->matrixes[matrix_inv_trans_i];
-    real3 p = hit_info.p;
-    real3 normal = hit_info.normal;
-    M->transform( p, hit_info.p );
-    M_inv_trans->transform( normal, hit_info.normal );
-    return true;
-}
-
-inline bool Model::BVH_Node::bounding_box( const Model * model, Model::AABB& b ) const
-{
-    (void)model;
-    b = box;
-    return true;
-}
-
-inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origin, 
-                                  const Model::real3& direction, const Model::real3& direction_inv,
-                                  Model::real solid_angle, Model::real t_min, Model::real t_max, Model::HitInfo& hit_info ) const
-{
-    bool r = false;
-    uint bvh_i = this - model->bvh_nodes;
-    mdout << "Model::BVH_Node::hit: bvh_i=" << bvh_i << "\n";
-    if ( box.hit( origin, direction, direction_inv, t_min, t_max ) ) {
-        HitInfo left_hit_info;
-        HitInfo right_hit_info;
-        bool hit_left  = (left_kind == BVH_NODE_KIND::POLYGON)   ? model->polygons[left_i].hit(    model, origin, direction, direction_inv,   
-                                                                                                   solid_angle, t_min, t_max, left_hit_info  ) :
-                         (left_kind == BVH_NODE_KIND::INSTANCE)  ? model->instances[left_i].hit(   model, origin, direction, direction_inv, 
-                                                                                                   solid_angle, t_min, t_max, left_hit_info  ) :
-                                                                   model->bvh_nodes[left_i].hit(   model, origin, direction, direction_inv, 
-                                                                                                   solid_angle, t_min, t_max, left_hit_info  );
-        bool hit_right = (left_i == right_i)                     ? false :   // lone leaf
-                         (right_kind == BVH_NODE_KIND::POLYGON)  ? model->polygons[right_i].hit(   model, origin, direction, direction_inv, 
-                                                                                                   solid_angle, t_min, t_max, right_hit_info ) :
-                         (right_kind == BVH_NODE_KIND::INSTANCE) ? model->instances[right_i].hit(  model, origin, direction, direction_inv, 
-                                                                                                   solid_angle, t_min, t_max, right_hit_info ) :
-                                                                   model->bvh_nodes[right_i].hit(  model, origin, direction, direction_inv, 
-                                                                                                   solid_angle, t_min, t_max, right_hit_info );
-        if ( hit_left && (!hit_right || left_hit_info.t < right_hit_info.t) ) {
-            hit_info = left_hit_info;
-            r = true;
-        } else if ( hit_right ) {
-            hit_info = right_hit_info;
-            r = true;
-        }
-    }
-    mdout << "Model::BVH_Node::hit: bvh_i=" << bvh_i << " return=" << r << "\n";
-    return r;
-}
-
-bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real padding ) const 
-{
-    const Vertex * vertexes = &model->vertexes[vtx_i];
-    for( uint32_t i = 0; i < vtx_cnt; i++ )
-    {
-        const real3& p = model->positions[vertexes[i].v_i];
-        if ( i == 0 ) {
-            box = AABB( p );
-        } else {
-            box.expand( p );
-        }
-    }
-    box.pad( padding );
-    return true;
 }
 
 //--------------------------------------------------------------------------------------

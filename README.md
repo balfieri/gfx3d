@@ -1,6 +1,9 @@
 # Model.h
 
-This is a single C++ Model.h file (plus stb_image.h and stb_image_write.h) that reads in 3D models in .obj/.mtl format. 
+This is a single C++ Model.h file (plus stb_image.h and stb_image_write.h) that reads in 3D models in .obj/.mtl format
+and helps prepare them for rendering, which is handled separately.  You can think of this as the MECHANISM of 3D
+graphics and rendering as the POLICY.
+
 It also reads in any textures that are listed in the .mtl files.  
 It can optionally generate mipmaps, and it can also generate a BVH tree for ray tracing.
 

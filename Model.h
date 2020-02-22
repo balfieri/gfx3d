@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2018 Robert A. Alfieri
+// Copyright (c) 2017-2020 Robert A. Alfieri
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -501,10 +501,10 @@ public:
                                            uint64_t  blks_addr,
                                            uint64_t& blk_addr, uint& s, uint& t, uint& r );
 
-        // self-contained static function for decoding a singled texel in a block whose data is supplied
+        // self-contained static function for decoding a single texel in a block whose data is supplied
         // note: only blockdim* need to be set in the ASTC_Header (nothing else is used or checked)
-        static real4    astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, 
-                                     uint s, uint t, uint r, bool do_srgb_to_linear );
+        static real4    astc_decode_texel( const unsigned char * bdata, const ASTC_Header * astc_hdr, 
+                                           uint s, uint t, uint r, bool do_srgb_to_linear );
 
     private:
         real4           texel_read_uncompressed( const Model * model, uint mip_level, uint64 ui, uint64 vi, 
@@ -889,6 +889,15 @@ private:
     bool read_uncompressed( std::string file_path );
 };
 
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+//
+// ASSERTS STRING CONVERSION UTILITIES
+//
+// These are used for debug.
+//
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
 #define dprint( msg )
 //#define dprint( msg ) std::cout << (msg) << "\n"
 bool Model::debug = false;
@@ -1036,6 +1045,66 @@ inline std::ostream& operator << ( std::ostream& os, const Model::BVH_Node& bvh 
     return os;
 }
 
+inline std::string Model::Graph_Node::str( const Model * model, std::string indent ) const
+{
+    std::ostringstream s;
+    uint node_i = this - model->graph_nodes;
+    s << indent << kind << " node_i=" << node_i << " parent_i=" << parent_i << " sibling_i=" << sibling_i;
+    switch( kind ) 
+    {
+        case GRAPH_NODE_KIND::REAL:
+            s << " " << u.r << "\n";
+            break;
+
+        case GRAPH_NODE_KIND::REAL3:
+            s << " " << u.r3 << "\n";
+            break;
+
+        case GRAPH_NODE_KIND::STR:
+            if ( u.s_i == uint(-1) ) {
+                s << " <no value>\n";
+            } else {
+                s << " \"" << &model->strings[u.s_i] << "\"\n";
+            }
+            break;
+
+        case GRAPH_NODE_KIND::ID:
+        case GRAPH_NODE_KIND::OP:
+            if ( u.s_i == uint(-1) ) {
+                s << "<no value>\n";
+            } else {
+                s << " " << &model->strings[u.s_i] << "\n";
+            }
+            break;
+
+        case GRAPH_NODE_KIND::BLOCK:
+        case GRAPH_NODE_KIND::ASSIGN:
+        case GRAPH_NODE_KIND::NARY:
+        {
+            s << ":\n";
+            indent += "    ";
+            uint this_i = this - model->graph_nodes;
+            for( uint child_i = u.child_first_i; child_i != uint(-1); child_i = model->graph_nodes[child_i].sibling_i ) 
+            {
+                die_assert( model->graph_nodes[child_i].parent_i == this_i, "bad parent_i=" + std::to_string(model->graph_nodes[child_i].parent_i) );
+                s << model->graph_nodes[child_i].str( model, indent );    
+            }
+            break;
+        }
+
+        default:
+            break;
+    }
+    return s.str();
+}
+
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+//
+// TOP-LEVEL METHODS FOR PARSING FILES
+//
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
 Model::Model( std::string                top_file,      
               Model::MIPMAP_FILTER       mipmap_filter, 
               Model::TEXTURE_COMPRESSION texture_compression,
@@ -3099,6 +3168,114 @@ uint Model::gph_node_alloc( Model::GRAPH_NODE_KIND kind, uint parent_i )
     return node_i;
 }
 
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+//
+// TEXTURE QUERIES
+//
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+inline Model::real4 Model::Texture::texel_read( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt, bool do_srgb_to_linear ) const
+{
+    TEXTURE_COMPRESSION compression = model->hdr->texture_compression;
+    switch( compression )
+    {
+        case TEXTURE_COMPRESSION::NONE: return texel_read_uncompressed( model, mip_level, ui, vi, vaddr, byte_cnt, do_srgb_to_linear );
+        case TEXTURE_COMPRESSION::ASTC: return texel_read_astc(         model, mip_level, ui, vi, vaddr, byte_cnt, do_srgb_to_linear );
+        default:
+        {
+            std::cout << "ERROR: unexpected texture compression: " << int(compression) << "\n";
+            die_assert( false, "aborting..." );
+            return real4( 0, 0, 0, 0 );
+        }
+    }
+}
+
+inline Model::real4 Model::Texture::texel_read_uncompressed( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt, bool do_srgb_to_linear ) const
+{
+    const unsigned char * mdata = &model->texels[texel_i];
+    uint mw = width;
+    uint mh = height;
+    if ( model->hdr->mipmap_filter != MIPMAP_FILTER::NONE ) {
+        // find the beginning of the proper mip texture 
+        for( _int imip_level = mip_level; imip_level > 0 && !(mw == 1 && mh == 1); imip_level-- ) 
+        {
+            mdata += nchan * mw * mh;
+            if ( mw != 1 ) mw >>= 1;
+            if ( mh != 1 ) mh >>= 1;
+        }
+    }
+
+    uint64_t toffset = nchan*ui + nchan*mw*vi;
+
+    if (vaddr != nullptr)    *vaddr = reinterpret_cast<uint64_t>( &mdata[toffset] );
+    if (byte_cnt != nullptr) *byte_cnt = 3;
+
+    uint ru = mdata[toffset+0];
+    uint gu = (nchan  > 2) ? mdata[toffset+1] : ru;
+    uint bu = (nchan  > 2) ? mdata[toffset+2] : ru;
+    uint au = (nchan  > 3) ? mdata[toffset+3] : (nchan == 2) ? mdata[toffset+1] : 255;
+
+    real r = do_srgb_to_linear ? srgb8_to_linear_gamma( ru ) : (real(ru) / 255.0);
+    real g = do_srgb_to_linear ? srgb8_to_linear_gamma( gu ) : (real(gu) / 255.0);
+    real b = do_srgb_to_linear ? srgb8_to_linear_gamma( bu ) : (real(bu) / 255.0);
+    real a = real(au) / 255.0;  // always stored linear
+    return real4( r, g, b, a );
+}
+
+inline Model::real Model::srgb_to_linear_gamma( Model::real srgb )
+{
+    if ( srgb <= 0.04045 ) {
+        return srgb / 12.92;
+    } else {
+        return std::pow( (srgb + 0.055)/1.055, 2.4 );
+    }
+}
+
+inline Model::real Model::srgb8_to_linear_gamma( uint8_t srgb )
+{
+    static bool did_lut_init = false;
+    static real lut[256];
+    if ( !did_lut_init ) {
+        for( uint i = 0; i < 256; i++ )
+        {
+            lut[i] = srgb_to_linear_gamma( real(i) / 255.0 );
+        } 
+        did_lut_init = true;
+    }
+    return lut[srgb];
+}
+
+Model::real Model::linear_to_srgb_gamma( Model::real linear )
+{
+    if ( linear < 0.0031308 ) {
+        return linear * 12.92;
+    } else {
+        return 1.055 * std::pow( linear, 1.0/2.4 ) - 0.055;
+    }
+}
+
+Model::real Model::linear8_to_srgb_gamma( uint8_t linear )
+{
+    static bool did_lut_init = false;
+    static real lut[256];
+    if ( !did_lut_init ) {
+        for( uint i = 0; i < 256; i++ )
+        {
+            lut[i] = linear_to_srgb_gamma( real(i) / 255.0 );
+        } 
+        did_lut_init = true;
+    }
+    return lut[linear];
+}
+
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+//
+// SYSTEM UTILITIES
+//
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
 void Model::dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ) 
 {
     // in case they are not found:
@@ -3208,52 +3385,799 @@ void Model::cmd( std::string c, std::string error )
     if ( std::system( c.c_str() ) != 0 ) die_assert( false, "ERROR: " + error + ": " + c );
 }
 
-inline Model::real Model::srgb_to_linear_gamma( Model::real srgb )
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+//
+// MATRIX MATH - 2D, 3D, 4D
+//
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+inline Model::real Model::real4::dot( const Model::real4 &v2 ) const
 {
-    if ( srgb <= 0.04045 ) {
-        return srgb / 12.92;
-    } else {
-        return std::pow( (srgb + 0.055)/1.055, 2.4 );
-    }
+    return c[0] * v2.c[0] + c[1] * v2.c[1] + c[2] * v2.c[2] + c[3] * v2.c[3];
 }
 
-inline Model::real Model::srgb8_to_linear_gamma( uint8_t srgb )
+inline Model::real Model::real4::length( void ) const
+{ 
+    return std::sqrt( c[0]*c[0] + c[1]*c[1] + c[2]*c[2] + c[3]*c[3] ); 
+}
+
+inline Model::real Model::real4::length_sqr( void ) const 
+{ 
+    return c[0]*c[0] + c[1]*c[1] + c[2]*c[2] + c[3]*c[3];
+}
+
+inline Model::real4& Model::real4::normalize( void )
 {
-    static bool did_lut_init = false;
-    static real lut[256];
-    if ( !did_lut_init ) {
-        for( uint i = 0; i < 256; i++ )
+    *this /= length();
+    return *this;
+}
+
+inline Model::real4 Model::real4::normalized( void ) const
+{
+    return *this / length();
+}
+
+inline Model::real4 Model::real4::operator + ( const Model::real4& v2 ) const
+{
+    real4 r;
+    r.c[0] = c[0] + v2.c[0];
+    r.c[1] = c[1] + v2.c[1];
+    r.c[2] = c[2] + v2.c[2];
+    r.c[3] = c[3] + v2.c[3];
+    return r;
+}
+
+inline Model::real4 Model::real4::operator - ( const Model::real4& v2 ) const
+{
+    real4 r;
+    r.c[0] = c[0] - v2.c[0];
+    r.c[1] = c[1] - v2.c[1];
+    r.c[2] = c[2] - v2.c[2];
+    r.c[3] = c[3] - v2.c[3];
+    return r;
+}
+
+inline Model::real4 Model::real4::operator * ( const Model::real4& v2 ) const
+{
+    real4 r;
+    r.c[0] = c[0] * v2.c[0];
+    r.c[1] = c[1] * v2.c[1];
+    r.c[2] = c[2] * v2.c[2];
+    r.c[3] = c[3] * v2.c[3];
+    return r;
+}
+
+inline Model::real4 operator * ( Model::real s, const Model::real4& v ) 
+{
+    return Model::real4( s*v.c[0], s*v.c[1], s*v.c[2], s*v.c[3] );
+}
+
+inline Model::real4 Model::real4::operator * ( Model::real s ) const
+{
+    real4 r;
+    r.c[0] = c[0] * s;
+    r.c[1] = c[1] * s;
+    r.c[2] = c[2] * s;
+    r.c[3] = c[3] * s;
+    return r;
+}
+
+inline Model::real4 Model::real4::operator / ( const Model::real4& v2 ) const
+{
+    real4 r;
+    r.c[0] = c[0] / v2.c[0];
+    r.c[1] = c[1] / v2.c[1];
+    r.c[2] = c[2] / v2.c[2];
+    r.c[3] = c[3] / v2.c[3];
+    return r;
+}
+
+inline Model::real4 Model::real4::operator / ( Model::real s ) const
+{
+    real4 r;
+    r.c[0] = c[0] / s;
+    r.c[1] = c[1] / s;
+    r.c[2] = c[2] / s;
+    r.c[3] = c[3] / s;
+    return r;
+}
+
+inline bool Model::real4::operator == ( const Model::real4 &v2 ) const
+{
+    return c[0] == v2.c[0] && c[1] == v2.c[1] && c[2] == v2.c[2] && c[3] == v2.c[3];
+}
+
+inline Model::real4& Model::real4::operator += ( const Model::real4 &v2 )
+{
+    c[0] += v2.c[0];
+    c[1] += v2.c[1];
+    c[2] += v2.c[2];
+    c[3] += v2.c[3];
+    return *this;
+}
+
+inline Model::real4& Model::real4::operator -= ( const Model::real4 &v2 )
+{
+    c[0] -= v2.c[0];
+    c[1] -= v2.c[1];
+    c[2] -= v2.c[2];
+    c[3] -= v2.c[3];
+    return *this;
+}
+
+inline Model::real4& Model::real4::operator *= ( const Model::real4 &v2 )
+{
+    c[0] *= v2.c[0];
+    c[1] *= v2.c[1];
+    c[2] *= v2.c[2];
+    c[3] *= v2.c[3];
+    return *this;
+}
+
+inline Model::real4& Model::real4::operator *= ( const Model::real s )
+{
+    c[0] *= s;
+    c[1] *= s;
+    c[2] *= s;
+    c[3] *= s;
+    return *this;
+}
+
+inline Model::real4& Model::real4::operator /= ( const Model::real4 &v2 )
+{
+    c[0] /= v2.c[0];
+    c[1] /= v2.c[1];
+    c[2] /= v2.c[2];
+    c[3] /= v2.c[3];
+    return *this;
+}
+
+inline Model::real4& Model::real4::operator /= ( const Model::real s )
+{
+    c[0] /= s;
+    c[1] /= s;
+    c[2] /= s;
+    c[3] /= s;
+    return *this;
+}
+
+inline Model::real Model::real3::dot( const Model::real3 &v2 ) const
+{
+    return c[0] * v2.c[0] + c[1] * v2.c[1] + c[2] * v2.c[2];
+}
+
+inline Model::real3 Model::real3::cross( const Model::real3 &v2 ) const
+{
+    return real3( (c[1]*v2.c[2]   - c[2]*v2.c[1]),
+                  (-(c[0]*v2.c[2] - c[2]*v2.c[0])),
+                  (c[0]*v2.c[1]   - c[1]*v2.c[0]) );
+}
+
+inline Model::real Model::real3::length( void ) const
+{ 
+    return std::sqrt( c[0]*c[0] + c[1]*c[1] + c[2]*c[2] ); 
+}
+
+inline Model::real Model::real3::length_sqr( void ) const 
+{ 
+    return c[0]*c[0] + c[1]*c[1] + c[2]*c[2];
+}
+
+inline Model::real3& Model::real3::normalize( void )
+{
+    *this /= length();
+    return *this;
+}
+
+inline Model::real3 Model::real3::normalized( void ) const
+{
+    return *this / length();
+}
+
+inline Model::real3 Model::real3::operator + ( const Model::real3& v2 ) const
+{
+    real3 r;
+    r.c[0] = c[0] + v2.c[0];
+    r.c[1] = c[1] + v2.c[1];
+    r.c[2] = c[2] + v2.c[2];
+    return r;
+}
+
+inline Model::real3 Model::real3::operator - ( const Model::real3& v2 ) const
+{
+    real3 r;
+    r.c[0] = c[0] - v2.c[0];
+    r.c[1] = c[1] - v2.c[1];
+    r.c[2] = c[2] - v2.c[2];
+    return r;
+}
+
+inline Model::real3 Model::real3::operator * ( const Model::real3& v2 ) const
+{
+    real3 r;
+    r.c[0] = c[0] * v2.c[0];
+    r.c[1] = c[1] * v2.c[1];
+    r.c[2] = c[2] * v2.c[2];
+    return r;
+}
+
+inline Model::real3 operator * ( Model::real s, const Model::real3& v ) 
+{
+    return Model::real3( s*v.c[0], s*v.c[1], s*v.c[2] );
+}
+
+inline Model::real3 Model::real3::operator * ( Model::real s ) const
+{
+    real3 r;
+    r.c[0] = c[0] * s;
+    r.c[1] = c[1] * s;
+    r.c[2] = c[2] * s;
+    return r;
+}
+
+inline Model::real3 Model::real3::operator / ( const Model::real3& v2 ) const
+{
+    real3 r;
+    r.c[0] = c[0] / v2.c[0];
+    r.c[1] = c[1] / v2.c[1];
+    r.c[2] = c[2] / v2.c[2];
+    return r;
+}
+
+inline Model::real3 Model::real3::operator / ( Model::real s ) const
+{
+    real3 r;
+    r.c[0] = c[0] / s;
+    r.c[1] = c[1] / s;
+    r.c[2] = c[2] / s;
+    return r;
+}
+
+inline bool Model::real3::operator == ( const Model::real3 &v2 ) const
+{
+    return c[0] == v2.c[0] && c[1] == v2.c[1] && c[2] == v2.c[2];
+}
+
+inline Model::real3& Model::real3::operator += ( const Model::real3 &v2 )
+{
+    c[0] += v2.c[0];
+    c[1] += v2.c[1];
+    c[2] += v2.c[2];
+    return *this;
+}
+
+inline Model::real3& Model::real3::operator -= ( const Model::real3 &v2 )
+{
+    c[0] -= v2.c[0];
+    c[1] -= v2.c[1];
+    c[2] -= v2.c[2];
+    return *this;
+}
+
+inline Model::real3& Model::real3::operator *= ( const Model::real3 &v2 )
+{
+    c[0] *= v2.c[0];
+    c[1] *= v2.c[1];
+    c[2] *= v2.c[2];
+    return *this;
+}
+
+inline Model::real3& Model::real3::operator *= ( const Model::real s )
+{
+    c[0] *= s;
+    c[1] *= s;
+    c[2] *= s;
+    return *this;
+}
+
+inline Model::real3& Model::real3::operator /= ( const Model::real3 &v2 )
+{
+    c[0] /= v2.c[0];
+    c[1] /= v2.c[1];
+    c[2] /= v2.c[2];
+    return *this;
+}
+
+inline Model::real3& Model::real3::operator /= ( const Model::real s )
+{
+    c[0] /= s;
+    c[1] /= s;
+    c[2] /= s;
+    return *this;
+}
+
+inline Model::real Model::real2::dot( const Model::real2 &v2 ) const
+{
+    return c[0] * v2.c[0] + c[1] * v2.c[1];
+}
+
+inline Model::real Model::real2::length( void ) const
+{ 
+    return std::sqrt( c[0]*c[0] + c[1]*c[1] );
+}
+
+inline Model::real Model::real2::length_sqr( void ) const 
+{ 
+    return c[0]*c[0] + c[1]*c[1];
+}
+
+inline Model::real2& Model::real2::normalize( void )
+{
+    *this /= length();
+    return *this;
+}
+
+inline Model::real2 Model::real2::normalized( void ) const
+{
+    return *this / length();
+}
+
+inline Model::real2 Model::real2::operator + ( const Model::real2& v2 ) const
+{
+    real2 r;
+    r.c[0] = c[0] + v2.c[0];
+    r.c[1] = c[1] + v2.c[1];
+    return r;
+}
+
+inline Model::real2 Model::real2::operator - ( const Model::real2& v2 ) const
+{
+    real2 r;
+    r.c[0] = c[0] - v2.c[0];
+    r.c[1] = c[1] - v2.c[1];
+    return r;
+}
+
+inline Model::real2 Model::real2::operator * ( const Model::real2& v2 ) const
+{
+    real2 r;
+    r.c[0] = c[0] * v2.c[0];
+    r.c[1] = c[1] * v2.c[1];
+    return r;
+}
+
+inline Model::real2 Model::real2::operator * ( Model::real s ) const
+{
+    real2 r;
+    r.c[0] = c[0] * s;
+    r.c[1] = c[1] * s;
+    return r;
+}
+
+inline Model::real2 Model::real2::operator / ( const Model::real2& v2 ) const
+{
+    real2 r;
+    r.c[0] = c[0] / v2.c[0];
+    r.c[1] = c[1] / v2.c[1];
+    return r;
+}
+
+inline Model::real2 Model::real2::operator / ( Model::real s ) const
+{
+    real2 r;
+    r.c[0] = c[0] / s;
+    r.c[1] = c[1] / s;
+    return r;
+}
+
+inline Model::real2& Model::real2::operator += ( const Model::real2 &v2 )
+{
+    c[0] += v2.c[0];
+    c[1] += v2.c[1];
+    return *this;
+}
+
+inline Model::real2& Model::real2::operator -= ( const Model::real2 &v2 )
+{
+    c[0] -= v2.c[0];
+    c[1] -= v2.c[1];
+    return *this;
+}
+
+inline Model::real2& Model::real2::operator *= ( const Model::real2 &v2 )
+{
+    c[0] *= v2.c[0];
+    c[1] *= v2.c[1];
+    return *this;
+}
+
+inline Model::real2& Model::real2::operator *= ( const Model::real s )
+{
+    c[0] *= s;
+    c[1] *= s;
+    return *this;
+}
+
+inline Model::real2& Model::real2::operator /= ( const Model::real2 &v2 )
+{
+    c[0] /= v2.c[0];
+    c[1] /= v2.c[1];
+    return *this;
+}
+
+inline Model::real2& Model::real2::operator /= ( const Model::real s )
+{
+    c[0] /= s;
+    c[1] /= s;
+    return *this;
+}
+
+inline void Model::Matrix::identity( void )
+{
+    for( uint i = 0; i < 4; i++ )
+    {
+        for( uint j = 0; j < 4; j++ )
         {
-            lut[i] = srgb_to_linear_gamma( real(i) / 255.0 );
-        } 
-        did_lut_init = true;
-    }
-    return lut[srgb];
-}
-
-Model::real Model::linear_to_srgb_gamma( Model::real linear )
-{
-    if ( linear < 0.0031308 ) {
-        return linear * 12.92;
-    } else {
-        return 1.055 * std::pow( linear, 1.0/2.4 ) - 0.055;
+            m[i][j] = (i == j) ? 1 : 0;
+        }
     }
 }
 
-Model::real Model::linear8_to_srgb_gamma( uint8_t linear )
+inline void Model::Matrix::translate( const real3& translation )
 {
-    static bool did_lut_init = false;
-    static real lut[256];
-    if ( !did_lut_init ) {
-        for( uint i = 0; i < 256; i++ )
+    m[0][3] += translation.c[0];
+    m[1][3] += translation.c[1];
+    m[2][3] += translation.c[2];
+}
+
+inline void Model::Matrix::scale( const real3& scaling )
+{
+    m[0][0] *= scaling.c[0];
+    m[1][1] *= scaling.c[1];
+    m[2][2] *= scaling.c[2];
+}
+
+void Model::Matrix::rotate_xy( double radians )
+{
+    if ( radians == 0.0 ) return;
+    double c = cos( radians );
+    double s = sin( radians );
+    Matrix M2;
+    M2.m[0][0] = c;
+    M2.m[0][1] = s;
+    M2.m[1][0] = -s;
+    M2.m[1][1] = c;
+
+    // order: *this = *this * M2  
+    Matrix M1 = *this;
+    M1.transform( M2, *this );
+}
+
+void Model::Matrix::rotate_xz( double radians )
+{
+    if ( radians == 0.0 ) return;
+    double c = cos( radians );
+    double s = sin( radians );
+    Matrix M2;
+    M2.m[0][0] = c;
+    M2.m[0][2] = s;
+    M2.m[2][0] = -s;
+    M2.m[2][2] = c;
+
+    // order: *this = *this * M2  
+    Matrix M1 = *this;
+    M1.transform( M2, *this );
+}
+
+void Model::Matrix::rotate_yz( double radians )
+{
+    if ( radians == 0.0 ) return;
+    double c = cos( radians );
+    double s = sin( radians );
+    Matrix M2;
+    M2.m[1][1] = c;
+    M2.m[1][2] = -s;
+    M2.m[2][1] = s;
+    M2.m[2][2] = c;
+
+    // order: *this = *this * M2  
+    Matrix M1 = *this;
+    M1.transform( M2, *this );
+}
+
+inline Model::Matrix Model::Matrix::operator + ( const Matrix& m ) const
+{
+    Matrix r;
+    for( uint i = 0; i < 4; i++ )
+    {
+        for( uint j = 0; j < 4; j++ )
         {
-            lut[i] = linear_to_srgb_gamma( real(i) / 255.0 );
-        } 
-        did_lut_init = true;
+            r.m[i][j] = this->m[i][j] + m.m[i][j];
+        }
     }
-    return lut[linear];
+    return r;
 }
 
+inline Model::Matrix Model::Matrix::operator - ( const Matrix& m ) const
+{
+    Matrix r;
+    for( uint i = 0; i < 4; i++ )
+    {
+        for( uint j = 0; j < 4; j++ )
+        {
+            r.m[i][j] = this->m[i][j] - m.m[i][j];
+        }
+    }
+    return r;
+}
+
+inline bool Model::Matrix::operator == ( const Matrix& m ) const
+{
+    for( uint i = 0; i < 4; i++ )
+    {
+        for( uint j = 0; j < 4; j++ )
+        {
+            if ( this->m[i][j] != m.m[i][j] ) return false;
+        }
+    }
+    return true;
+}
+
+inline void Model::Matrix::multiply( double s ) 
+{
+    for( uint i = 0; i < 4; i++ )
+    {
+        for( uint j = 0; j < 4; j++ )
+        {
+            m[i][j] *= s;
+        }
+    }
+}
+
+Model::real4 Model::Matrix::row( uint r ) const
+{
+    real4 v;
+    for( uint32_t c = 0; c < 4; c++ ) 
+    {
+        v.c[c] = m[r][c];
+    }
+    return v;
+}
+
+Model::real4 Model::Matrix::column( uint c ) const
+{
+    real4 v;
+    for( uint32_t r = 0; r < 4; r++ ) 
+    {
+        v.c[r] = m[r][c];
+    }
+    return v;
+}
+
+void Model::Matrix::transform( const real4& v, real4& r ) const
+{
+    // order: r = *this * v
+    for( uint i = 0; i < 4; i++ )
+    {
+        double sum = 0.0;               // use higher-precision here
+        for( uint j = 0; j < 4; j++ )
+        {
+            double partial = m[i][j];
+            partial *= v.c[j];
+            sum += partial;
+        }
+        r.c[i] = sum;
+    }
+}
+
+void Model::Matrix::transform( const real3& v, real3& r, bool div_by_w ) const
+{
+    // order: r = *this * v
+    if ( div_by_w ) {
+        real4 v4 = real4( v.c[0], v.c[1], v.c[2], 1.0 );
+        real4 r4;
+        transform( v4, r4 );
+        r.c[0] = r4.c[0];
+        r.c[1] = r4.c[1];
+        r.c[2] = r4.c[2];
+        r /= r4.c[3];                   // w
+    } else {
+        for( uint i = 0; i < 3; i++ )
+        {
+            double sum = 0.0;               // use higher-precision here
+            for( uint j = 0; j < 3; j++ )
+            {
+                double partial = m[i][j];
+                partial *= v.c[j];
+                sum += partial;
+            }
+            r.c[i] = sum;
+        }
+    }
+}
+
+void Model::Matrix::transform( const Matrix& M2, Matrix& M3 ) const
+{
+    // order: M3 = *this * M2
+    for( uint r = 0; r < 4; r++ )
+    {
+        for( uint c = 0; c < 4; c++ )
+        {
+            double sum = 0.0;
+            for( int k = 0; k < 4; k++ )
+            {
+                double partial = m[r][k];
+                partial *= M2.m[k][c];
+                sum += partial;
+            }
+            M3.m[r][c] = sum;
+        }
+    }
+}
+
+void Model::Matrix::transpose( Model::Matrix& mt ) const
+{
+    for( int i = 0; i < 4; i++ )
+    {
+        for( int j = 0; j < 4; j++ )
+        {
+            mt.m[j][i] = m[i][j];
+        }
+    }
+}
+
+//---------------------------------------------------------------
+// Invert a 4x4 Matrix that is known to be an affine transformation.
+// This is simpler and faster, but does not work for perspective matrices and other cases.
+//---------------------------------------------------------------
+void Model::Matrix::invert_affine( Model::Matrix& minv ) const
+{
+    double i00 = m[0][0];
+    double i01 = m[0][1];
+    double i02 = m[0][2];
+    double i03 = m[0][3];
+    double i10 = m[1][0];
+    double i11 = m[1][1];
+    double i12 = m[1][2];
+    double i13 = m[1][3];
+    double i20 = m[2][0];
+    double i21 = m[2][1];
+    double i22 = m[2][2];
+    double i23 = m[2][3];
+    double i30 = m[3][0];
+    double i31 = m[3][1];
+    double i32 = m[3][2];
+    double i33 = m[3][3];
+
+    double s0  = i00 * i11 - i10 * i01;
+    double s1  = i00 * i12 - i10 * i02;
+    double s2  = i00 * i13 - i10 * i03;
+    double s3  = i01 * i12 - i11 * i02;
+    double s4  = i01 * i13 - i11 * i03;
+    double s5  = i02 * i13 - i12 * i03;
+
+    double c5  = i22 * i33 - i32 * i23;
+    double c4  = i21 * i33 - i31 * i23;
+    double c3  = i21 * i32 - i31 * i22;
+    double c2  = i20 * i33 - i30 * i23;
+    double c1  = i20 * i32 - i30 * i22;
+    double c0  = i20 * i31 - i30 * i21;
+
+    double invdet  = 1 / ( s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0 );
+
+    minv.m[0][0] = (i11 * c5 - i12 * c4 + i13 * c3) * invdet;
+    minv.m[0][1] = (-i01 * c5 + i02 * c4 - i03 * c3) * invdet;
+    minv.m[0][2] = (i31 * s5 - i32 * s4 + i33 * s3) * invdet;
+    minv.m[0][3] = (-i21 * s5 + i22 * s4 - i23 * s3) * invdet;
+
+    minv.m[1][0] = (-i10 * c5 + i12 * c2 - i13 * c1) * invdet;
+    minv.m[1][1] = (i00 * c5 - i02 * c2 + i03 * c1) * invdet;
+    minv.m[1][2] = (-i30 * s5 + i32 * s2 - i33 * s1) * invdet;
+    minv.m[1][3] = (i20 * s5 - i22 * s2 + i23 * s1) * invdet;
+
+    minv.m[2][0] = (i10 * c4 - i11 * c2 + i13 * c0) * invdet;
+    minv.m[2][1] = (-i00 * c4 + i01 * c2 - i03 * c0) * invdet;
+    minv.m[2][2] = (i30 * s4 - i31 * s2 + i33 * s0) * invdet;
+    minv.m[2][3] = (-i20 * s4 + i21 * s2 - i23 * s0) * invdet;
+
+    minv.m[3][0] = (-i10 * c3 + i11 * c1 - i12 * c0) * invdet;
+    minv.m[3][1] = (i00 * c3 - i01 * c1 + i02 * c0) * invdet;
+    minv.m[3][2] = (-i30 * s3 + i31 * s1 - i32 * s0) * invdet;
+    minv.m[3][3] = (i20 * s3 - i21 * s1 + i22 * s0) * invdet;
+}
+
+//---------------------------------------------------------------
+// This is a more complex invert() but works for all types of matrices.
+//---------------------------------------------------------------
+void Model::Matrix::invert( Model::Matrix& minv ) const 
+{
+    // Inverse = adjoint / determinant
+    adjoint( minv );
+
+    // Determinant is the dot product of the first row and the first row
+    // of cofactors (i.e. the first col of the adjoint matrix)
+    real4 col0 = minv.column( 0 );
+    real4 row0 = minv.row( 0 );
+    double det = col0.dot( row0 );
+    minv.multiply( 1.0/det );
+}
+
+void Model::Matrix::adjoint( Model::Matrix& M ) const 
+{
+    Matrix Mt;     
+    cofactor( Mt );
+    Mt.transpose( M );
+}
+
+double Model::Matrix::determinant( void ) const 
+{
+    // Determinant is the dot product of the first row and the first row
+    // of cofactors (i.e. the first col of the adjoint matrix)
+    Matrix C;
+    cofactor( C );
+    real4 row0 = row( 0 );
+    return row0.dot( row0 );
+}
+
+void Model::Matrix::cofactor( Model::Matrix& C ) const 
+{
+    // We'll use i to incrementally compute -1 ^ (r+c)
+    int32_t i = 1;
+
+    for( uint r = 0; r < 4; r++ ) 
+    {
+        for( uint c = 0; c < 4; c++ ) 
+        {
+            // Compute the determinant of the 3x3 submatrix
+            double det = subdeterminant( r, c );
+            C.m[r][c] = double(i) * det;
+            i = -i;
+        }
+        i = -i;
+    }
+}
+
+double Model::Matrix::subdeterminant( uint exclude_row, uint exclude_col ) const 
+{
+    // Compute non-excluded row and column indices
+    uint _row[3];
+    uint _col[3];
+
+    for( uint i = 0; i < 3; i++ ) 
+    {
+        _row[i] = i;
+        _col[i] = i;
+
+        if( i >= exclude_row ) _row[i]++;
+        if( i >= exclude_col ) _col[i]++;
+    }
+
+    // Compute the first row of cofactors 
+    double cofactor00 =
+      double(m[_row[1]][_col[1]]) * double(m[_row[2]][_col[2]]) -
+      double(m[_row[1]][_col[2]]) * double(m[_row[2]][_col[1]]);
+
+    double cofactor10 =
+      double(m[_row[1]][_col[2]]) * double(m[_row[2]][_col[0]]) -
+      double(m[_row[1]][_col[0]]) * double(m[_row[2]][_col[2]]);
+
+    double cofactor20 =
+      double(m[_row[1]][_col[0]]) * double(m[_row[2]][_col[1]]) -
+      double(m[_row[1]][_col[1]]) * double(m[_row[2]][_col[0]]);
+
+    // Product of the first row and the cofactors along the first row
+    return
+      double(m[_row[0]][_col[0]]) * cofactor00 +
+      double(m[_row[0]][_col[1]]) * cofactor10 +
+      double(m[_row[0]][_col[2]]) * cofactor20;
+}
+
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+//
+// PARSING UTILITIES
+//
+// These assume an in-memory copy of the entire file with xxx pointing to the 
+// current character and xxx_end pointing one character past the last character
+// in the file.
+//
+// For speed, these are self-contained and don't use any built-in C++ functions (slow).
+//
+// These functions can be used in non-graphics applications.
+//
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
 inline bool Model::skip_whitespace( char *& xxx, char *& xxx_end )
 {
     bool in_comment = false;
@@ -4105,6 +5029,16 @@ std::string Model::surrounding_lines( char *& xxx, char *& xxx_end )
     return s;
 }
 
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+//
+// ACCESS ALIGNED BOUNDING BOXES (AABB) AND BOUNDING VOLUME HIERARCHIES (BVH)
+//
+// These are used extensively in ray tracing.  See the hit() methods for 
+// how tests are made against the BVH.
+//
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
 inline Model::AABB::AABB( const Model::real3& p )
 {
     min = p;
@@ -4242,775 +5176,318 @@ Model::uint Model::bvh_node( bool for_polys, Model::uint first, Model::uint n, M
     return bvh_i;
 }
 
-inline Model::real Model::real4::dot( const Model::real4 &v2 ) const
+inline void Model::AABB::pad( Model::real p ) 
 {
-    return c[0] * v2.c[0] + c[1] * v2.c[1] + c[2] * v2.c[2] + c[3] * v2.c[3];
+    min -= real3( p, p, p );
+    max += real3( p, p, p );
 }
 
-inline Model::real Model::real4::length( void ) const
-{ 
-    return std::sqrt( c[0]*c[0] + c[1]*c[1] + c[2]*c[2] + c[3]*c[3] ); 
-}
-
-inline Model::real Model::real4::length_sqr( void ) const 
-{ 
-    return c[0]*c[0] + c[1]*c[1] + c[2]*c[2] + c[3]*c[3];
-}
-
-inline Model::real4& Model::real4::normalize( void )
+inline void Model::AABB::expand( const Model::AABB& other )
 {
-    *this /= length();
-    return *this;
-}
-
-inline Model::real4 Model::real4::normalized( void ) const
-{
-    return *this / length();
-}
-
-inline Model::real4 Model::real4::operator + ( const Model::real4& v2 ) const
-{
-    real4 r;
-    r.c[0] = c[0] + v2.c[0];
-    r.c[1] = c[1] + v2.c[1];
-    r.c[2] = c[2] + v2.c[2];
-    r.c[3] = c[3] + v2.c[3];
-    return r;
-}
-
-inline Model::real4 Model::real4::operator - ( const Model::real4& v2 ) const
-{
-    real4 r;
-    r.c[0] = c[0] - v2.c[0];
-    r.c[1] = c[1] - v2.c[1];
-    r.c[2] = c[2] - v2.c[2];
-    r.c[3] = c[3] - v2.c[3];
-    return r;
-}
-
-inline Model::real4 Model::real4::operator * ( const Model::real4& v2 ) const
-{
-    real4 r;
-    r.c[0] = c[0] * v2.c[0];
-    r.c[1] = c[1] * v2.c[1];
-    r.c[2] = c[2] * v2.c[2];
-    r.c[3] = c[3] * v2.c[3];
-    return r;
-}
-
-inline Model::real4 operator * ( Model::real s, const Model::real4& v ) 
-{
-    return Model::real4( s*v.c[0], s*v.c[1], s*v.c[2], s*v.c[3] );
-}
-
-inline Model::real4 Model::real4::operator * ( Model::real s ) const
-{
-    real4 r;
-    r.c[0] = c[0] * s;
-    r.c[1] = c[1] * s;
-    r.c[2] = c[2] * s;
-    r.c[3] = c[3] * s;
-    return r;
-}
-
-inline Model::real4 Model::real4::operator / ( const Model::real4& v2 ) const
-{
-    real4 r;
-    r.c[0] = c[0] / v2.c[0];
-    r.c[1] = c[1] / v2.c[1];
-    r.c[2] = c[2] / v2.c[2];
-    r.c[3] = c[3] / v2.c[3];
-    return r;
-}
-
-inline Model::real4 Model::real4::operator / ( Model::real s ) const
-{
-    real4 r;
-    r.c[0] = c[0] / s;
-    r.c[1] = c[1] / s;
-    r.c[2] = c[2] / s;
-    r.c[3] = c[3] / s;
-    return r;
-}
-
-inline bool Model::real4::operator == ( const Model::real4 &v2 ) const
-{
-    return c[0] == v2.c[0] && c[1] == v2.c[1] && c[2] == v2.c[2] && c[3] == v2.c[3];
-}
-
-inline Model::real4& Model::real4::operator += ( const Model::real4 &v2 )
-{
-    c[0] += v2.c[0];
-    c[1] += v2.c[1];
-    c[2] += v2.c[2];
-    c[3] += v2.c[3];
-    return *this;
-}
-
-inline Model::real4& Model::real4::operator -= ( const Model::real4 &v2 )
-{
-    c[0] -= v2.c[0];
-    c[1] -= v2.c[1];
-    c[2] -= v2.c[2];
-    c[3] -= v2.c[3];
-    return *this;
-}
-
-inline Model::real4& Model::real4::operator *= ( const Model::real4 &v2 )
-{
-    c[0] *= v2.c[0];
-    c[1] *= v2.c[1];
-    c[2] *= v2.c[2];
-    c[3] *= v2.c[3];
-    return *this;
-}
-
-inline Model::real4& Model::real4::operator *= ( const Model::real s )
-{
-    c[0] *= s;
-    c[1] *= s;
-    c[2] *= s;
-    c[3] *= s;
-    return *this;
-}
-
-inline Model::real4& Model::real4::operator /= ( const Model::real4 &v2 )
-{
-    c[0] /= v2.c[0];
-    c[1] /= v2.c[1];
-    c[2] /= v2.c[2];
-    c[3] /= v2.c[3];
-    return *this;
-}
-
-inline Model::real4& Model::real4::operator /= ( const Model::real s )
-{
-    c[0] /= s;
-    c[1] /= s;
-    c[2] /= s;
-    c[3] /= s;
-    return *this;
-}
-
-inline Model::real Model::real3::dot( const Model::real3 &v2 ) const
-{
-    return c[0] * v2.c[0] + c[1] * v2.c[1] + c[2] * v2.c[2];
-}
-
-inline Model::real3 Model::real3::cross( const Model::real3 &v2 ) const
-{
-    return real3( (c[1]*v2.c[2]   - c[2]*v2.c[1]),
-                  (-(c[0]*v2.c[2] - c[2]*v2.c[0])),
-                  (c[0]*v2.c[1]   - c[1]*v2.c[0]) );
-}
-
-inline Model::real Model::real3::length( void ) const
-{ 
-    return std::sqrt( c[0]*c[0] + c[1]*c[1] + c[2]*c[2] ); 
-}
-
-inline Model::real Model::real3::length_sqr( void ) const 
-{ 
-    return c[0]*c[0] + c[1]*c[1] + c[2]*c[2];
-}
-
-inline Model::real3& Model::real3::normalize( void )
-{
-    *this /= length();
-    return *this;
-}
-
-inline Model::real3 Model::real3::normalized( void ) const
-{
-    return *this / length();
-}
-
-inline Model::real3 Model::real3::operator + ( const Model::real3& v2 ) const
-{
-    real3 r;
-    r.c[0] = c[0] + v2.c[0];
-    r.c[1] = c[1] + v2.c[1];
-    r.c[2] = c[2] + v2.c[2];
-    return r;
-}
-
-inline Model::real3 Model::real3::operator - ( const Model::real3& v2 ) const
-{
-    real3 r;
-    r.c[0] = c[0] - v2.c[0];
-    r.c[1] = c[1] - v2.c[1];
-    r.c[2] = c[2] - v2.c[2];
-    return r;
-}
-
-inline Model::real3 Model::real3::operator * ( const Model::real3& v2 ) const
-{
-    real3 r;
-    r.c[0] = c[0] * v2.c[0];
-    r.c[1] = c[1] * v2.c[1];
-    r.c[2] = c[2] * v2.c[2];
-    return r;
-}
-
-inline Model::real3 operator * ( Model::real s, const Model::real3& v ) 
-{
-    return Model::real3( s*v.c[0], s*v.c[1], s*v.c[2] );
-}
-
-inline Model::real3 Model::real3::operator * ( Model::real s ) const
-{
-    real3 r;
-    r.c[0] = c[0] * s;
-    r.c[1] = c[1] * s;
-    r.c[2] = c[2] * s;
-    return r;
-}
-
-inline Model::real3 Model::real3::operator / ( const Model::real3& v2 ) const
-{
-    real3 r;
-    r.c[0] = c[0] / v2.c[0];
-    r.c[1] = c[1] / v2.c[1];
-    r.c[2] = c[2] / v2.c[2];
-    return r;
-}
-
-inline Model::real3 Model::real3::operator / ( Model::real s ) const
-{
-    real3 r;
-    r.c[0] = c[0] / s;
-    r.c[1] = c[1] / s;
-    r.c[2] = c[2] / s;
-    return r;
-}
-
-inline bool Model::real3::operator == ( const Model::real3 &v2 ) const
-{
-    return c[0] == v2.c[0] && c[1] == v2.c[1] && c[2] == v2.c[2];
-}
-
-inline Model::real3& Model::real3::operator += ( const Model::real3 &v2 )
-{
-    c[0] += v2.c[0];
-    c[1] += v2.c[1];
-    c[2] += v2.c[2];
-    return *this;
-}
-
-inline Model::real3& Model::real3::operator -= ( const Model::real3 &v2 )
-{
-    c[0] -= v2.c[0];
-    c[1] -= v2.c[1];
-    c[2] -= v2.c[2];
-    return *this;
-}
-
-inline Model::real3& Model::real3::operator *= ( const Model::real3 &v2 )
-{
-    c[0] *= v2.c[0];
-    c[1] *= v2.c[1];
-    c[2] *= v2.c[2];
-    return *this;
-}
-
-inline Model::real3& Model::real3::operator *= ( const Model::real s )
-{
-    c[0] *= s;
-    c[1] *= s;
-    c[2] *= s;
-    return *this;
-}
-
-inline Model::real3& Model::real3::operator /= ( const Model::real3 &v2 )
-{
-    c[0] /= v2.c[0];
-    c[1] /= v2.c[1];
-    c[2] /= v2.c[2];
-    return *this;
-}
-
-inline Model::real3& Model::real3::operator /= ( const Model::real s )
-{
-    c[0] /= s;
-    c[1] /= s;
-    c[2] /= s;
-    return *this;
-}
-
-inline Model::real Model::real2::dot( const Model::real2 &v2 ) const
-{
-    return c[0] * v2.c[0] + c[1] * v2.c[1];
-}
-
-inline Model::real Model::real2::length( void ) const
-{ 
-    return std::sqrt( c[0]*c[0] + c[1]*c[1] );
-}
-
-inline Model::real Model::real2::length_sqr( void ) const 
-{ 
-    return c[0]*c[0] + c[1]*c[1];
-}
-
-inline Model::real2& Model::real2::normalize( void )
-{
-    *this /= length();
-    return *this;
-}
-
-inline Model::real2 Model::real2::normalized( void ) const
-{
-    return *this / length();
-}
-
-inline Model::real2 Model::real2::operator + ( const Model::real2& v2 ) const
-{
-    real2 r;
-    r.c[0] = c[0] + v2.c[0];
-    r.c[1] = c[1] + v2.c[1];
-    return r;
-}
-
-inline Model::real2 Model::real2::operator - ( const Model::real2& v2 ) const
-{
-    real2 r;
-    r.c[0] = c[0] - v2.c[0];
-    r.c[1] = c[1] - v2.c[1];
-    return r;
-}
-
-inline Model::real2 Model::real2::operator * ( const Model::real2& v2 ) const
-{
-    real2 r;
-    r.c[0] = c[0] * v2.c[0];
-    r.c[1] = c[1] * v2.c[1];
-    return r;
-}
-
-inline Model::real2 Model::real2::operator * ( Model::real s ) const
-{
-    real2 r;
-    r.c[0] = c[0] * s;
-    r.c[1] = c[1] * s;
-    return r;
-}
-
-inline Model::real2 Model::real2::operator / ( const Model::real2& v2 ) const
-{
-    real2 r;
-    r.c[0] = c[0] / v2.c[0];
-    r.c[1] = c[1] / v2.c[1];
-    return r;
-}
-
-inline Model::real2 Model::real2::operator / ( Model::real s ) const
-{
-    real2 r;
-    r.c[0] = c[0] / s;
-    r.c[1] = c[1] / s;
-    return r;
-}
-
-inline Model::real2& Model::real2::operator += ( const Model::real2 &v2 )
-{
-    c[0] += v2.c[0];
-    c[1] += v2.c[1];
-    return *this;
-}
-
-inline Model::real2& Model::real2::operator -= ( const Model::real2 &v2 )
-{
-    c[0] -= v2.c[0];
-    c[1] -= v2.c[1];
-    return *this;
-}
-
-inline Model::real2& Model::real2::operator *= ( const Model::real2 &v2 )
-{
-    c[0] *= v2.c[0];
-    c[1] *= v2.c[1];
-    return *this;
-}
-
-inline Model::real2& Model::real2::operator *= ( const Model::real s )
-{
-    c[0] *= s;
-    c[1] *= s;
-    return *this;
-}
-
-inline Model::real2& Model::real2::operator /= ( const Model::real2 &v2 )
-{
-    c[0] /= v2.c[0];
-    c[1] /= v2.c[1];
-    return *this;
-}
-
-inline Model::real2& Model::real2::operator /= ( const Model::real s )
-{
-    c[0] /= s;
-    c[1] /= s;
-    return *this;
-}
-
-inline void Model::Matrix::identity( void )
-{
-    for( uint i = 0; i < 4; i++ )
+    for( uint i = 0; i < 3; i++ )
     {
-        for( uint j = 0; j < 4; j++ )
-        {
-            m[i][j] = (i == j) ? 1 : 0;
-        }
+        if ( other.min.c[i] < min.c[i] ) min.c[i] = other.min.c[i];
+        if ( other.max.c[i] > max.c[i] ) max.c[i] = other.max.c[i];
     }
 }
 
-inline void Model::Matrix::translate( const real3& translation )
+inline void Model::AABB::expand( const Model::real3& p ) 
 {
-    m[0][3] += translation.c[0];
-    m[1][3] += translation.c[1];
-    m[2][3] += translation.c[2];
+    if ( p.c[0] < min.c[0] ) min.c[0] = p.c[0];
+    if ( p.c[1] < min.c[1] ) min.c[1] = p.c[1];
+    if ( p.c[2] < min.c[2] ) min.c[2] = p.c[2];
+    if ( p.c[0] > max.c[0] ) max.c[0] = p.c[0];
+    if ( p.c[1] > max.c[1] ) max.c[1] = p.c[1];
+    if ( p.c[2] > max.c[2] ) max.c[2] = p.c[2];
 }
 
-inline void Model::Matrix::scale( const real3& scaling )
+inline bool Model::AABB::encloses( const AABB& other ) const
 {
-    m[0][0] *= scaling.c[0];
-    m[1][1] *= scaling.c[1];
-    m[2][2] *= scaling.c[2];
+    return min.c[0] <= other.min.c[0] &&
+           min.c[1] <= other.min.c[1] &&
+           min.c[2] <= other.min.c[2] &&
+           max.c[0] >= other.max.c[0] &&
+           max.c[1] >= other.max.c[1] &&
+           max.c[2] >= other.max.c[2];
 }
 
-void Model::Matrix::rotate_xy( double radians )
+inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& direction, const Model::real3& direction_inv, 
+                              Model::real tmin, Model::real tmax ) const 
 {
-    if ( radians == 0.0 ) return;
-    double c = cos( radians );
-    double s = sin( radians );
-    Matrix M2;
-    M2.m[0][0] = c;
-    M2.m[0][1] = s;
-    M2.m[1][0] = -s;
-    M2.m[1][1] = c;
-
-    // order: *this = *this * M2  
-    Matrix M1 = *this;
-    M1.transform( M2, *this );
-}
-
-void Model::Matrix::rotate_xz( double radians )
-{
-    if ( radians == 0.0 ) return;
-    double c = cos( radians );
-    double s = sin( radians );
-    Matrix M2;
-    M2.m[0][0] = c;
-    M2.m[0][2] = s;
-    M2.m[2][0] = -s;
-    M2.m[2][2] = c;
-
-    // order: *this = *this * M2  
-    Matrix M1 = *this;
-    M1.transform( M2, *this );
-}
-
-void Model::Matrix::rotate_yz( double radians )
-{
-    if ( radians == 0.0 ) return;
-    double c = cos( radians );
-    double s = sin( radians );
-    Matrix M2;
-    M2.m[1][1] = c;
-    M2.m[1][2] = -s;
-    M2.m[2][1] = s;
-    M2.m[2][2] = c;
-
-    // order: *this = *this * M2  
-    Matrix M1 = *this;
-    M1.transform( M2, *this );
-}
-
-inline Model::Matrix Model::Matrix::operator + ( const Matrix& m ) const
-{
-    Matrix r;
-    for( uint i = 0; i < 4; i++ )
+    mdout << "Model::AABB::hit: " << *this << " tmin=" << tmin << " tmax=" << tmax << "\n";
+    (void)direction;
+    for( uint a = 0; a < 3; a++ ) 
     {
-        for( uint j = 0; j < 4; j++ )
-        {
-            r.m[i][j] = this->m[i][j] + m.m[i][j];
-        }
+        real dir_inv = direction_inv.c[a];
+        real v0 = (min.c[a] - origin.c[a]) * dir_inv;
+        real v1 = (max.c[a] - origin.c[a]) * dir_inv;
+        tmin = std::fmax( tmin, std::fmin( v0, v1 ) );
+        tmax = std::fmin( tmax, std::fmax( v0, v1 ) );
+        mdout << "Model::AABB::hit:     " << a << ": min=" << min.c[a] << " max=" << max.c[a] << 
+                                   " dir_inv=" << dir_inv << " origin=" << origin.c[a] << 
+                                   " v0=" << v0 << " v1=" << v1 << " tmin=" << tmin << " tmax=" << tmax << "\n";
     }
+    bool r = tmax >= std::fmax( tmin, real(0.0) );
+    mdout << "Model::AABB::hit: return=" << r << "\n";
     return r;
 }
 
-inline Model::Matrix Model::Matrix::operator - ( const Matrix& m ) const
+inline bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
+        real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const
 {
-    Matrix r;
-    for( uint i = 0; i < 4; i++ )
-    {
-        for( uint j = 0; j < 4; j++ )
-        {
-            r.m[i][j] = this->m[i][j] - m.m[i][j];
+    (void)direction_inv;
+    if ( vtx_cnt == 3 ) {
+        // triangle - this code comes originally from Peter Shirley
+        const Vertex * vertexes = &model->vertexes[vtx_i];
+        const real3 * positions = model->positions;
+        const real3& p0 = positions[vertexes[0].v_i];
+
+        // plane equation (p - corner) dot N = 0
+        // (o + t*v - corner) dot N = 0
+        // t*dot(v,N) = (corner-o) dot N
+        // t = dot(corner - o, N) / dot(v,N)
+        real d = direction.dot( normal );
+        real t = (p0 - origin).dot( normal ) / d;
+        uint poly_i = this - model->polygons;
+        mdout << "Model::Polygon::hit: poly_i=" << poly_i << " origin=" << origin << 
+                                     " direction=" << direction << " direction_inv=" << direction_inv << " solid_angle=" << solid_angle <<
+                                     " d=" << d << " t=" << t << " t_min=" << t_min << " t_max=" << t_max << "\n";
+        if ( t > t_min && t < t_max ) {
+            // compute barycentrics, see if it's in triangle
+            const real3& p1 = positions[vertexes[1].v_i];
+            const real3& p2 = positions[vertexes[2].v_i];
+            const real3 p = origin + direction*t;
+            // careful about order!
+            const real3 p_m_p0  = p  - p0;
+            const real3 p1_m_p0 = p1 - p0;
+            const real3 p2_m_p0 = p2 - p0;
+            real area1 = p1_m_p0.cross( p_m_p0 ).dot( normal );
+            real area2 = p_m_p0.cross( p2_m_p0 ).dot( normal );
+            real area_2x = area * 2.0;
+            real beta    = area1/area_2x;
+            real gamma   = area2/area_2x;
+            mdout << "Model::Polygon::hit: poly_i=" << poly_i << " beta=" << beta << " gamma=" << gamma << "\n";
+            if ( beta >= 0.0 && gamma >= 0.0 && (beta + gamma) <= 1.0 ) {
+                real alpha = 1.0 - beta - gamma;
+
+                const real3 * normals   = model->normals;
+                const real2 * texcoords = model->texcoords;
+                const real3& n0 = normals[vertexes[0].vn_i];
+                const real3& n1 = normals[vertexes[1].vn_i];
+                const real3& n2 = normals[vertexes[2].vn_i];
+                real u0, u1, u2, v0, v1, v2;
+                if ( vertexes[0].vt_i != uint(-1) ) {
+                    u0 = texcoords[vertexes[0].vt_i].c[0];
+                    u1 = texcoords[vertexes[1].vt_i].c[0];
+                    u2 = texcoords[vertexes[2].vt_i].c[0];
+                    v0 = texcoords[vertexes[0].vt_i].c[1];
+                    v1 = texcoords[vertexes[1].vt_i].c[1];
+                    v2 = texcoords[vertexes[2].vt_i].c[1];
+                } else {
+                    u0 = 0.0;
+                    u1 = 0.0;
+                    u2 = 0.0;
+                    v0 = 0.0;
+                    v1 = 0.0;
+                    v2 = 0.0;
+                }
+                hit_info.poly_i = poly_i;
+                hit_info.t = t;
+
+                 hit_info.normal = normal;
+                if ( vertexes[0].vn_i != uint(-1) ) {
+                    hit_info.shading_normal = n0*alpha + n1*gamma + n2*beta;
+                    hit_info.shading_normal.normalize();
+                } else {
+                    hit_info.shading_normal = normal;
+                }
+                    hit_info.normal = normal;
+                // epsilon to get it off the polygon
+                // may cause trouble in two-sided... move to shader?
+            //    hit_info.p = p + 0.01*hit_info.normal;;
+                hit_info.p = p;
+
+                real distance_squared = t*t / direction.length_sqr();
+                real ray_footprint_area_on_triangle = solid_angle*distance_squared;
+                real twice_uv_area_of_triangle = std::abs(0.5*(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1));
+                hit_info.frac_uv_cov = ray_footprint_area_on_triangle * twice_uv_area_of_triangle / (2.0*area);
+
+
+                hit_info.u = alpha*u0 + gamma*u1 + beta*u2 ;
+                hit_info.v = alpha*v0 + gamma*v1 + beta*v2 ;
+
+                real3 deltaPos1 = p1-p0;
+                real3 deltaPos2 = p2-p0;
+
+                real deltaU1 = u1-u0;
+                real deltaU2 = u2-u0;
+                real deltaV1 = v1-v0;
+                real deltaV2 = v2-v0;
+
+                real r = 1.0 / (deltaU1 * deltaV2 - deltaV1 * deltaU2);
+                hit_info.tangent = (deltaPos1 * deltaV2   - deltaPos2 * deltaV1)*r;
+                hit_info.tangent_normalized = hit_info.tangent.normalize();
+                hit_info.bitangent = (deltaPos2 * deltaU1   - deltaPos1 * deltaU2)*r;
+
+                if (mtl_i != uint(-1) && model->materials[mtl_i].map_d_i != uint(-1)) {
+                    // code slightly modified from texture.h   We only need one compoent
+                    // From there, the first texel will be at &texels[texel_i]. 
+                    // Pull out the map_d_i.  If it's -1, there's no alpha texture.  Also use that to get to the Texture using model->textures[map_d_i].
+                    uint texel_i = model->textures[model->materials[mtl_i].map_d_i].texel_i; 
+                    unsigned char *mdata = &(model->texels[texel_i]);
+                    int nx = model->textures[model->materials[mtl_i].map_d_i].width;
+                    int ny = model->textures[model->materials[mtl_i].map_d_i].height;
+                    int mx = nx;
+                    int my = ny;
+                    real u = hit_info.u;
+                    real v = hit_info.v;
+                    real sqrt_nx_ny = std::sqrt(nx*ny);
+                    real width_of_footprint = std::sqrt(hit_info.frac_uv_cov) * sqrt_nx_ny;
+                    real mip_level = std::log2( width_of_footprint );
+                    int nchan = model->textures->nchan;
+                    for (int imip_level = mip_level; imip_level > 0 && !(mx == 1 && my == 1); imip_level--)
+                    {
+                        // find the proper mip texture
+                        mdata += nchan * mx * my;
+                        if ( mx != 1 ) mx >>= 1;
+                        if ( my != 1 ) my >>= 1;
+                    }
+                    if (std::isnan(u)) {
+                        u = 0.0;
+                    }
+                    if (std::isnan(v)) {
+                        v = 0.0;
+                    }
+                    if (u < 0.0) {
+                        int64_t i = u;
+                        u -= i-1;
+                    }
+                    if (v < 0.0) {
+                        int64_t i = v;
+                        v -= i-1;
+                    }
+                    if (u >= 1.0) {
+                        int64_t i = u;
+                        u -= i;
+                    }
+                    if (v >= 1.0) {
+                        int64_t i = v;
+                        v -= i;
+                    }
+                    int i = (    u)*real(mx);
+                    int j = (1.0-v)*real(my);
+                    /*
+                    if (i >= mx) i -= mx;
+                    if (j >= my) j -= my;
+                    */
+                    while (i >= mx) i -= mx;
+                    while (j >= my) j -= my;
+
+                    float opacity = float(mdata[nchan*i + nchan*mx*j+3]) / 255.0;
+
+                    if (float(uniform()) > opacity) {
+                        return false;
+                    }
+                }
+
+                hit_info.model = model;
+
+                mdout << "Model::Polygon::hit: poly_i=" << poly_i << " HIT t=" << hit_info.t << 
+                         " p=" << hit_info.p << " normal=" << hit_info.normal << 
+                         " frac_uv_cov=" << hit_info.frac_uv_cov << 
+                         " u=" << hit_info.u << " v=" << hit_info.v << " mtl_i=" << mtl_i << "\n";
+                return true;
+            }
         }
     }
-    return r;
+    mdout << "Model::Polygon::hit: NOT a hit, poly_i=" << (this - model->polygons) << "\n";
+    return false;
 }
 
-inline bool Model::Matrix::operator == ( const Matrix& m ) const
+bool Model::Instance::bounding_box( const Model * model, AABB& b, real padding ) const
 {
-    for( uint i = 0; i < 4; i++ )
-    {
-        for( uint j = 0; j < 4; j++ )
-        {
-            if ( this->m[i][j] != m.m[i][j] ) return false;
-        }
-    }
+    (void)model;
+    b = box;
+    b.pad( padding );
     return true;
 }
 
-inline void Model::Matrix::multiply( double s ) 
+bool Model::Instance::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
+                           real solid_angle, real t_min, real t_max, HitInfo& hit_info )
 {
-    for( uint i = 0; i < 4; i++ )
-    {
-        for( uint j = 0; j < 4; j++ )
-        {
-            m[i][j] *= s;
+    die_assert( sizeof(real) == 4, "real is not float" );
+    die_assert( kind == INSTANCE_KIND::MODEL_PTR, "did not get model_ptr instance" );
+
+    //-----------------------------------------------------------
+    // Use inverse matrix to transform origin, direction, and direction_inv into target model's space.
+    // Then call model's root BVH hit node.
+    //-----------------------------------------------------------
+    Model  *   t_model         = u.model_ptr;
+    Matrix *   M_inv           = &model->matrixes[matrix_inv_i];
+    real3      t_origin, t_direction, t_direction_inv;
+    M_inv->transform( origin, t_origin );
+    M_inv->transform( direction, t_direction );
+    M_inv->transform( direction_inv, t_direction_inv );
+    mdout << "Model::Instance::hit: M_inv=" << *M_inv << 
+                                  " origin="   << origin   << " direction="   << direction   << " direction_inv="   << direction_inv << 
+                                  " t_origin=" << t_origin << " t_direction=" << t_direction << " t_direction_inv=" << t_direction_inv << "\n";
+
+    BVH_Node * t_bvh = &t_model->bvh_nodes[t_model->hdr->bvh_root_i];
+    if ( !t_bvh->hit( t_model, t_origin, t_direction, t_direction_inv, solid_angle, t_min, t_max, hit_info ) ) return false;
+
+    //-----------------------------------------------------------
+    // Use matrix to transform hit_info.p back to global world space.
+    // Use transposed inverse matrix to transform hit_info.normal correctly (ask Pete Shirley).
+    //-----------------------------------------------------------
+    Matrix * M           = &model->matrixes[matrix_i];
+    Matrix * M_inv_trans = &model->matrixes[matrix_inv_trans_i];
+    real3 p = hit_info.p;
+    real3 normal = hit_info.normal;
+    M->transform( p, hit_info.p );
+    M_inv_trans->transform( normal, hit_info.normal );
+    return true;
+}
+
+inline bool Model::BVH_Node::bounding_box( const Model * model, Model::AABB& b ) const
+{
+    (void)model;
+    b = box;
+    return true;
+}
+
+inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origin, 
+                                  const Model::real3& direction, const Model::real3& direction_inv,
+                                  Model::real solid_angle, Model::real t_min, Model::real t_max, Model::HitInfo& hit_info ) const
+{
+    bool r = false;
+    uint bvh_i = this - model->bvh_nodes;
+    mdout << "Model::BVH_Node::hit: bvh_i=" << bvh_i << "\n";
+    if ( box.hit( origin, direction, direction_inv, t_min, t_max ) ) {
+        HitInfo left_hit_info;
+        HitInfo right_hit_info;
+        bool hit_left  = (left_kind == BVH_NODE_KIND::POLYGON)   ? model->polygons[left_i].hit(    model, origin, direction, direction_inv,   
+                                                                                                   solid_angle, t_min, t_max, left_hit_info  ) :
+                         (left_kind == BVH_NODE_KIND::INSTANCE)  ? model->instances[left_i].hit(   model, origin, direction, direction_inv, 
+                                                                                                   solid_angle, t_min, t_max, left_hit_info  ) :
+                                                                   model->bvh_nodes[left_i].hit(   model, origin, direction, direction_inv, 
+                                                                                                   solid_angle, t_min, t_max, left_hit_info  );
+        bool hit_right = (left_i == right_i)                     ? false :   // lone leaf
+                         (right_kind == BVH_NODE_KIND::POLYGON)  ? model->polygons[right_i].hit(   model, origin, direction, direction_inv, 
+                                                                                                   solid_angle, t_min, t_max, right_hit_info ) :
+                         (right_kind == BVH_NODE_KIND::INSTANCE) ? model->instances[right_i].hit(  model, origin, direction, direction_inv, 
+                                                                                                   solid_angle, t_min, t_max, right_hit_info ) :
+                                                                   model->bvh_nodes[right_i].hit(  model, origin, direction, direction_inv, 
+                                                                                                   solid_angle, t_min, t_max, right_hit_info );
+        if ( hit_left && (!hit_right || left_hit_info.t < right_hit_info.t) ) {
+            hit_info = left_hit_info;
+            r = true;
+        } else if ( hit_right ) {
+            hit_info = right_hit_info;
+            r = true;
         }
     }
-}
-
-Model::real4 Model::Matrix::row( uint r ) const
-{
-    real4 v;
-    for( uint32_t c = 0; c < 4; c++ ) 
-    {
-        v.c[c] = m[r][c];
-    }
-    return v;
-}
-
-Model::real4 Model::Matrix::column( uint c ) const
-{
-    real4 v;
-    for( uint32_t r = 0; r < 4; r++ ) 
-    {
-        v.c[r] = m[r][c];
-    }
-    return v;
-}
-
-void Model::Matrix::transform( const real4& v, real4& r ) const
-{
-    // order: r = *this * v
-    for( uint i = 0; i < 4; i++ )
-    {
-        double sum = 0.0;               // use higher-precision here
-        for( uint j = 0; j < 4; j++ )
-        {
-            double partial = m[i][j];
-            partial *= v.c[j];
-            sum += partial;
-        }
-        r.c[i] = sum;
-    }
-}
-
-void Model::Matrix::transform( const real3& v, real3& r, bool div_by_w ) const
-{
-    // order: r = *this * v
-    if ( div_by_w ) {
-        real4 v4 = real4( v.c[0], v.c[1], v.c[2], 1.0 );
-        real4 r4;
-        transform( v4, r4 );
-        r.c[0] = r4.c[0];
-        r.c[1] = r4.c[1];
-        r.c[2] = r4.c[2];
-        r /= r4.c[3];                   // w
-    } else {
-        for( uint i = 0; i < 3; i++ )
-        {
-            double sum = 0.0;               // use higher-precision here
-            for( uint j = 0; j < 3; j++ )
-            {
-                double partial = m[i][j];
-                partial *= v.c[j];
-                sum += partial;
-            }
-            r.c[i] = sum;
-        }
-    }
-}
-
-void Model::Matrix::transform( const Matrix& M2, Matrix& M3 ) const
-{
-    // order: M3 = *this * M2
-    for( uint r = 0; r < 4; r++ )
-    {
-        for( uint c = 0; c < 4; c++ )
-        {
-            double sum = 0.0;
-            for( int k = 0; k < 4; k++ )
-            {
-                double partial = m[r][k];
-                partial *= M2.m[k][c];
-                sum += partial;
-            }
-            M3.m[r][c] = sum;
-        }
-    }
-}
-
-void Model::Matrix::transpose( Model::Matrix& mt ) const
-{
-    for( int i = 0; i < 4; i++ )
-    {
-        for( int j = 0; j < 4; j++ )
-        {
-            mt.m[j][i] = m[i][j];
-        }
-    }
-}
-
-//---------------------------------------------------------------
-// Invert a 4x4 Matrix that is known to be an affine transformation.
-// This is simpler and faster, but does not work for perspective matrices and other cases.
-//---------------------------------------------------------------
-void Model::Matrix::invert_affine( Model::Matrix& minv ) const
-{
-    double i00 = m[0][0];
-    double i01 = m[0][1];
-    double i02 = m[0][2];
-    double i03 = m[0][3];
-    double i10 = m[1][0];
-    double i11 = m[1][1];
-    double i12 = m[1][2];
-    double i13 = m[1][3];
-    double i20 = m[2][0];
-    double i21 = m[2][1];
-    double i22 = m[2][2];
-    double i23 = m[2][3];
-    double i30 = m[3][0];
-    double i31 = m[3][1];
-    double i32 = m[3][2];
-    double i33 = m[3][3];
-
-    double s0  = i00 * i11 - i10 * i01;
-    double s1  = i00 * i12 - i10 * i02;
-    double s2  = i00 * i13 - i10 * i03;
-    double s3  = i01 * i12 - i11 * i02;
-    double s4  = i01 * i13 - i11 * i03;
-    double s5  = i02 * i13 - i12 * i03;
-
-    double c5  = i22 * i33 - i32 * i23;
-    double c4  = i21 * i33 - i31 * i23;
-    double c3  = i21 * i32 - i31 * i22;
-    double c2  = i20 * i33 - i30 * i23;
-    double c1  = i20 * i32 - i30 * i22;
-    double c0  = i20 * i31 - i30 * i21;
-
-    double invdet  = 1 / ( s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0 );
-
-    minv.m[0][0] = (i11 * c5 - i12 * c4 + i13 * c3) * invdet;
-    minv.m[0][1] = (-i01 * c5 + i02 * c4 - i03 * c3) * invdet;
-    minv.m[0][2] = (i31 * s5 - i32 * s4 + i33 * s3) * invdet;
-    minv.m[0][3] = (-i21 * s5 + i22 * s4 - i23 * s3) * invdet;
-
-    minv.m[1][0] = (-i10 * c5 + i12 * c2 - i13 * c1) * invdet;
-    minv.m[1][1] = (i00 * c5 - i02 * c2 + i03 * c1) * invdet;
-    minv.m[1][2] = (-i30 * s5 + i32 * s2 - i33 * s1) * invdet;
-    minv.m[1][3] = (i20 * s5 - i22 * s2 + i23 * s1) * invdet;
-
-    minv.m[2][0] = (i10 * c4 - i11 * c2 + i13 * c0) * invdet;
-    minv.m[2][1] = (-i00 * c4 + i01 * c2 - i03 * c0) * invdet;
-    minv.m[2][2] = (i30 * s4 - i31 * s2 + i33 * s0) * invdet;
-    minv.m[2][3] = (-i20 * s4 + i21 * s2 - i23 * s0) * invdet;
-
-    minv.m[3][0] = (-i10 * c3 + i11 * c1 - i12 * c0) * invdet;
-    minv.m[3][1] = (i00 * c3 - i01 * c1 + i02 * c0) * invdet;
-    minv.m[3][2] = (-i30 * s3 + i31 * s1 - i32 * s0) * invdet;
-    minv.m[3][3] = (i20 * s3 - i21 * s1 + i22 * s0) * invdet;
-}
-
-//---------------------------------------------------------------
-// This is a more complex invert() but works for all types of matrices.
-//---------------------------------------------------------------
-void Model::Matrix::invert( Model::Matrix& minv ) const 
-{
-    // Inverse = adjoint / determinant
-    adjoint( minv );
-
-    // Determinant is the dot product of the first row and the first row
-    // of cofactors (i.e. the first col of the adjoint matrix)
-    real4 col0 = minv.column( 0 );
-    real4 row0 = minv.row( 0 );
-    double det = col0.dot( row0 );
-    minv.multiply( 1.0/det );
-}
-
-void Model::Matrix::adjoint( Model::Matrix& M ) const 
-{
-    Matrix Mt;     
-    cofactor( Mt );
-    Mt.transpose( M );
-}
-
-double Model::Matrix::determinant( void ) const 
-{
-    // Determinant is the dot product of the first row and the first row
-    // of cofactors (i.e. the first col of the adjoint matrix)
-    Matrix C;
-    cofactor( C );
-    real4 row0 = row( 0 );
-    return row0.dot( row0 );
-}
-
-void Model::Matrix::cofactor( Model::Matrix& C ) const 
-{
-    // We'll use i to incrementally compute -1 ^ (r+c)
-    int32_t i = 1;
-
-    for( uint r = 0; r < 4; r++ ) 
-    {
-        for( uint c = 0; c < 4; c++ ) 
-        {
-            // Compute the determinant of the 3x3 submatrix
-            double det = subdeterminant( r, c );
-            C.m[r][c] = double(i) * det;
-            i = -i;
-        }
-        i = -i;
-    }
-}
-
-double Model::Matrix::subdeterminant( uint exclude_row, uint exclude_col ) const 
-{
-    // Compute non-excluded row and column indices
-    uint _row[3];
-    uint _col[3];
-
-    for( uint i = 0; i < 3; i++ ) 
-    {
-        _row[i] = i;
-        _col[i] = i;
-
-        if( i >= exclude_row ) _row[i]++;
-        if( i >= exclude_col ) _col[i]++;
-    }
-
-    // Compute the first row of cofactors 
-    double cofactor00 =
-      double(m[_row[1]][_col[1]]) * double(m[_row[2]][_col[2]]) -
-      double(m[_row[1]][_col[2]]) * double(m[_row[2]][_col[1]]);
-
-    double cofactor10 =
-      double(m[_row[1]][_col[2]]) * double(m[_row[2]][_col[0]]) -
-      double(m[_row[1]][_col[0]]) * double(m[_row[2]][_col[2]]);
-
-    double cofactor20 =
-      double(m[_row[1]][_col[0]]) * double(m[_row[2]][_col[1]]) -
-      double(m[_row[1]][_col[1]]) * double(m[_row[2]][_col[0]]);
-
-    // Product of the first row and the cofactors along the first row
-    return
-      double(m[_row[0]][_col[0]]) * cofactor00 +
-      double(m[_row[0]][_col[1]]) * cofactor10 +
-      double(m[_row[0]][_col[2]]) * cofactor20;
+    mdout << "Model::BVH_Node::hit: bvh_i=" << bvh_i << " return=" << r << "\n";
+    return r;
 }
 
 bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real padding ) const 
@@ -5029,107 +5506,21 @@ bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real p
     return true;
 }
 
-inline std::string Model::Graph_Node::str( const Model * model, std::string indent ) const
-{
-    std::ostringstream s;
-    uint node_i = this - model->graph_nodes;
-    s << indent << kind << " node_i=" << node_i << " parent_i=" << parent_i << " sibling_i=" << sibling_i;
-    switch( kind ) 
-    {
-        case GRAPH_NODE_KIND::REAL:
-            s << " " << u.r << "\n";
-            break;
-
-        case GRAPH_NODE_KIND::REAL3:
-            s << " " << u.r3 << "\n";
-            break;
-
-        case GRAPH_NODE_KIND::STR:
-            if ( u.s_i == uint(-1) ) {
-                s << " <no value>\n";
-            } else {
-                s << " \"" << &model->strings[u.s_i] << "\"\n";
-            }
-            break;
-
-        case GRAPH_NODE_KIND::ID:
-        case GRAPH_NODE_KIND::OP:
-            if ( u.s_i == uint(-1) ) {
-                s << "<no value>\n";
-            } else {
-                s << " " << &model->strings[u.s_i] << "\n";
-            }
-            break;
-
-        case GRAPH_NODE_KIND::BLOCK:
-        case GRAPH_NODE_KIND::ASSIGN:
-        case GRAPH_NODE_KIND::NARY:
-        {
-            s << ":\n";
-            indent += "    ";
-            uint this_i = this - model->graph_nodes;
-            for( uint child_i = u.child_first_i; child_i != uint(-1); child_i = model->graph_nodes[child_i].sibling_i ) 
-            {
-                die_assert( model->graph_nodes[child_i].parent_i == this_i, "bad parent_i=" + std::to_string(model->graph_nodes[child_i].parent_i) );
-                s << model->graph_nodes[child_i].str( model, indent );    
-            }
-            break;
-        }
-
-        default:
-            break;
-    }
-    return s.str();
-}
-
-inline Model::real4 Model::Texture::texel_read( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt, bool do_srgb_to_linear ) const
-{
-    TEXTURE_COMPRESSION compression = model->hdr->texture_compression;
-    switch( compression )
-    {
-        case TEXTURE_COMPRESSION::NONE: return texel_read_uncompressed( model, mip_level, ui, vi, vaddr, byte_cnt, do_srgb_to_linear );
-        case TEXTURE_COMPRESSION::ASTC: return texel_read_astc(         model, mip_level, ui, vi, vaddr, byte_cnt, do_srgb_to_linear );
-        default:
-        {
-            std::cout << "ERROR: unexpected texture compression: " << int(compression) << "\n";
-            die_assert( false, "aborting..." );
-            return real4( 0, 0, 0, 0 );
-        }
-    }
-}
-
-inline Model::real4 Model::Texture::texel_read_uncompressed( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt, bool do_srgb_to_linear ) const
-{
-    const unsigned char * mdata = &model->texels[texel_i];
-    uint mw = width;
-    uint mh = height;
-    if ( model->hdr->mipmap_filter != MIPMAP_FILTER::NONE ) {
-        // find the beginning of the proper mip texture 
-        for( _int imip_level = mip_level; imip_level > 0 && !(mw == 1 && mh == 1); imip_level-- ) 
-        {
-            mdata += nchan * mw * mh;
-            if ( mw != 1 ) mw >>= 1;
-            if ( mh != 1 ) mh >>= 1;
-        }
-    }
-
-    uint64_t toffset = nchan*ui + nchan*mw*vi;
-
-    if (vaddr != nullptr)    *vaddr = reinterpret_cast<uint64_t>( &mdata[toffset] );
-    if (byte_cnt != nullptr) *byte_cnt = 3;
-
-    uint ru = mdata[toffset+0];
-    uint gu = (nchan  > 2) ? mdata[toffset+1] : ru;
-    uint bu = (nchan  > 2) ? mdata[toffset+2] : ru;
-    uint au = (nchan  > 3) ? mdata[toffset+3] : (nchan == 2) ? mdata[toffset+1] : 255;
-
-    real r = do_srgb_to_linear ? srgb8_to_linear_gamma( ru ) : (real(ru) / 255.0);
-    real g = do_srgb_to_linear ? srgb8_to_linear_gamma( gu ) : (real(gu) / 255.0);
-    real b = do_srgb_to_linear ? srgb8_to_linear_gamma( bu ) : (real(bu) / 255.0);
-    real a = real(au) / 255.0;  // always stored linear
-    return real4( r, g, b, a );
-}
-
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+//
+// ASTC TEXTURE COMPRESSION AND DECOMPRESSION
+//
+// ASTC is a modern texture format that achieves excellent compression while
+// maintaining image quality.
+//
+// ARM has an open-source compression and decompression program that acts as
+// the golden standard implementation.
+//
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
 inline Model::real4 Model::Texture::texel_read_astc( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt, bool do_srgb_to_linear ) const
 {
     //---------------------------------------------------------------
@@ -5172,7 +5563,7 @@ inline Model::real4 Model::Texture::texel_read_astc( const Model * model, uint m
     //---------------------------------------------------------------
     // Decode ASTC texel at [s,t,r] within the block.
     //---------------------------------------------------------------
-    real4 rgba = astc_decode( bdata, astc_hdr, s, t, r, do_srgb_to_linear );
+    real4 rgba = astc_decode_texel( bdata, astc_hdr, s, t, r, do_srgb_to_linear );
 
     //---------------------------------------------------------------
     // Return texel and other info.
@@ -5795,7 +6186,7 @@ inline std::string Model::Texture::astc_dat_str( const unsigned char * bdata )
     return "0x" + s;
 }
 
-Model::real4 Model::Texture::astc_decode( const unsigned char * bdata, const ASTC_Header * astc_hdr, uint s, uint t, uint r, bool do_srgb_to_linear )
+Model::real4 Model::Texture::astc_decode_texel( const unsigned char * bdata, const ASTC_Header * astc_hdr, uint s, uint t, uint r, bool do_srgb_to_linear )
 {
     mdout << "astc: " << *astc_hdr << " s=" << s << " t=" << t << " r=" << r << 
              " do_srgb_to_linear=" << do_srgb_to_linear << " dat=" << astc_dat_str( bdata ) << "\n";
@@ -6888,320 +7279,6 @@ uint Model::Texture::ASTC_Header::blk_cnt( void ) const
 uint Model::Texture::ASTC_Header::byte_cnt( void ) const
 {
     return 16*blk_cnt();
-}
-
-inline void Model::AABB::pad( Model::real p ) 
-{
-    min -= real3( p, p, p );
-    max += real3( p, p, p );
-}
-
-inline void Model::AABB::expand( const Model::AABB& other )
-{
-    for( uint i = 0; i < 3; i++ )
-    {
-        if ( other.min.c[i] < min.c[i] ) min.c[i] = other.min.c[i];
-        if ( other.max.c[i] > max.c[i] ) max.c[i] = other.max.c[i];
-    }
-}
-
-inline void Model::AABB::expand( const Model::real3& p ) 
-{
-    if ( p.c[0] < min.c[0] ) min.c[0] = p.c[0];
-    if ( p.c[1] < min.c[1] ) min.c[1] = p.c[1];
-    if ( p.c[2] < min.c[2] ) min.c[2] = p.c[2];
-    if ( p.c[0] > max.c[0] ) max.c[0] = p.c[0];
-    if ( p.c[1] > max.c[1] ) max.c[1] = p.c[1];
-    if ( p.c[2] > max.c[2] ) max.c[2] = p.c[2];
-}
-
-inline bool Model::AABB::encloses( const AABB& other ) const
-{
-    return min.c[0] <= other.min.c[0] &&
-           min.c[1] <= other.min.c[1] &&
-           min.c[2] <= other.min.c[2] &&
-           max.c[0] >= other.max.c[0] &&
-           max.c[1] >= other.max.c[1] &&
-           max.c[2] >= other.max.c[2];
-}
-
-inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& direction, const Model::real3& direction_inv, 
-                              Model::real tmin, Model::real tmax ) const 
-{
-    mdout << "Model::AABB::hit: " << *this << " tmin=" << tmin << " tmax=" << tmax << "\n";
-    (void)direction;
-    for( uint a = 0; a < 3; a++ ) 
-    {
-        real dir_inv = direction_inv.c[a];
-        real v0 = (min.c[a] - origin.c[a]) * dir_inv;
-        real v1 = (max.c[a] - origin.c[a]) * dir_inv;
-        tmin = std::fmax( tmin, std::fmin( v0, v1 ) );
-        tmax = std::fmin( tmax, std::fmax( v0, v1 ) );
-        mdout << "Model::AABB::hit:     " << a << ": min=" << min.c[a] << " max=" << max.c[a] << 
-                                   " dir_inv=" << dir_inv << " origin=" << origin.c[a] << 
-                                   " v0=" << v0 << " v1=" << v1 << " tmin=" << tmin << " tmax=" << tmax << "\n";
-    }
-    bool r = tmax >= std::fmax( tmin, real(0.0) );
-    mdout << "Model::AABB::hit: return=" << r << "\n";
-    return r;
-}
-
-inline bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
-        real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const
-{
-    (void)direction_inv;
-    if ( vtx_cnt == 3 ) {
-        // triangle - this code comes originally from Peter Shirley
-        const Vertex * vertexes = &model->vertexes[vtx_i];
-        const real3 * positions = model->positions;
-        const real3& p0 = positions[vertexes[0].v_i];
-
-        // plane equation (p - corner) dot N = 0
-        // (o + t*v - corner) dot N = 0
-        // t*dot(v,N) = (corner-o) dot N
-        // t = dot(corner - o, N) / dot(v,N)
-        real d = direction.dot( normal );
-        real t = (p0 - origin).dot( normal ) / d;
-        uint poly_i = this - model->polygons;
-        mdout << "Model::Polygon::hit: poly_i=" << poly_i << " origin=" << origin << 
-                                     " direction=" << direction << " direction_inv=" << direction_inv << " solid_angle=" << solid_angle <<
-                                     " d=" << d << " t=" << t << " t_min=" << t_min << " t_max=" << t_max << "\n";
-        if ( t > t_min && t < t_max ) {
-            // compute barycentrics, see if it's in triangle
-            const real3& p1 = positions[vertexes[1].v_i];
-            const real3& p2 = positions[vertexes[2].v_i];
-            const real3 p = origin + direction*t;
-            // careful about order!
-            const real3 p_m_p0  = p  - p0;
-            const real3 p1_m_p0 = p1 - p0;
-            const real3 p2_m_p0 = p2 - p0;
-            real area1 = p1_m_p0.cross( p_m_p0 ).dot( normal );
-            real area2 = p_m_p0.cross( p2_m_p0 ).dot( normal );
-            real area_2x = area * 2.0;
-            real beta    = area1/area_2x;
-            real gamma   = area2/area_2x;
-            mdout << "Model::Polygon::hit: poly_i=" << poly_i << " beta=" << beta << " gamma=" << gamma << "\n";
-            if ( beta >= 0.0 && gamma >= 0.0 && (beta + gamma) <= 1.0 ) {
-                real alpha = 1.0 - beta - gamma;
-
-                const real3 * normals   = model->normals;
-                const real2 * texcoords = model->texcoords;
-                const real3& n0 = normals[vertexes[0].vn_i];
-                const real3& n1 = normals[vertexes[1].vn_i];
-                const real3& n2 = normals[vertexes[2].vn_i];
-                real u0, u1, u2, v0, v1, v2;
-                if ( vertexes[0].vt_i != uint(-1) ) {
-                    u0 = texcoords[vertexes[0].vt_i].c[0];
-                    u1 = texcoords[vertexes[1].vt_i].c[0];
-                    u2 = texcoords[vertexes[2].vt_i].c[0];
-                    v0 = texcoords[vertexes[0].vt_i].c[1];
-                    v1 = texcoords[vertexes[1].vt_i].c[1];
-                    v2 = texcoords[vertexes[2].vt_i].c[1];
-                } else {
-                    u0 = 0.0;
-                    u1 = 0.0;
-                    u2 = 0.0;
-                    v0 = 0.0;
-                    v1 = 0.0;
-                    v2 = 0.0;
-                }
-                hit_info.poly_i = poly_i;
-                hit_info.t = t;
-
-                 hit_info.normal = normal;
-                if ( vertexes[0].vn_i != uint(-1) ) {
-                    hit_info.shading_normal = n0*alpha + n1*gamma + n2*beta;
-                    hit_info.shading_normal.normalize();
-                } else {
-                    hit_info.shading_normal = normal;
-                }
-                    hit_info.normal = normal;
-                // epsilon to get it off the polygon
-                // may cause trouble in two-sided... move to shader?
-            //    hit_info.p = p + 0.01*hit_info.normal;;
-                hit_info.p = p;
-
-                real distance_squared = t*t / direction.length_sqr();
-                real ray_footprint_area_on_triangle = solid_angle*distance_squared;
-                real twice_uv_area_of_triangle = std::abs(0.5*(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1));
-                hit_info.frac_uv_cov = ray_footprint_area_on_triangle * twice_uv_area_of_triangle / (2.0*area);
-
-
-                hit_info.u = alpha*u0 + gamma*u1 + beta*u2 ;
-                hit_info.v = alpha*v0 + gamma*v1 + beta*v2 ;
-
-                real3 deltaPos1 = p1-p0;
-                real3 deltaPos2 = p2-p0;
-
-                real deltaU1 = u1-u0;
-                real deltaU2 = u2-u0;
-                real deltaV1 = v1-v0;
-                real deltaV2 = v2-v0;
-
-                real r = 1.0 / (deltaU1 * deltaV2 - deltaV1 * deltaU2);
-                hit_info.tangent = (deltaPos1 * deltaV2   - deltaPos2 * deltaV1)*r;
-                hit_info.tangent_normalized = hit_info.tangent.normalize();
-                hit_info.bitangent = (deltaPos2 * deltaU1   - deltaPos1 * deltaU2)*r;
-
-                if (mtl_i != uint(-1) && model->materials[mtl_i].map_d_i != uint(-1)) {
-                    // code slightly modified from texture.h   We only need one compoent
-                    // From there, the first texel will be at &texels[texel_i]. 
-                    // Pull out the map_d_i.  If it's -1, there's no alpha texture.  Also use that to get to the Texture using model->textures[map_d_i].
-                    uint texel_i = model->textures[model->materials[mtl_i].map_d_i].texel_i; 
-                    unsigned char *mdata = &(model->texels[texel_i]);
-                    int nx = model->textures[model->materials[mtl_i].map_d_i].width;
-                    int ny = model->textures[model->materials[mtl_i].map_d_i].height;
-                    int mx = nx;
-                    int my = ny;
-                    real u = hit_info.u;
-                    real v = hit_info.v;
-                    real sqrt_nx_ny = std::sqrt(nx*ny);
-                    real width_of_footprint = std::sqrt(hit_info.frac_uv_cov) * sqrt_nx_ny;
-                    real mip_level = std::log2( width_of_footprint );
-                    int nchan = model->textures->nchan;
-                    for (int imip_level = mip_level; imip_level > 0 && !(mx == 1 && my == 1); imip_level--)
-                    {
-                        // find the proper mip texture
-                        mdata += nchan * mx * my;
-                        if ( mx != 1 ) mx >>= 1;
-                        if ( my != 1 ) my >>= 1;
-                    }
-                    if (std::isnan(u)) {
-                        u = 0.0;
-                    }
-                    if (std::isnan(v)) {
-                        v = 0.0;
-                    }
-                    if (u < 0.0) {
-                        int64_t i = u;
-                        u -= i-1;
-                    }
-                    if (v < 0.0) {
-                        int64_t i = v;
-                        v -= i-1;
-                    }
-                    if (u >= 1.0) {
-                        int64_t i = u;
-                        u -= i;
-                    }
-                    if (v >= 1.0) {
-                        int64_t i = v;
-                        v -= i;
-                    }
-                    int i = (    u)*real(mx);
-                    int j = (1.0-v)*real(my);
-                    /*
-                    if (i >= mx) i -= mx;
-                    if (j >= my) j -= my;
-                    */
-                    while (i >= mx) i -= mx;
-                    while (j >= my) j -= my;
-
-                    float opacity = float(mdata[nchan*i + nchan*mx*j+3]) / 255.0;
-
-                    if (float(uniform()) > opacity) {
-                        return false;
-                    }
-                }
-
-                hit_info.model = model;
-
-                mdout << "Model::Polygon::hit: poly_i=" << poly_i << " HIT t=" << hit_info.t << 
-                         " p=" << hit_info.p << " normal=" << hit_info.normal << 
-                         " frac_uv_cov=" << hit_info.frac_uv_cov << 
-                         " u=" << hit_info.u << " v=" << hit_info.v << " mtl_i=" << mtl_i << "\n";
-                return true;
-            }
-        }
-    }
-    mdout << "Model::Polygon::hit: NOT a hit, poly_i=" << (this - model->polygons) << "\n";
-    return false;
-}
-
-bool Model::Instance::bounding_box( const Model * model, AABB& b, real padding ) const
-{
-    (void)model;
-    b = box;
-    b.pad( padding );
-    return true;
-}
-
-bool Model::Instance::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
-                           real solid_angle, real t_min, real t_max, HitInfo& hit_info )
-{
-    die_assert( sizeof(real) == 4, "real is not float" );
-    die_assert( kind == INSTANCE_KIND::MODEL_PTR, "did not get model_ptr instance" );
-
-    //-----------------------------------------------------------
-    // Use inverse matrix to transform origin, direction, and direction_inv into target model's space.
-    // Then call model's root BVH hit node.
-    //-----------------------------------------------------------
-    Model  *   t_model         = u.model_ptr;
-    Matrix *   M_inv           = &model->matrixes[matrix_inv_i];
-    real3      t_origin, t_direction, t_direction_inv;
-    M_inv->transform( origin, t_origin );
-    M_inv->transform( direction, t_direction );
-    M_inv->transform( direction_inv, t_direction_inv );
-    mdout << "Model::Instance::hit: M_inv=" << *M_inv << 
-                                  " origin="   << origin   << " direction="   << direction   << " direction_inv="   << direction_inv << 
-                                  " t_origin=" << t_origin << " t_direction=" << t_direction << " t_direction_inv=" << t_direction_inv << "\n";
-
-    BVH_Node * t_bvh = &t_model->bvh_nodes[t_model->hdr->bvh_root_i];
-    if ( !t_bvh->hit( t_model, t_origin, t_direction, t_direction_inv, solid_angle, t_min, t_max, hit_info ) ) return false;
-
-    //-----------------------------------------------------------
-    // Use matrix to transform hit_info.p back to global world space.
-    // Use transposed inverse matrix to transform hit_info.normal correctly (ask Pete Shirley).
-    //-----------------------------------------------------------
-    Matrix * M           = &model->matrixes[matrix_i];
-    Matrix * M_inv_trans = &model->matrixes[matrix_inv_trans_i];
-    real3 p = hit_info.p;
-    real3 normal = hit_info.normal;
-    M->transform( p, hit_info.p );
-    M_inv_trans->transform( normal, hit_info.normal );
-    return true;
-}
-
-inline bool Model::BVH_Node::bounding_box( const Model * model, Model::AABB& b ) const
-{
-    (void)model;
-    b = box;
-    return true;
-}
-
-inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origin, 
-                                  const Model::real3& direction, const Model::real3& direction_inv,
-                                  Model::real solid_angle, Model::real t_min, Model::real t_max, Model::HitInfo& hit_info ) const
-{
-    bool r = false;
-    uint bvh_i = this - model->bvh_nodes;
-    mdout << "Model::BVH_Node::hit: bvh_i=" << bvh_i << "\n";
-    if ( box.hit( origin, direction, direction_inv, t_min, t_max ) ) {
-        HitInfo left_hit_info;
-        HitInfo right_hit_info;
-        bool hit_left  = (left_kind == BVH_NODE_KIND::POLYGON)   ? model->polygons[left_i].hit(    model, origin, direction, direction_inv,   
-                                                                                                   solid_angle, t_min, t_max, left_hit_info  ) :
-                         (left_kind == BVH_NODE_KIND::INSTANCE)  ? model->instances[left_i].hit(   model, origin, direction, direction_inv, 
-                                                                                                   solid_angle, t_min, t_max, left_hit_info  ) :
-                                                                   model->bvh_nodes[left_i].hit(   model, origin, direction, direction_inv, 
-                                                                                                   solid_angle, t_min, t_max, left_hit_info  );
-        bool hit_right = (left_i == right_i)                     ? false :   // lone leaf
-                         (right_kind == BVH_NODE_KIND::POLYGON)  ? model->polygons[right_i].hit(   model, origin, direction, direction_inv, 
-                                                                                                   solid_angle, t_min, t_max, right_hit_info ) :
-                         (right_kind == BVH_NODE_KIND::INSTANCE) ? model->instances[right_i].hit(  model, origin, direction, direction_inv, 
-                                                                                                   solid_angle, t_min, t_max, right_hit_info ) :
-                                                                   model->bvh_nodes[right_i].hit(  model, origin, direction, direction_inv, 
-                                                                                                   solid_angle, t_min, t_max, right_hit_info );
-        if ( hit_left && (!hit_right || left_hit_info.t < right_hit_info.t) ) {
-            hit_info = left_hit_info;
-            r = true;
-        } else if ( hit_right ) {
-            hit_info = right_hit_info;
-            r = true;
-        }
-    }
-    mdout << "Model::BVH_Node::hit: bvh_i=" << bvh_i << " return=" << r << "\n";
-    return r;
 }
 
 #endif

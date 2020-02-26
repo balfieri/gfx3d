@@ -927,6 +927,11 @@ inline std::string str( uint u )
     return std::to_string( u );
 }
 
+inline std::string str( size_t s )
+{
+    return std::to_string( s );
+}
+
 inline std::string str( Model::real r ) 
 {
     return std::to_string( r );

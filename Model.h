@@ -6123,14 +6123,14 @@ void Model::Texture::astc_blk_addr_get( uint      ray_id,
         mip_blk_cnt_z = (mip_zsize + blockdim_z - 1) / blockdim_z;
         mip_blk_cnt   = mip_blk_cnt_x * mip_blk_cnt_y * mip_blk_cnt_z;
 
-        mdout << "mip" << i << ": ray_id=" << ray_id << 
+        mdout << "astc_blk_addr_get: mip" << i << ": ray_id=" << ray_id << 
                 std::hex << " mip_blk0_offset=0x" << mip_blk0_offset << " mip_blk_cnt_x=0x" << mip_blk_cnt_x << " mip_blk_cnt_y=0x" << mip_blk_cnt_y << " mip_blk_cnt_z=0x" << mip_blk_cnt_z << 
                 " mip_blk_cnt=0x" << mip_blk_cnt << 
                 std::dec << "\n";
 
         if ( i == (size_w-1) || i >= iwidth_of_footprint_lg2 ) break;
 
-        mip_blk0_offset += mip_blk_cnt;
+        mip_blk0_offset += mip_blk_cnt + 1; // skip the next header, too
         mip_xsize >>= 1;
         mip_ysize >>= 1;
         mip_zsize >>= 1;
@@ -6151,8 +6151,11 @@ void Model::Texture::astc_blk_addr_get( uint      ray_id,
     // Find block bx,by within map texture, block address, and texel offsets s,t within block.' )
     //---------------------------------------------------------------' )
     uint64_t ui = (u_fxd * mip_xsize) >> uv_frac_w;
+             ui %= mip_xsize;
     uint64_t vi = (v_fxd * mip_ysize) >> uv_frac_w;
+             vi %= mip_ysize;
     uint64_t wi = (w_fxd * mip_zsize) >> uv_frac_w;
+             wi %= mip_zsize;
     uint64_t bx = ui / blockdim_x;
     uint64_t by = vi / blockdim_y;
     uint64_t bz = wi / blockdim_z;

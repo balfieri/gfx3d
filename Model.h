@@ -6106,7 +6106,7 @@ void Model::Texture::astc_blk_addr_get( uint      ray_id,
     // Mip level 0 is the finest level of the texture.' )
     //---------------------------------------------------------------
     const uint64_t iwidth_of_footprint = (sqrt_frac_uv_covg_fxd * sqrt_xsize_ysize_zsize) >> covg_frac_w; // integer width
-    const uint64_t iwidth_of_footprint_lg2 = uint( std::log2( real(iwidth_of_footprint) ) );
+    const uint64_t iwidth_of_footprint_lg2 = (iwidth_of_footprint == 0) ? 0 : uint( std::log2( real(iwidth_of_footprint) ) );
     uint64_t mip_xsize = xsize;
     uint64_t mip_ysize = ysize;
     uint64_t mip_zsize = zsize;

@@ -6977,7 +6977,20 @@ inline void Model::Texture::astc_decode_color_endpoints( const unsigned char * b
 
         default:
         {
+#ifdef ASTC_HACK_HDR
+            // temporary hack so programs don't die, will go away soon
+            endpoints[0][0] = v[0];
+            endpoints[1][0] = v[2];
+            endpoints[2][0] = v[4];
+            endpoints[3][0] = v[6];
+
+            endpoints[0][1] = v[1];
+            endpoints[1][1] = v[3];
+            endpoints[2][1] = v[5];
+            endpoints[3][1] = v[7];
+#else
             die_assert( false, "ASTC HDR color endpoint modes are not yet supported" );
+#endif
             break;
         }
     }
@@ -7183,7 +7196,11 @@ inline uint Model::Texture::astc_decode_integer( const unsigned char * bdata, ui
 
     // collect bits for element vi, as well as bits for any trit-blocks and quint-blocks.
     uint v;
+#ifdef ASTC_HACK_HDR
+    vi = vi % cnt;
+#else
     die_assert( vi < cnt, "astc_decode_integer vi >= cnt" );
+#endif
     for( uint i = 0; i < cnt; i++ )  // should be able to short-circuit this better later
     {
         if ( i == vi ) {

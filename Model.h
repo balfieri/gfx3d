@@ -6074,7 +6074,7 @@ void Model::Texture::astc_blk_addr_get( uint      ray_id,
                                         uint      blockdim_x, uint blockdim_y, uint blockdim_z,
                                         uint      xsize,      uint ysize,      uint zsize,
                                         real      u,          real v,          real w,
-                                        real      frac_uv_covg, 
+                                        real      sqrt_frac_uv_covg, 
                                         uint      size_w,
                                         uint      addr_w,
                                         uint      uv_frac_w,
@@ -6086,7 +6086,7 @@ void Model::Texture::astc_blk_addr_get( uint      ray_id,
     const uint64_t u_fxd = u * real( 1 << uv_frac_w );   
     const uint64_t v_fxd = v * real( 1 << uv_frac_w );
     const uint64_t w_fxd = w * real( 1 << uv_frac_w );
-    const uint64_t sqrt_frac_uv_covg_fxd = int( std::sqrt( frac_uv_covg ) * real(1 << covg_frac_w) );
+    const uint64_t sqrt_frac_uv_covg_fxd = int( sqrt_frac_uv_covg * real(1 << covg_frac_w) );
 
     mdout << "astc_blk_addr_get: ray_id=" << ray_id <<
                                " blockdim_x=" << blockdim_x << " blockdim_y=" << blockdim_y << " blockdim_z=" << blockdim_z <<
@@ -6094,7 +6094,7 @@ void Model::Texture::astc_blk_addr_get( uint      ray_id,
                                " sqrt_xsize_ysize_zsize=0x" << sqrt_xsize_ysize_zsize << 
                                std::dec << " u=" << u << " v=" << v << " w=" << w << 
                                std::hex << " u_fxd=0x" << u_fxd << " v_fxd=0x" << v_fxd << " w_fxd=0x" << w_fxd << 
-                               " frac_uv_covg=" << frac_uv_covg << " sqrt_frac_uv_covg_fxd=0x" << sqrt_frac_uv_covg_fxd <<
+                               " sqrt_frac_uv_covg_fxd=0x" << sqrt_frac_uv_covg_fxd <<
                                std::dec << " size_w=" << size_w << " addr_w=" << addr_w << " uv_frac_w=" << uv_frac_w << 
                                " covg_frac_w=" << covg_frac_w << 
                                std::hex << " blks_addr=0x" << blks_addr << std::dec << "\n";
@@ -6124,7 +6124,8 @@ void Model::Texture::astc_blk_addr_get( uint      ray_id,
         mip_blk_cnt   = mip_blk_cnt_x * mip_blk_cnt_y * mip_blk_cnt_z;
 
         mdout << "astc_blk_addr_get: mip" << i << ": ray_id=" << ray_id << 
-                std::hex << " mip_blk0_offset=0x" << mip_blk0_offset << " mip_blk_cnt_x=0x" << mip_blk_cnt_x << " mip_blk_cnt_y=0x" << mip_blk_cnt_y << " mip_blk_cnt_z=0x" << mip_blk_cnt_z << 
+                std::hex << " mip_blk0_offset=0x" << mip_blk0_offset << 
+                " mip_blk_cnt_x=0x" << mip_blk_cnt_x << " mip_blk_cnt_y=0x" << mip_blk_cnt_y << " mip_blk_cnt_z=0x" << mip_blk_cnt_z << 
                 " mip_blk_cnt=0x" << mip_blk_cnt << 
                 std::dec << "\n";
 

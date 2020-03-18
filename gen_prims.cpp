@@ -11,12 +11,6 @@ static inline void print( std::string msg )
     std::cout << msg << "\n";
 }
 
-static inline void die( std::string msg )             
-{ 
-    print( "ERROR: " + msg );
-    exit( 1 );
-}
-
 int main( int argc, const char * argv[] )
 {
     print( "" );

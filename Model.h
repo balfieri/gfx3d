@@ -717,8 +717,8 @@ public:
     void cmd( std::string c, std::string error="command failed");  // calls std::system and aborts if not success
 
     // file utilities
-    void dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ); 
-    bool file_exists( std::string file_name );
+    static void dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ); 
+    static bool file_exists( std::string file_name );
     bool file_read( std::string file_name, char *& start, char *& end );                        // sucks in entire file
     void file_write( std::string file_name, const unsigned char * data, uint64_t byte_cnt );
 
@@ -3255,11 +3255,6 @@ bool Model::load_gph( std::string gph_file, std::string dir_name, std::string ba
         graph_nodes[expr_i].parent_i = assign_i;
     }
     return true;
-
-error:
-    error_msg += " (at line " + std::to_string( line_num ) + " of " + gph_file + ")";
-    die_assert( false, "aborting..." );
-    return false;
 }
 
 uint Model::gph_node_alloc( Model::GRAPH_NODE_KIND kind, uint parent_i )

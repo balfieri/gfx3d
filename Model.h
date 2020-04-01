@@ -4333,7 +4333,6 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
                 } else {
                     hit_info.shading_normal = normal;
                 }
-                    hit_info.normal = normal;
                 // epsilon to get it off the polygon
                 // may cause trouble in two-sided... move to shader?
             //    hit_info.p = p + 0.01*hit_info.normal;;

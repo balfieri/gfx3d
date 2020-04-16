@@ -167,7 +167,8 @@ public:
            MIPMAP_FILTER        mipmap_filter=MIPMAP_FILTER::NONE, 
            TEXTURE_COMPRESSION  texture_compression=TEXTURE_COMPRESSION::NONE,
            BVH_TREE             bvh_tree=BVH_TREE::NONE, 
-           bool                 resolve_models=true );
+           bool                 resolve_models=true,
+           bool                 deduplicate=false );
     Model( std::string model_file, bool is_compressed );
     ~Model(); 
 
@@ -175,7 +176,7 @@ public:
     bool replace_materials( std::string mtl_file_path );
 
     // start of main structures
-    static const uint VERSION = 0xB0BA1f09; // current version 
+    static const uint VERSION = 0xB0BA1f0a; // current version 
 
     bool                is_good;            // set to true if constructor succeeds
     std::string         error_msg;          // if !is_good
@@ -284,6 +285,9 @@ public:
         uint64      tex_cnt;                // in textures array
         uint64      texel_cnt;              // in texels array  (last in file)
 
+        uint64      graph_node_cnt;         // in graph_nodes array
+        uint64      graph_root_i;           // index of root Graph_Node in graph_nodes array
+
         uint64      matrix_cnt;             // in matrixes array
         uint64      inst_cnt;               // in instances array
 
@@ -297,10 +301,15 @@ public:
         bool        tex_specular_is_orm;    // specular texture components mean: occlusion, roughness, metalness
         uint        sky_box_tex_i;          // index in textures array of sky box texture
         real        env_map_intensity_scale;// name says it all
+        TEXTURE_COMPRESSION texture_compression; // NONE or ASTC used (individual textures are also marked)
         real        opacity_scale;          // not sure what this is for
         real        shadow_caster_count;    // not sure what this is for
+        uint        direct_V;               // number of virtual point lights (VPLs) for direct lighting reservoir sampling (default: 0 == choose)
+        uint        direct_M;               // number of M candidate samples for direct lighting reservoir sampling (default: 0 == choose)
+        uint        direct_N;               // number of N used samples for direct lighting reservoir sampling (default: 0 == choose)
         real        tone_white;             // tone mapping white parameter
         real        tone_key;               // tone mapping key parameter
+        real        tone_avg_luminance;     // tone mapping average luminance override (if supported by application)
 
         uint64      camera_cnt;             // in cameras array
         uint64      initial_camera_i;       // initial active camera index (default: 0)
@@ -308,19 +317,8 @@ public:
         uint64      animation_cnt;          // in animations array
         real        animation_speed;        // divide frame time by this to get real time (default: 1.0)
 
-        // move these up later
-        TEXTURE_COMPRESSION texture_compression; // NONE or ASTC used (individual textures are also marked)
+        uint64_t    unused[8];              // leave room for temporary hacks
     };
-
-    // TODO: move these into HDR later
-        real        tone_avg_luminance;     // tone mapping average luminance override (if supported by application)
-        uint        direct_V;               // number of virtual point lights (VPLs) for direct lighting reservoir sampling (default: 0 == choose)
-        uint        direct_M;               // number of M candidate samples for direct lighting reservoir sampling (default: 0 == choose)
-        uint        direct_N;               // number of N used samples for direct lighting reservoir sampling (default: 0 == choose)
-
-        uint64      graph_node_cnt;         // in graph_nodes array
-        uint64      graph_node_cnt_max;     // in graph_nodes array
-        uint64      graph_root_i;           // index of root Graph_Node in graph_nodes array
 
     class Object
     {
@@ -410,6 +408,8 @@ public:
         uint            map_Ns_i;           // specular highlight texture (multipled by Ns)
         uint            map_d_i;            // alpha texture (multiplied by d)
         uint            map_Bump_i;         // bump map texture
+        uint            map_refl_i;         // reflection map
+        uint64_t        unused[8];          // leave room for temporary hacks
 
         inline bool is_emissive( void ) { return Ke.c[0] != 0.0 || Ke.c[1] != 0.0 || Ke.c[2] != 0.0; }
     };
@@ -451,7 +451,7 @@ public:
     {
     public:
         uint            name_i;             // index in strings array (null-terminated strings)
-      //TEXTURE_COMPRESSION compression;    // NONE or ASTC (for now, look in model structure)
+        TEXTURE_COMPRESSION compression;    // NONE or ASTC 
         uint            width;              // level 0 width
         uint            height;             // level 0 height
         uint            nchan;              // number of channels (typically 3 or 4)
@@ -459,6 +459,7 @@ public:
         real            bump_multiplier;    // should be for bump maps only but also used with other textures
         real3           offset;             // uvw offset of texture map on surface (w is 0 for 2D textures)
         real3           scale;              // uvw scale  of texture map on surface (w is 0 for 2D textures)
+        uint64_t        unused[8];          // leave room for temporary hacks
 
         // for ARM .astc files and our internal format
         struct ASTC_Header                      
@@ -671,6 +672,7 @@ public:
         real            penumbra_angle;     // point lights only
         uint            diffuse_sample_cnt; // applies to light probe only
         uint            specular_sample_cnt;// ditto
+        uint64_t        unused[8];          // leave room for temporary hacks
     };
 
     class Camera
@@ -839,7 +841,8 @@ private:
         CMD_MAP_KS,
         CMD_MAP_NS,
         CMD_MAP_D,
-        CMD_MAP_BUMP
+        CMD_MAP_BUMP,
+        CMD_MAP_REFL
     } mtl_cmd_t;
             
     char * fsc_start;
@@ -995,7 +998,8 @@ inline std::ostream& operator << ( std::ostream& os, const Model::Material& mat 
           " map_Ks_i=" << mat.map_Ks_i <<
           " map_Ns_i=" << mat.map_Ns_i <<
           " map_d_i="  << mat.map_d_i <<
-          " map_Bump_i=" << mat.map_Bump_i;
+          " map_Bump_i=" << mat.map_Bump_i <<
+          " map_refl_i=" << mat.map_refl_i;
     return os;
 }
 
@@ -1227,7 +1231,7 @@ void Model::cmd( std::string c, std::string error )
 Model::Model( std::string                top_file,      
               Model::MIPMAP_FILTER       mipmap_filter, 
               Model::TEXTURE_COMPRESSION texture_compression,
-              Model::BVH_TREE bvh_tree,  bool resolve_models )
+              Model::BVH_TREE bvh_tree,  bool resolve_models, bool deduplicate )
 {
     is_good = false;
     error_msg = "<unknown error>";
@@ -1244,7 +1248,8 @@ Model::Model( std::string                top_file,
     hdr->texcoord_cnt = 1;
     hdr->mipmap_filter = mipmap_filter;
     hdr->texture_compression = texture_compression;
-         graph_root_i = uint(-1);
+    hdr->graph_node_cnt = 1;
+    hdr->graph_root_i = uint(-1);
     hdr->lighting_scale = 1.0;
     hdr->ambient_intensity = real3( 0.1, 0.1, 0.1 );
     hdr->sky_box_tex_i = uint(-1);
@@ -1268,8 +1273,7 @@ Model::Model( std::string                top_file,
     max->norm_cnt    	   = max->vtx_cnt;
     max->texcoord_cnt	   = max->vtx_cnt;
     max->mipmap_filter	   = mipmap_filter;
-         graph_node_cnt_max= 1;
-         graph_node_cnt    = 0;
+    max->graph_node_cnt    = 1;
     max->tex_cnt     	   = max->mtl_cnt;
     max->texel_cnt   	   = max->mtl_cnt * 128*1024;
     max->char_cnt    	   = max->obj_cnt * 128;
@@ -1293,7 +1297,7 @@ Model::Model( std::string                top_file,
     normals           = aligned_alloc<real3>(    max->norm_cnt );
     texcoords         = aligned_alloc<real2>(    max->texcoord_cnt );
     materials         = aligned_alloc<Material>( max->mtl_cnt );
-    graph_nodes       = aligned_alloc<Graph_Node>( graph_node_cnt_max );
+    graph_nodes       = aligned_alloc<Graph_Node>( max->graph_node_cnt );
     textures          = aligned_alloc<Texture>(  max->tex_cnt );
     texels            = aligned_alloc<unsigned char>( max->texel_cnt );
     bvh_nodes         = aligned_alloc<BVH_Node>( max->bvh_node_cnt );
@@ -1320,6 +1324,13 @@ Model::Model( std::string                top_file,
     } else {
         error_msg = "unknown top file ext_name: " + ext_name;
         return;
+    }
+
+    if ( deduplicate ) {
+        //------------------------------------------------------------
+        // Go through each object and see if it is a duplicate of a 
+        // previous object yet translated by some fixed amount.
+        //------------------------------------------------------------
     }
 
     if ( resolve_models ) {
@@ -1406,7 +1417,7 @@ Model::Model( std::string                top_file,
                     uint64( hdr->norm_cnt             ) * sizeof( normals[0] ) +
                     uint64( hdr->texcoord_cnt         ) * sizeof( texcoords[0] ) +
                     uint64( hdr->mtl_cnt              ) * sizeof( materials[0] ) +
-                    uint64( graph_node_cnt            ) * sizeof( graph_nodes[0] ) +
+                    uint64( hdr->graph_node_cnt       ) * sizeof( graph_nodes[0] ) +
                     uint64( hdr->tex_cnt              ) * sizeof( textures[0] ) +
                     uint64( hdr->texel_cnt            ) * sizeof( texels[0] ) +
                     uint64( hdr->char_cnt             ) * sizeof( strings[0] ) + 
@@ -1425,7 +1436,6 @@ Model::Model( std::string model_path, bool is_compressed )
 {
     is_good = false;
     mapped_region = nullptr;
-    graph_node_cnt = 0;         // for now
     if ( !is_compressed ) {
         read_uncompressed( model_path );
 
@@ -1483,7 +1493,7 @@ Model::Model( std::string model_path, bool is_compressed )
         _read( normals,             real3,         hdr->norm_cnt );
         _read( texcoords,           real2,         hdr->texcoord_cnt );
         _read( materials,           Material,      hdr->mtl_cnt );
-        _read( graph_nodes,         Graph_Node,    graph_node_cnt );
+        _read( graph_nodes,         Graph_Node,    hdr->graph_node_cnt );
         _read( textures,            Texture,       hdr->tex_cnt );
         _read( texels,              unsigned char, hdr->texel_cnt );
         _read( bvh_nodes,           BVH_Node,      hdr->bvh_node_cnt );
@@ -1588,7 +1598,7 @@ bool Model::write( std::string model_path, bool is_compressed )
     _write( normals,            hdr->norm_cnt           * sizeof(normals[0]) );
     _write( texcoords,          hdr->texcoord_cnt       * sizeof(texcoords[0]) );
     _write( materials,   	hdr->mtl_cnt       	* sizeof(materials[0]) );
-    _write( graph_nodes,   	graph_node_cnt  	* sizeof(graph_nodes[0]) );
+    _write( graph_nodes,   	hdr->graph_node_cnt  	* sizeof(graph_nodes[0]) );
     _write( textures,    	hdr->tex_cnt       	* sizeof(textures[0]) );
     _write( texels,      	hdr->texel_cnt     	* sizeof(texels[0]) );
     _write( bvh_nodes,   	hdr->bvh_node_cnt  	* sizeof(bvh_nodes[0]) );
@@ -1675,7 +1685,7 @@ bool Model::write_uncompressed( std::string model_path )
     _uwrite( normals,           hdr->norm_cnt           * sizeof(normals[0]) );
     _uwrite( texcoords,         hdr->texcoord_cnt       * sizeof(texcoords[0]) );
     _uwrite( materials,   	hdr->mtl_cnt       	* sizeof(materials[0]) );
-    _uwrite( graph_nodes,   	graph_node_cnt  	* sizeof(graph_nodes[0]) );
+    _uwrite( graph_nodes,   	hdr->graph_node_cnt  	* sizeof(graph_nodes[0]) );
     _uwrite( textures,    	hdr->tex_cnt       	* sizeof(textures[0]) );
     _uwrite( texels,      	hdr->texel_cnt     	* sizeof(texels[0]) );
     _uwrite( bvh_nodes,   	hdr->bvh_node_cnt  	* sizeof(bvh_nodes[0]) );
@@ -1741,7 +1751,7 @@ bool Model::read_uncompressed( std::string model_path )
     _uread( normals,             real3,         hdr->norm_cnt );
     _uread( texcoords,           real2,         hdr->texcoord_cnt );
     _uread( materials,           Material,      hdr->mtl_cnt );
-    _uread( graph_nodes,         Graph_Node,    graph_node_cnt );
+    _uread( graph_nodes,         Graph_Node,    hdr->graph_node_cnt );
     _uread( textures,            Texture,       hdr->tex_cnt );
     _uread( texels,              unsigned char, hdr->texel_cnt );
     _uread( bvh_nodes,           BVH_Node,      hdr->bvh_node_cnt );
@@ -1775,7 +1785,7 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
     //------------------------------------------------------------
     hdr->tone_key = 0.2;
     hdr->tone_white = 3.0;
-    tone_avg_luminance = 0.0;
+    hdr->tone_avg_luminance = 0.0;
     hdr->tex_specular_is_orm = false;
     if ( !expect_char( '{', fsc, fsc_end, true ) ) goto error;
     for( ;; )
@@ -1853,13 +1863,13 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
                     if ( !parse_real3( hdr->background_color, fsc, fsc_end, true ) ) goto error;
 
                 } else if ( strcmp( field, "direct_V" ) == 0 ) {
-                    if ( !parse_uint( direct_V, fsc, fsc_end ) ) goto error;
+                    if ( !parse_uint( hdr->direct_V, fsc, fsc_end ) ) goto error;
 
                 } else if ( strcmp( field, "direct_M" ) == 0 ) {
-                    if ( !parse_uint( direct_M, fsc, fsc_end ) ) goto error;
+                    if ( !parse_uint( hdr->direct_M, fsc, fsc_end ) ) goto error;
 
                 } else if ( strcmp( field, "direct_N" ) == 0 ) {
-                    if ( !parse_uint( direct_N, fsc, fsc_end ) ) goto error;
+                    if ( !parse_uint( hdr->direct_N, fsc, fsc_end ) ) goto error;
 
                 } else if ( strcmp( field, "tone_white" ) == 0 ) {
                     if ( !parse_real( hdr->tone_white, fsc, fsc_end, true ) ) goto error;
@@ -1868,7 +1878,7 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
                     if ( !parse_real( hdr->tone_key, fsc, fsc_end, true ) ) goto error;
 
                 } else if ( strcmp( field, "tone_avg_luminance" ) == 0 ) {
-                    if ( !parse_real( tone_avg_luminance, fsc, fsc_end, true ) ) goto error;
+                    if ( !parse_real( hdr->tone_avg_luminance, fsc, fsc_end, true ) ) goto error;
 
                 } else if ( strcmp( field, "tex_specular_is_orm" ) == 0 ) {
                     if ( !parse_bool( hdr->tex_specular_is_orm, fsc, fsc_end ) ) goto error;
@@ -2839,6 +2849,7 @@ bool Model::load_mtl( std::string mtl_file, std::string dir_name, bool replacing
                         material->map_Ns_i = uint(-1);
                         material->map_d_i  = uint(-1);
                         material->map_Bump_i = uint(-1);
+                        material->map_refl_i = uint(-1);
                         name_to_mtl_i[ mtl_name ] = mtl_i;
                         dprint( "  added " + std::string( mtl_name ) );
                     }
@@ -2903,6 +2914,7 @@ bool Model::load_mtl( std::string mtl_file, std::string dir_name, bool replacing
             case CMD_MAP_NS:
             case CMD_MAP_D:
             case CMD_MAP_BUMP:
+            case CMD_MAP_REFL:
                 rtn_assert( material != nullptr, "no material defined" );
                 
                 if ( !replacing ) {
@@ -2947,6 +2959,7 @@ bool Model::load_mtl( std::string mtl_file, std::string dir_name, bool replacing
                         case CMD_MAP_NS:        material->map_Ns_i   = tex_i; break;
                         case CMD_MAP_D:         material->map_d_i    = tex_i; break;
                         case CMD_MAP_BUMP:      material->map_Bump_i = tex_i; break;
+                        case CMD_MAP_REFL:      material->map_refl_i = tex_i; break;
                         default:                                              break; // should not happen
                     }
                 } else {
@@ -3012,7 +3025,8 @@ bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Textur
     bool        in_astc_gen_mode     = !astc_file_exists && hdr->texture_compression == TEXTURE_COMPRESSION::ASTC;
     bool        in_astc_read_mode    =  astc_file_exists && hdr->texture_compression == TEXTURE_COMPRESSION::ASTC;
 
-    if ( hdr->texture_compression == TEXTURE_COMPRESSION::ASTC ) {
+    texture->compression = hdr->texture_compression;
+    if ( texture->compression == TEXTURE_COMPRESSION::ASTC ) {
         //---------------------------------------------
         // Align to 16B boundary to match ASTC alignment
         // Should not need to reallocate due to >16B granularity of allocations.
@@ -3224,7 +3238,7 @@ bool Model::load_gph( std::string gph_file, std::string dir_name, std::string ba
     gph = gph_start;
 
     uint block_i = gph_node_alloc( GRAPH_NODE_KIND::BLOCK );
-    graph_root_i = block_i;
+    hdr->graph_root_i = block_i;
 
     //------------------------------------------------------------
     // Parse .gph file contents
@@ -3260,8 +3274,8 @@ bool Model::load_gph( std::string gph_file, std::string dir_name, std::string ba
 uint Model::gph_node_alloc( Model::GRAPH_NODE_KIND kind, uint parent_i )
 {
     //mdout << "new node: kind=" << kind << "\n";
-    perhaps_realloc( graph_nodes, graph_node_cnt, graph_node_cnt_max, 1 );
-    uint node_i = graph_node_cnt++;
+    perhaps_realloc( graph_nodes, hdr->graph_node_cnt, max->graph_node_cnt, 1 );
+    uint node_i = hdr->graph_node_cnt++;
     Graph_Node * node = &graph_nodes[node_i];
     node->kind = kind;
     node->u.child_first_i = uint(-1);
@@ -3291,7 +3305,6 @@ uint Model::gph_node_alloc( Model::GRAPH_NODE_KIND kind, uint parent_i )
 //--------------------------------------------------------------------------------------
 inline Model::real4 Model::Texture::texel_read( const Model * model, uint mip_level, uint64 ui, uint64 vi, uint64 * vaddr, uint64 * byte_cnt, bool do_srgb_to_linear ) const
 {
-    TEXTURE_COMPRESSION compression = model->hdr->texture_compression;
     switch( compression )
     {
         case TEXTURE_COMPRESSION::NONE: return texel_read_uncompressed( model, mip_level, ui, vi, vaddr, byte_cnt, do_srgb_to_linear );
@@ -5130,6 +5143,17 @@ inline bool Model::parse_mtl_cmd( mtl_cmd_t& cmd, char *& mtl, char *& mtl_end )
 
                 cmd = CMD_MAP_BUMP;
                 return true;
+
+            } else if ( ch == 'r' || ch == 'R' ) {
+                if ( !expect_char( 'e', mtl, mtl_end ) || 
+                     !expect_char( 'f', mtl, mtl_end ) || 
+                     !expect_char( 'l', mtl, mtl_end ) ||
+                     !expect_char( ' ', mtl, mtl_end ) ) {
+                    rtn_assert( 0, "unexpected .mtl map_b command" );
+                }
+
+                cmd = CMD_MAP_REFL;
+                return true;
             }
 
             rtn_assert( 0, "truncated .mtl m command: " + surrounding_lines( mtl, mtl_end ) );
@@ -5144,6 +5168,18 @@ inline bool Model::parse_mtl_cmd( mtl_cmd_t& cmd, char *& mtl, char *& mtl_end )
             }
 
             cmd = CMD_MAP_BUMP;
+            return true;
+
+        case 'r':
+        case 'R':
+            if ( !expect_char( 'e', mtl, mtl_end ) || 
+                 !expect_char( 'f', mtl, mtl_end ) || 
+                 !expect_char( 'l', mtl, mtl_end ) ||
+                 !expect_char( ' ', mtl, mtl_end ) ) {
+                rtn_assert( 0, "unexpected .mtl b command" );
+            }
+
+            cmd = CMD_MAP_REFL;
             return true;
 
         default:

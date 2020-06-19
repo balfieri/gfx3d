@@ -23,8 +23,8 @@
 // We inline these two well-known public-domain headers at the end of this file 
 // so you still need only include Model.h (and you should not include those separately beforehand):
 //
-// stb_image.h - v2.06 - public domain image loader - http://nothings.org/stb_image.h
-//                       no warranty implied; use at your own risk
+// stb_image.h     - v2.06 - public domain image loader - http://nothings.org/stb_image.h
+//                           no warranty implied; use at your own risk
 //
 // stb_image_write - v0.98 - public domain - http://nothings.org/stb/stb_image_write.h
 //                           writes out PNG/BMP/TGA images to C stdio - Sean Barrett 2010

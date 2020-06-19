@@ -166,7 +166,7 @@ STBIDEF int      stbi_write_hdr(char const *filename, int w, int h, int comp, co
 // default is good-old rand().
 #ifndef MODEL_UNIFORM_FN
 #define MODEL_UNIFORM_FN _model_uniform
-static inline real _model_uniform() { return rand(); }
+static inline double _model_uniform() { return drand48(); }
 #endif
 
 class Model

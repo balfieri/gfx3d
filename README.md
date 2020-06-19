@@ -1,6 +1,6 @@
 # Model.h
 
-This is a single C++ Model.h file (plus stb_image.h and stb_image_write.h) that reads in 3D models in .obj/.mtl format
+This is a single C++ Model.h file that reads in 3D models in .obj/.mtl format
 and helps prepare them for rendering, which is handled separately.  You can think of this as the MECHANISM of 3D
 graphics and rendering as the POLICY.
 
@@ -25,14 +25,14 @@ This has been tested on macOS and Linux.  It should work in any UNIX-like enviro
 
 Refer to Model.h for further instructions.
 
-This is all open-source.  Refer to the LICENSE.md for licensing details.
+This is all open-source.  Refer to the LICENSE.md for licensing details.  We inline two well-known public-domain files, stb_image.h and
+stb_image_write.h so you don't have to worry about that.  Their licensing information is listed at the top of Model.h.
 
 There are some limitations:
 
 1) It does not implement all .obj features.  In particular, it does not implement curves or ad hoc vertex attributes.
-2) Integers are stored as uint32_t except for texel offsets which are uint64_t.  Floating-point is stored as float.  
-However, you can change this by editing the typedefs for uint and real near the top of Model.h.  Model.h will likely
-provide ifdefs to change these rather than use templates, which can be a pain to deal with. 
+2) It does not implement volumentric databases, but that is coming soon.
+3) It does not support FBX files, but the world seems to be standardizing on USD, so USD will get added first. 
 
 Bob Alfieri<br>
 Chapel Hill, NC

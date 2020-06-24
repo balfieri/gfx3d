@@ -355,11 +355,10 @@ public:
         real        animation_speed;        // divide frame time by this to get real time (default: 1.0)
 
         uint64      volume_cnt;             // in volumes[] array
-        uint64      volume_segment_cnt;     // in volume_segments[] array
         uint64      volume_grid_cnt;        // in volume_grids[] array
         uint64      voxel_cnt;              // in voxels[] array  
 
-        uint64_t    unused[4];              // leave room for temporary hacks
+        uint64_t    unused[5];              // leave room for temporary hacks
     };
 
     class Object
@@ -502,17 +501,6 @@ public:
     {
     public:
         uint            name_i;                 // index in strings array (null-terminated strings)
-        uint            segment_cnt;            // number of segments
-        uint            segment_i;              // index into volume_segments[] array of first segment
-
-        std::string str( const Model * model, std::string indent="" ) const;       // recursive
-    };
-
-    // VolumeSegment - made up of one or more VolumeGrid
-    //
-    class VolumeSegment
-    {
-    public:
         uint            grid_cnt;               // number of grids
         uint            grid_i;                 // index into volume_grids[] array of first grid
 
@@ -551,10 +539,12 @@ public:
         VolumeGridType  voxel_type;             // voxel data type (float, double, etc.)
         VolumeGridClass grid_class;             // class of grid (level set, fog, staggered)
         uint            node_cnt[4];            // not sure yet what this is for
-        AABB            world_box;              // AABB in world space
+        AABB            world_box;              // AABB in world space (what we normally think of as the AABB)
         AABBI           index_box;              // AABB in index space
         real64          world_voxel_size;       // size of voxel in world units
         uint64          voxel_i;                // index into voxels[] of first voxel 
+
+        bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
     };
 
     class Texture
@@ -682,6 +672,7 @@ public:
         BVH_NODE,                           // BVH_Node
         POLYGON,                            // Polygon
         INSTANCE,                           // Instance
+        VOLUME_GRID,                        // VolumeGrid
     };
 
     class BVH_Node
@@ -874,7 +865,6 @@ public:
     Material *          materials;
     Graph_Node *        graph_nodes;
     Volume *            volumes;
-    VolumeSegment *     volume_segments;
     VolumeGrid *        volume_grids;
     unsigned char *     voxels;
     Texture *           textures;
@@ -996,8 +986,8 @@ private:
 
     // BVH builder
     void bvh_build( BVH_TREE bvh_tree );
-    uint bvh_qsplit( bool for_polys, uint poly_i, uint n, real pivot, uint axis );
-    uint bvh_node( bool for_polys, uint i, uint n, uint axis );
+    uint bvh_qsplit( BVH_NODE_KIND kind, uint poly_i, uint n, real pivot, uint axis );
+    uint bvh_node( BVH_NODE_KIND kind, uint i, uint n, uint axis );
 
     // allocates an array of T on a page boundary
     template<typename T>
@@ -1369,8 +1359,7 @@ Model::Model( std::string                top_file,
     hdr->texture_compression = texture_compression;
     hdr->graph_node_cnt = 1;
     hdr->graph_root_i = uint(-1);
-    hdr->volume_cnt = 1;
-    hdr->volume_segment_cnt = 1;
+    hdr->volume_cnt = 0;
     hdr->volume_grid_cnt = 1;
     hdr->lighting_scale = 1.0;
     hdr->ambient_intensity = real3( 0.1, 0.1, 0.1 );
@@ -1397,7 +1386,6 @@ Model::Model( std::string                top_file,
     max->mipmap_filter	   = mipmap_filter;
     max->graph_node_cnt    = 1;
     max->volume_cnt        = 1;
-    max->volume_segment_cnt= 1;
     max->volume_grid_cnt   = 1;
     max->voxel_cnt         = 1;
     max->tex_cnt     	   = max->mtl_cnt;
@@ -1425,7 +1413,6 @@ Model::Model( std::string                top_file,
     materials         = aligned_alloc<Material>( max->mtl_cnt );
     graph_nodes       = aligned_alloc<Graph_Node>( max->graph_node_cnt );
     volumes           = aligned_alloc<Volume>(   max->volume_cnt );
-    volume_segments   = aligned_alloc<VolumeSegment>( max->volume_segment_cnt );
     volume_grids      = aligned_alloc<VolumeGrid>( max->volume_grid_cnt );
     voxels            = aligned_alloc<unsigned char>( max->voxel_cnt );
     textures          = aligned_alloc<Texture>(  max->tex_cnt );
@@ -1551,7 +1538,6 @@ Model::Model( std::string                top_file,
                     uint64( hdr->mtl_cnt              ) * sizeof( materials[0] ) +
                     uint64( hdr->graph_node_cnt       ) * sizeof( graph_nodes[0] ) +
                     uint64( hdr->volume_cnt           ) * sizeof( volumes[0] ) +
-                    uint64( hdr->volume_segment_cnt   ) * sizeof( volume_segments[0] ) +
                     uint64( hdr->volume_grid_cnt      ) * sizeof( volume_grids[0] ) +
                     uint64( hdr->voxel_cnt            ) * sizeof( voxels[0] ) +
                     uint64( hdr->tex_cnt              ) * sizeof( textures[0] ) +
@@ -1631,7 +1617,6 @@ Model::Model( std::string model_path, bool is_compressed )
         _read( materials,           Material,      hdr->mtl_cnt );
         _read( graph_nodes,         Graph_Node,    hdr->graph_node_cnt );
         _read( volumes,             Volume,        hdr->volume_cnt );
-        _read( volume_segments,     VolumeSegment, hdr->volume_segment_cnt );
         _read( volume_grids,        VolumeGrid,    hdr->volume_grid_cnt );
         _read( voxels,              unsigned char, hdr->voxel_cnt );
         _read( textures,            Texture,       hdr->tex_cnt );
@@ -1691,7 +1676,6 @@ Model::~Model()
         delete materials;
         delete graph_nodes;
         delete volumes;
-        delete volume_segments;
         delete volume_grids;
         delete voxels;
         delete textures;
@@ -1744,7 +1728,6 @@ bool Model::write( std::string model_path, bool is_compressed )
     _write( materials,   	hdr->mtl_cnt       	* sizeof(materials[0]) );
     _write( graph_nodes,   	hdr->graph_node_cnt  	* sizeof(graph_nodes[0]) );
     _write( volumes,            hdr->volume_cnt         * sizeof(volumes[0]) );
-    _write( volume_segments,    hdr->volume_segment_cnt * sizeof(volume_segments[0]) );
     _write( volume_grids,       hdr->volume_grid_cnt    * sizeof(volume_grids[0]) );
     _write( voxels,             hdr->voxel_cnt          * sizeof(voxels[0]) );
     _write( textures,    	hdr->tex_cnt       	* sizeof(textures[0]) );
@@ -1835,7 +1818,6 @@ bool Model::write_uncompressed( std::string model_path )
     _uwrite( materials,   	hdr->mtl_cnt       	* sizeof(materials[0]) );
     _uwrite( graph_nodes,   	hdr->graph_node_cnt  	* sizeof(graph_nodes[0]) );
     _uwrite( volumes,           hdr->volume_cnt         * sizeof(volumes[0]) );
-    _uwrite( volume_segments,   hdr->volume_segment_cnt * sizeof(volume_segments[0]) );
     _uwrite( volume_grids,      hdr->volume_grid_cnt    * sizeof(volume_grids[0]) );
     _uwrite( voxels,            hdr->voxel_cnt          * sizeof(voxels[0]) );
     _uwrite( textures,    	hdr->tex_cnt       	* sizeof(textures[0]) );
@@ -1905,7 +1887,6 @@ bool Model::read_uncompressed( std::string model_path )
     _uread( materials,           Material,      hdr->mtl_cnt );
     _uread( graph_nodes,         Graph_Node,    hdr->graph_node_cnt );
     _uread( volumes,             Volume,        hdr->volume_cnt );
-    _uread( volume_segments,     VolumeSegment, hdr->volume_segment_cnt );
     _uread( volume_grids,        VolumeGrid,    hdr->volume_grid_cnt );
     _uread( voxels,              unsigned char, hdr->voxel_cnt );
     _uread( textures,            Texture,       hdr->tex_cnt );
@@ -3468,8 +3449,8 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
     perhaps_realloc<Volume>( volumes, hdr->volume_cnt, max->volume_cnt, 1 );
     uint volume_i = hdr->volume_cnt++;
     Volume * volume = &volumes[volume_i];
-    volume->segment_cnt = 0;
-    volume->segment_i = hdr->volume_segment_cnt; // first
+    volume->grid_cnt = 0;
+    volume->grid_i = hdr->volume_grid_cnt; // first
 
     //------------------------------------------------------------
     // Parse file.
@@ -3496,17 +3477,9 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
         nvdb += sizeof(SegmentHeader);
         die_assert( header.magic == 0x4244566f6e614eULL, "bad magic number in .nvdb segment header" );
         die_assert( header.major == 14, "bad major number in .nvdb segment header" );
+        volume->grid_cnt += header.grid_cnt;
 
-        //------------------------------------------------------------
-        // Allocate new VolumeSegment.
-        //------------------------------------------------------------
-        perhaps_realloc<VolumeSegment>( volume_segments, hdr->volume_segment_cnt, max->volume_segment_cnt, 1 );
-        uint segment_i = hdr->volume_segment_cnt++;
-        VolumeSegment * segment = &volume_segments[segment_i];
-        segment->grid_cnt = header.grid_cnt;
-        segment->grid_i = hdr->volume_grid_cnt; // first
-
-        for( uint i = 0; i < segment->grid_cnt; i++ )
+        for( uint i = 0; i < header.grid_cnt; i++ )
         {
             //------------------------------------------------------------
             // Parse next GridMetaData.
@@ -4742,6 +4715,14 @@ inline bool Model::Polygon::hit( const Model * model, const real3& origin, const
     return false;
 }
 
+bool Model::VolumeGrid::bounding_box( const Model * model, Model::AABB& box, real padding ) const 
+{
+    (void)model;
+    box = world_box;
+    box.pad( padding );
+    return true;
+}
+
 bool Model::Instance::bounding_box( const Model * model, AABB& b, real padding ) const
 {
     (void)model;
@@ -4797,8 +4778,11 @@ void Model::bvh_build( Model::BVH_TREE bvh_tree )
 {
     (void)bvh_tree;
     if ( hdr->poly_cnt != 0 ) {
-        die_assert( hdr->inst_cnt == 0, "inst_cnt should be 0" );
-        hdr->bvh_root_i = bvh_node( true, 0, hdr->poly_cnt, 1 );
+        //--------------------------------------------------
+        // Build a proper BVH with polygons at the leaves
+        //--------------------------------------------------
+        die_assert( hdr->inst_cnt == 0, "inst_cnt should be 0 when poly_cnt is not 0" );
+        hdr->bvh_root_i = bvh_node( BVH_NODE_KIND::POLYGON, 0, hdr->poly_cnt, 1 );
 
         if ( hdr->emissive_poly_cnt != 0 ) {
             // need to rebuild this due to changes in poly indexes
@@ -4818,82 +4802,116 @@ void Model::bvh_build( Model::BVH_TREE bvh_tree )
                 exit( 1 );
             }
         }
-    } else if ( hdr->inst_cnt != 0 ) {
-        die_assert( hdr->poly_cnt == 0, "poly_cnt should be 0" );
-        hdr->bvh_root_i = bvh_node( false, 0, hdr->inst_cnt, 1 );
+    } else if ( hdr->volume_cnt != 0 ) {
+        //--------------------------------------------------
+        // For grids.
+        //--------------------------------------------------
+        die_assert( hdr->inst_cnt == 0, "inst_cnt should be 0 when volume_cnt is not 0" );
+        hdr->bvh_root_i = bvh_node( BVH_NODE_KIND::VOLUME_GRID, 0, hdr->volume_grid_cnt, 1 );
+
     } else {
-        hdr->bvh_root_i = uint(-1);
+        //--------------------------------------------------
+        // For instances.
+        //--------------------------------------------------
+        die_assert( hdr->inst_cnt != 0, "inst_cnt should be non-zero if poly_cnt and volume_cnt are both 0" );
+        hdr->bvh_root_i = bvh_node( BVH_NODE_KIND::INSTANCE, 0, hdr->inst_cnt, 1 );
     }
 }
 
-inline Model::uint Model::bvh_qsplit( bool for_polys, Model::uint first, Model::uint n, Model::real pivot, Model::uint axis )
+inline Model::uint Model::bvh_qsplit( BVH_NODE_KIND kind, Model::uint first, Model::uint n, Model::real pivot, Model::uint axis )
 {
-   uint m = first;
+    uint m = first;
 
-   for( uint i = first; i < (first+n); i++ )
-   {
-       AABB box;
-       polygons[i].bounding_box( this, box );
-       real centroid = (box.min.c[axis] + box.max.c[axis]) * 0.5;
-       if ( centroid < pivot ) {
-           if ( for_polys ) {
-               Polygon temp = polygons[i];
-               polygons[i]  = polygons[m];
-               polygons[m]  = temp;
-           } else {
-               Instance temp = instances[i];
-               instances[i]  = instances[m];
-               instances[m]  = temp;
-           }
-           m++;
-       }
-    }
+    for( uint i = first; i < (first+n); i++ )
+    {
+        AABB box;
+        polygons[i].bounding_box( this, box );
+        real centroid = (box.min.c[axis] + box.max.c[axis]) * 0.5;
+        if ( centroid < pivot ) {
+            switch( kind )
+            {
+                case BVH_NODE_KIND::POLYGON:
+                {
+                    Polygon temp = polygons[i];
+                    polygons[i]  = polygons[m];
+                    polygons[m]  = temp;
+                    break;
+                }
+                case BVH_NODE_KIND::VOLUME_GRID:
+                {
+                    VolumeGrid temp = volume_grids[i];
+                    volume_grids[i]  = volume_grids[m];
+                    volume_grids[m]  = temp;
+                    break;
+                }
+                case BVH_NODE_KIND::INSTANCE:
+                {
+                    Instance temp = instances[i];
+                    instances[i]  = instances[m];
+                    instances[m]  = temp;
+                }
+                default:
+                {
+                    die_assert( false, "unexpected BVH_NODE_KIND" );
+                    break;
+                }
+            }
+            m++;
+         }
+     }
 
-    die_assert( m >= first && m <= (first+n), "qsplit has gone mad" );
-    if ( m == first || m == (first +n) ) m = first + n/2;
-    return m;
+     die_assert( m >= first && m <= (first+n), "qsplit has gone mad" );
+     if ( m == first || m == (first +n) ) m = first + n/2;
+     return m;
 }
 
-Model::uint Model::bvh_node( bool for_polys, Model::uint first, Model::uint n, Model::uint axis ) 
+Model::uint Model::bvh_node( BVH_NODE_KIND kind, Model::uint first, Model::uint n, Model::uint axis ) 
 {
     perhaps_realloc( bvh_nodes, hdr->bvh_node_cnt, max->bvh_node_cnt, 1 );
     uint bvh_i = hdr->bvh_node_cnt++;
     BVH_Node * node = &bvh_nodes[bvh_i];
 
-    if ( for_polys ) {
-        polygons[first].bounding_box( this, node->box );
-    } else {
-        instances[first].bounding_box( this, node->box );
+    switch( kind )
+    {
+        case BVH_NODE_KIND::POLYGON:                polygons[first+0].bounding_box( this, node->box );          break;
+        case BVH_NODE_KIND::VOLUME_GRID:            volume_grids[first+0].bounding_box( this, node->box );      break;
+        case BVH_NODE_KIND::INSTANCE:               instances[first+0].bounding_box( this, node->box );         break;
+        default:                                    die_assert( false, "unexpected BVH_NODE_KIND" );            break;
     }
+
+    AABB new_box;
     for( uint i = 1; i < n; i++ )
     {
-        AABB new_box;
-        if ( for_polys ) {
-            polygons[first+i].bounding_box( this, new_box );
-        } else {
-            instances[first+i].bounding_box( this, new_box );
+        switch( kind )
+        {
+            case BVH_NODE_KIND::POLYGON:                polygons[first+i].bounding_box( this, new_box );        break;
+            case BVH_NODE_KIND::VOLUME_GRID:            volume_grids[first+i].bounding_box( this, new_box );    break;
+            case BVH_NODE_KIND::INSTANCE:               instances[first+i].bounding_box( this, new_box );       break;
+            default:                                    die_assert( false, "unexpected BVH_NODE_KIND" );        break;
         }
         node->box.expand( new_box );
     }
 
     if ( n == 1 || n == 2 ) {
         node->left_i = first;
-        AABB new_box;
-        if ( for_polys ) {
-            node->left_kind  = Model::BVH_NODE_KIND::POLYGON;
-            node->right_kind = Model::BVH_NODE_KIND::POLYGON;
-            polygons[first+0].bounding_box( this, new_box );
-        } else {
-            node->left_kind  = Model::BVH_NODE_KIND::INSTANCE;
-            node->right_kind = Model::BVH_NODE_KIND::INSTANCE;
-            instances[first+0].bounding_box( this, new_box );
+        node->left_kind  = kind;
+        node->right_kind = kind;
+
+        switch( kind )
+        {
+            case BVH_NODE_KIND::POLYGON:                polygons[first+0].bounding_box( this, new_box );        break;
+            case BVH_NODE_KIND::VOLUME_GRID:            volume_grids[first+0].bounding_box( this, new_box );    break;
+            case BVH_NODE_KIND::INSTANCE:               instances[first+0].bounding_box( this, new_box );       break;
+            default:                                    die_assert( false, "unexpected BVH_NODE_KIND" );        break;
         }
         die_assert( node->box.encloses( new_box ), "box should enclose new_box" );
         if ( n == 2 ) {
-            if ( for_polys ) {
-                polygons[first+1].bounding_box( this, new_box );
-            } else {
-                instances[first+1].bounding_box( this, new_box );
+            switch( kind )
+            {
+                case BVH_NODE_KIND::POLYGON:                polygons[first+1].bounding_box( this, new_box );        break;
+                case BVH_NODE_KIND::VOLUME_GRID:            volume_grids[first+1].bounding_box( this, new_box );    break;
+                case BVH_NODE_KIND::INSTANCE:               instances[first+1].bounding_box( this, new_box );       break;
+                default:                                    die_assert( false, "unexpected BVH_NODE_KIND" );        break;
             }
             die_assert( node->box.encloses( new_box ), "box should enclose new_box" );
             node->right_i = first + 1;
@@ -4905,10 +4923,10 @@ Model::uint Model::bvh_node( bool for_polys, Model::uint first, Model::uint n, M
         node->left_kind = Model::BVH_NODE_KIND::BVH_NODE;
         node->right_kind = Model::BVH_NODE_KIND::BVH_NODE;
         real pivot = (node->box.min.c[axis] + node->box.max.c[axis]) * 0.5;
-        uint m = bvh_qsplit( for_polys, first, n, pivot, axis );
+        uint m = bvh_qsplit( kind, first, n, pivot, axis );
         uint nm = m - first;
-        uint left_i  = bvh_node( for_polys, first, nm,   (axis + 1) % 3 );
-        uint right_i = bvh_node( for_polys, m,     n-nm, (axis + 1) % 3 );
+        uint left_i  = bvh_node( kind, first, nm,   (axis + 1) % 3 );
+        uint right_i = bvh_node( kind, m,     n-nm, (axis + 1) % 3 );
         node = &bvh_nodes[bvh_i];  // could change after previous calls
         node->left_i  = left_i;
         node->right_i = right_i;

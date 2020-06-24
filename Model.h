@@ -545,6 +545,8 @@ public:
         uint64          voxel_i;                // index into voxels[] of first voxel 
 
         bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
+        bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
+                  real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const;
     };
 
     class Texture
@@ -4544,7 +4546,7 @@ bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real p
     return true;
 }
 
-inline bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
+bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
         real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const
 {
     (void)direction_inv;
@@ -4721,6 +4723,20 @@ bool Model::VolumeGrid::bounding_box( const Model * model, Model::AABB& box, rea
     box = world_box;
     box.pad( padding );
     return true;
+}
+
+bool Model::VolumeGrid::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
+        real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const
+{
+    (void)model;
+    (void)origin;
+    (void)direction;
+    (void)direction_inv;
+    (void)solid_angle;
+    (void)t_min;
+    (void)t_max;
+    (void)hit_info;
+    return false;
 }
 
 bool Model::Instance::bounding_box( const Model * model, AABB& b, real padding ) const

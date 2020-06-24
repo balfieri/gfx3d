@@ -36,6 +36,11 @@ int main( int argc, const char * argv[] )
     print( "mtl_cnt:                " + std::to_string( model->hdr->mtl_cnt ) );
     print( "tex_cnt:                " + std::to_string( model->hdr->tex_cnt ) );
     print( "texel_cnt:              " + std::to_string( model->hdr->texel_cnt ) );
+    print( "graph_node_cnt:         " + std::to_string( model->hdr->graph_node_cnt ) );
+    print( "volume_cnt:             " + std::to_string( model->hdr->volume_cnt ) );
+    print( "volume_segment_cnt:     " + std::to_string( model->hdr->volume_segment_cnt ) );
+    print( "volume_grid_cnt:        " + std::to_string( model->hdr->volume_grid_cnt ) );
+    print( "voxel_cnt:              " + std::to_string( model->hdr->voxel_cnt ) );
     print( "bvh_node_cnt:           " + std::to_string( model->hdr->bvh_node_cnt ) );
     print( "matrix_cnt:             " + std::to_string( model->hdr->matrix_cnt ) );
     print( "inst_cnt:               " + std::to_string( model->hdr->inst_cnt ) );

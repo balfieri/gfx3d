@@ -7,10 +7,13 @@ graphics and rendering as the POLICY.
 It also reads in any textures that are listed in the .mtl files and supports ASTC compression.
 It can optionally generate mipmaps, and it can also generate a BVH tree for ray tracing.
 
+It can read in NanoVDB volumetric databases, which is a simple format derived from OpenVDB that NVidia is
+in the process of open-sourcing.
+
 The implementation uses a hand-optimized parser and can also write out a single compressed or uncompressed .model file, 
 the latter of which can be loaded instantaneously without translation.
 
-The implementation allocates contiguous arrays (instances, objects, polygons, vertexes, positions, normals, texcoords, materials, textures, texels, strings) that contain no pointers, only indices into other arrays.  This means that the arrays can be copied to a GPU without editing.  They can also be stored directly to a binary file.  A hdr structure holds the lengths of the arrays.  hdr->byte_cnt is set to the total number of bytes in the header and arrays.
+The implementation allocates contiguous arrays (instances, objects, polygons, vertexes, positions, normals, texcoords, materials, textures, texels, strings, volumes, volume_segments, volume_grids, voxels) that contain no pointers, only indices into other arrays.  This means that the arrays can be copied to a GPU without editing.  They can also be stored directly to a binary file.  A hdr structure holds the lengths of the arrays.  hdr->byte_cnt is set to the total number of bytes in the header and arrays (excluding any padding in the file).
 
 The Instance type allows instancing over other models, including a 4x4 Matrix transformation.
 
@@ -31,8 +34,7 @@ stb_image_write.h so you don't have to worry about that.  Their licensing inform
 There are some limitations:
 
 1) It does not implement all .obj features.  In particular, it does not implement curves or ad hoc vertex attributes.
-2) It does not implement volumentric databases, but that is coming soon.
-3) It does not support FBX files, but the graphics world seems to be standardizing on USD, so USD will get added first. 
+2) It does not support FBX files, but the graphics world seems to be standardizing on USD, so USD will get added first and we might just skip FBX.
 
 Bob Alfieri<br>
 Chapel Hill, NC

@@ -138,14 +138,15 @@
 #include <string.h>
 #include <zlib.h>
 
-// forward decls for stb_image (used by Model methods)
+// forward decls for stb_image (some used by Model methods)
 typedef unsigned char stbi_uc;
 #define STBIDEF 
-STBIDEF stbi_uc *stbi_load     (char const *filename, int *x, int *y, int *comp, int req_comp);
+STBIDEF stbi_uc *stbi_load(char const *filename, int *x, int *y, int *comp, int req_comp);
 STBIDEF int      stbi_write_png(char const *filename, int w, int h, int comp, const void  *data, int stride_in_bytes);
 STBIDEF int      stbi_write_bmp(char const *filename, int w, int h, int comp, const void  *data);
 STBIDEF int      stbi_write_tga(char const *filename, int w, int h, int comp, const void  *data);
 STBIDEF int      stbi_write_hdr(char const *filename, int w, int h, int comp, const float *data);
+STBIDEF void     stbi_image_free(void *retval_from_stbi_load);  
 
 // default scalar types used throughout
 #ifndef MODEL_INT_TYPE
@@ -159,6 +160,9 @@ STBIDEF int      stbi_write_hdr(char const *filename, int w, int h, int comp, co
 #endif
 #ifndef MODEL_REAL_TYPE
 #define MODEL_REAL_TYPE float
+#endif
+#ifndef MODEL_REAL64_TYPE
+#define MODEL_REAL64_TYPE double
 #endif
 
 // user-definable RNG function used in a few places
@@ -176,6 +180,7 @@ public:
     typedef MODEL_UINT_TYPE   uint;                 
     typedef MODEL_UINT64_TYPE uint64;              
     typedef MODEL_REAL_TYPE   real;
+    typedef MODEL_REAL64_TYPE real64;
 
     enum class MIPMAP_FILTER
     {
@@ -315,7 +320,7 @@ public:
         MIPMAP_FILTER mipmap_filter;        // if NONE, there are no mip levels beyond level 0
         uint64      mtl_cnt;                // in materials array
         uint64      tex_cnt;                // in textures array
-        uint64      texel_cnt;              // in texels array  (last in file)
+        uint64      texel_cnt;              // in texels array  
 
         uint64      graph_node_cnt;         // in graph_nodes array
         uint64      graph_root_i;           // index of root Graph_Node in graph_nodes array
@@ -349,7 +354,12 @@ public:
         uint64      animation_cnt;          // in animations array
         real        animation_speed;        // divide frame time by this to get real time (default: 1.0)
 
-        uint64_t    unused[8];              // leave room for temporary hacks
+        uint64      volume_cnt;             // in volumes[] array
+        uint64      volume_segment_cnt;     // in volume_segments[] array
+        uint64      volume_grid_cnt;        // in volume_grids[] array
+        uint64      voxel_cnt;              // in voxels[] array  
+
+        uint64_t    unused[4];              // leave room for temporary hacks
     };
 
     class Object
@@ -392,6 +402,13 @@ public:
         void expand( const real3& p );
         bool encloses( const AABB& other ) const;
         bool hit( const real3& origin, const real3& direction, const real3& direction_inv, real tmin, real tmax ) const; 
+    };
+
+    class AABBI                             // axis aligned bounding box with integers
+    {
+    public:
+        _int            min[3];             // bounding box min
+        _int            max[3];             // bounding box max
     };
 
     class Polygon
@@ -478,6 +495,67 @@ public:
     };
 
     uint gph_node_alloc( Model::GRAPH_NODE_KIND kind, uint parent_i=uint(-1) );
+
+    // Volume - made up of one or more VolumeSegment
+    //
+    class Volume
+    {
+    public:
+        uint            name_i;                 // index in strings array (null-terminated strings)
+        uint            segment_cnt;            // number of segments
+        uint            segment_i;              // index into volume_segments[] array of first segment
+
+        std::string str( const Model * model, std::string indent="" ) const;       // recursive
+    };
+
+    // VolumeSegment - made up of one or more VolumeGrid
+    //
+    class VolumeSegment
+    {
+    public:
+        uint            grid_cnt;               // number of grids
+        uint            grid_i;                 // index into volume_grids[] array of first grid
+
+        std::string str( const Model * model, std::string indent="" ) const;       // recursive
+    };
+
+    // VolumeGrid - made up of one or more VolumeGrid
+    //
+    enum class VolumeGridType : uint16_t
+    {
+        UNKNOWN = 0, 
+        FLOAT   = 1, 
+        DOUBLE  = 2, 
+        INT16   = 3,
+        INT32   = 4, 
+        INT64   = 5, 
+        VEC3F   = 6, 
+        VEC3D   = 7,
+        MASK    = 8, 
+        FP16    = 9
+    };
+
+    enum class VolumeGridClass : uint16_t
+    {
+        UNKNOWN   = 0, 
+        LEVELSET  = 1, 
+        FOGVOLUME = 2, 
+        STAGGERED = 3
+    };
+
+    class VolumeGrid
+    {
+    public:
+        uint            name_i;                 // index in strings[] array (null-terminated strings)
+        uint64          voxel_cnt;              // number of active voxels
+        VolumeGridType  voxel_type;             // voxel data type (float, double, etc.)
+        VolumeGridClass grid_class;             // class of grid (level set, fog, staggered)
+        uint            node_cnt[4];            // not sure yet what this is for
+        AABB            world_box;              // AABB in world space
+        AABBI           index_box;              // AABB in index space
+        real64          world_voxel_size;       // size of voxel in world units
+        uint64          voxel_i;                // index into voxels[] of first voxel 
+    };
 
     class Texture
     {
@@ -773,6 +851,7 @@ public:
     bool parse_real3( real3& r3, char *& xxx, char *& xxx_end, bool has_brackets=false );
     bool parse_real2( real2& r2, char *& xxx, char *& xxx_end, bool has_brackets=false );
     bool parse_real( real& r, char *& xxx, char *& xxx_end, bool skip_whitespace_first=false );
+    bool parse_real64( real64& r, char *& xxx, char *& xxx_end, bool skip_whitespace_first=false );
     bool parse_int( _int& i, char *& xxx, char *& xxx_end );
     bool parse_uint( uint& u, char *& xxx, char *& xxx_end );
     bool parse_bool( bool& b, char *& xxx, char *& xxx_end );
@@ -794,6 +873,10 @@ public:
     real2 *             texcoords;
     Material *          materials;
     Graph_Node *        graph_nodes;
+    Volume *            volumes;
+    VolumeSegment *     volume_segments;
+    VolumeGrid *        volume_grids;
+    unsigned char *     voxels;
     Texture *           textures;
     unsigned char *     texels;
     BVH_Node *          bvh_nodes;
@@ -889,12 +972,16 @@ private:
     char * gph_start;
     char * gph_end;
     char * gph;
+    char * nvdb_start;
+    char * nvdb_end;
+    char * nvdb;
 
     bool load_fsc( std::string fsc_file, std::string dir_name );        // .fscene 
     bool load_obj( std::string obj_file, std::string dir_name );        // .obj
     bool load_mtl( std::string mtl_file, std::string dir_name, bool replacing=false );
     bool load_tex( const char * tex_name, std::string dir_name, Texture *& texture );
     bool load_gph( std::string gph_file, std::string dir_name, std::string base_name, std::string ext_name );
+    bool load_nvdb( std::string nvdb_file, std::string dir_name, std::string base_name, std::string ext_name );
 
     bool parse_obj_cmd( obj_cmd_t& cmd );
     bool parse_mtl_cmd( mtl_cmd_t& cmd, char *& mtl, char *& mtl_end );
@@ -1282,6 +1369,9 @@ Model::Model( std::string                top_file,
     hdr->texture_compression = texture_compression;
     hdr->graph_node_cnt = 1;
     hdr->graph_root_i = uint(-1);
+    hdr->volume_cnt = 1;
+    hdr->volume_segment_cnt = 1;
+    hdr->volume_grid_cnt = 1;
     hdr->lighting_scale = 1.0;
     hdr->ambient_intensity = real3( 0.1, 0.1, 0.1 );
     hdr->sky_box_tex_i = uint(-1);
@@ -1306,6 +1396,10 @@ Model::Model( std::string                top_file,
     max->texcoord_cnt	   = max->vtx_cnt;
     max->mipmap_filter	   = mipmap_filter;
     max->graph_node_cnt    = 1;
+    max->volume_cnt        = 1;
+    max->volume_segment_cnt= 1;
+    max->volume_grid_cnt   = 1;
+    max->voxel_cnt         = 1;
     max->tex_cnt     	   = max->mtl_cnt;
     max->texel_cnt   	   = max->mtl_cnt * 128*1024;
     max->char_cnt    	   = max->obj_cnt * 128;
@@ -1330,6 +1424,10 @@ Model::Model( std::string                top_file,
     texcoords         = aligned_alloc<real2>(    max->texcoord_cnt );
     materials         = aligned_alloc<Material>( max->mtl_cnt );
     graph_nodes       = aligned_alloc<Graph_Node>( max->graph_node_cnt );
+    volumes           = aligned_alloc<Volume>(   max->volume_cnt );
+    volume_segments   = aligned_alloc<VolumeSegment>( max->volume_segment_cnt );
+    volume_grids      = aligned_alloc<VolumeGrid>( max->volume_grid_cnt );
+    voxels            = aligned_alloc<unsigned char>( max->voxel_cnt );
     textures          = aligned_alloc<Texture>(  max->tex_cnt );
     texels            = aligned_alloc<unsigned char>( max->texel_cnt );
     bvh_nodes         = aligned_alloc<BVH_Node>( max->bvh_node_cnt );
@@ -1353,6 +1451,8 @@ Model::Model( std::string                top_file,
         if ( !load_fsc( top_file, dir_name ) ) return;
     } else if ( ext_name == std::string( ".gph" ) ) {
         if ( !load_gph( top_file, dir_name, base_name, ext_name ) ) return;
+    } else if ( ext_name == std::string( ".nvdb" ) ) {
+        if ( !load_nvdb( top_file, dir_name, base_name, ext_name ) ) return;
     } else {
         error_msg = "unknown top file ext_name: " + ext_name;
         return;
@@ -1438,7 +1538,7 @@ Model::Model( std::string                top_file,
     if ( bvh_tree != BVH_TREE::NONE ) bvh_build( bvh_tree );
 
     //------------------------------------------------------------
-    // Add up byte count.
+    // Add up byte count (excluding any padding).
     //------------------------------------------------------------
     hdr->byte_cnt = uint64( 1                         ) * sizeof( hdr ) +
                     uint64( hdr->obj_cnt              ) * sizeof( objects[0] ) +
@@ -1450,6 +1550,10 @@ Model::Model( std::string                top_file,
                     uint64( hdr->texcoord_cnt         ) * sizeof( texcoords[0] ) +
                     uint64( hdr->mtl_cnt              ) * sizeof( materials[0] ) +
                     uint64( hdr->graph_node_cnt       ) * sizeof( graph_nodes[0] ) +
+                    uint64( hdr->volume_cnt           ) * sizeof( volumes[0] ) +
+                    uint64( hdr->volume_segment_cnt   ) * sizeof( volume_segments[0] ) +
+                    uint64( hdr->volume_grid_cnt      ) * sizeof( volume_grids[0] ) +
+                    uint64( hdr->voxel_cnt            ) * sizeof( voxels[0] ) +
                     uint64( hdr->tex_cnt              ) * sizeof( textures[0] ) +
                     uint64( hdr->texel_cnt            ) * sizeof( texels[0] ) +
                     uint64( hdr->char_cnt             ) * sizeof( strings[0] ) + 
@@ -1526,6 +1630,10 @@ Model::Model( std::string model_path, bool is_compressed )
         _read( texcoords,           real2,         hdr->texcoord_cnt );
         _read( materials,           Material,      hdr->mtl_cnt );
         _read( graph_nodes,         Graph_Node,    hdr->graph_node_cnt );
+        _read( volumes,             Volume,        hdr->volume_cnt );
+        _read( volume_segments,     VolumeSegment, hdr->volume_segment_cnt );
+        _read( volume_grids,        VolumeGrid,    hdr->volume_grid_cnt );
+        _read( voxels,              unsigned char, hdr->voxel_cnt );
         _read( textures,            Texture,       hdr->tex_cnt );
         _read( texels,              unsigned char, hdr->texel_cnt );
         _read( bvh_nodes,           BVH_Node,      hdr->bvh_node_cnt );
@@ -1582,6 +1690,10 @@ Model::~Model()
         delete texcoords;
         delete materials;
         delete graph_nodes;
+        delete volumes;
+        delete volume_segments;
+        delete volume_grids;
+        delete voxels;
         delete textures;
         delete texels;
         delete bvh_nodes;
@@ -1631,6 +1743,10 @@ bool Model::write( std::string model_path, bool is_compressed )
     _write( texcoords,          hdr->texcoord_cnt       * sizeof(texcoords[0]) );
     _write( materials,   	hdr->mtl_cnt       	* sizeof(materials[0]) );
     _write( graph_nodes,   	hdr->graph_node_cnt  	* sizeof(graph_nodes[0]) );
+    _write( volumes,            hdr->volume_cnt         * sizeof(volumes[0]) );
+    _write( volume_segments,    hdr->volume_segment_cnt * sizeof(volume_segments[0]) );
+    _write( volume_grids,       hdr->volume_grid_cnt    * sizeof(volume_grids[0]) );
+    _write( voxels,             hdr->voxel_cnt          * sizeof(voxels[0]) );
     _write( textures,    	hdr->tex_cnt       	* sizeof(textures[0]) );
     _write( texels,      	hdr->texel_cnt     	* sizeof(texels[0]) );
     _write( bvh_nodes,   	hdr->bvh_node_cnt  	* sizeof(bvh_nodes[0]) );
@@ -1718,6 +1834,10 @@ bool Model::write_uncompressed( std::string model_path )
     _uwrite( texcoords,         hdr->texcoord_cnt       * sizeof(texcoords[0]) );
     _uwrite( materials,   	hdr->mtl_cnt       	* sizeof(materials[0]) );
     _uwrite( graph_nodes,   	hdr->graph_node_cnt  	* sizeof(graph_nodes[0]) );
+    _uwrite( volumes,           hdr->volume_cnt         * sizeof(volumes[0]) );
+    _uwrite( volume_segments,   hdr->volume_segment_cnt * sizeof(volume_segments[0]) );
+    _uwrite( volume_grids,      hdr->volume_grid_cnt    * sizeof(volume_grids[0]) );
+    _uwrite( voxels,            hdr->voxel_cnt          * sizeof(voxels[0]) );
     _uwrite( textures,    	hdr->tex_cnt       	* sizeof(textures[0]) );
     _uwrite( texels,      	hdr->texel_cnt     	* sizeof(texels[0]) );
     _uwrite( bvh_nodes,   	hdr->bvh_node_cnt  	* sizeof(bvh_nodes[0]) );
@@ -1784,6 +1904,10 @@ bool Model::read_uncompressed( std::string model_path )
     _uread( texcoords,           real2,         hdr->texcoord_cnt );
     _uread( materials,           Material,      hdr->mtl_cnt );
     _uread( graph_nodes,         Graph_Node,    hdr->graph_node_cnt );
+    _uread( volumes,             Volume,        hdr->volume_cnt );
+    _uread( volume_segments,     VolumeSegment, hdr->volume_segment_cnt );
+    _uread( volume_grids,        VolumeGrid,    hdr->volume_grid_cnt );
+    _uread( voxels,              unsigned char, hdr->voxel_cnt );
     _uread( textures,            Texture,       hdr->tex_cnt );
     _uread( texels,              unsigned char, hdr->texel_cnt );
     _uread( bvh_nodes,           BVH_Node,      hdr->bvh_node_cnt );
@@ -3306,7 +3430,7 @@ bool Model::load_gph( std::string gph_file, std::string dir_name, std::string ba
 uint Model::gph_node_alloc( Model::GRAPH_NODE_KIND kind, uint parent_i )
 {
     //mdout << "new node: kind=" << kind << "\n";
-    perhaps_realloc( graph_nodes, hdr->graph_node_cnt, max->graph_node_cnt, 1 );
+    perhaps_realloc<Graph_Node>( graph_nodes, hdr->graph_node_cnt, max->graph_node_cnt, 1 );
     uint node_i = hdr->graph_node_cnt++;
     Graph_Node * node = &graph_nodes[node_i];
     node->kind = kind;
@@ -3326,6 +3450,144 @@ uint Model::gph_node_alloc( Model::GRAPH_NODE_KIND kind, uint parent_i )
         }
     }
     return node_i;
+}
+
+bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string base_name, std::string ext_name )
+{
+    (void)dir_name;
+    (void)base_name;
+    (void)ext_name;
+
+    //------------------------------------------------------------
+    // Map in .nvdb file
+    //------------------------------------------------------------
+    line_num = 1;
+    if ( !file_read( nvdb_file, nvdb_start, nvdb_end ) ) return false;
+    nvdb = nvdb_start;
+
+    perhaps_realloc<Volume>( volumes, hdr->volume_cnt, max->volume_cnt, 1 );
+    uint volume_i = hdr->volume_cnt++;
+    Volume * volume = &volumes[volume_i];
+    volume->segment_cnt = 0;
+    volume->segment_i = hdr->volume_segment_cnt; // first
+
+    //------------------------------------------------------------
+    // Parse file.
+    //------------------------------------------------------------
+    while( nvdb != nvdb_end ) 
+    {
+        //------------------------------------------------------------
+        // Parse next segment header.
+        //------------------------------------------------------------
+        enum class Codec : uint16_t { NONE = 0, ZIP = 1, BLOSC = 2, END = 3 };
+
+        struct SegmentHeader  // in the file
+        {
+            uint64_t    magic;
+            uint16_t    major;
+            uint16_t    minor;
+            uint16_t    grid_cnt;
+            Codec       codec;
+        };
+        die_assert( sizeof(SegmentHeader) == 16, "unexpected SegmentHeader size" );
+        die_assert( size_t(nvdb_end-nvdb) >= sizeof(SegmentHeader), "can't read SegmentHeader - not enough bytes in .nvdb file" );
+        SegmentHeader header;
+        memcpy( &header, nvdb, sizeof(SegmentHeader) );
+        nvdb += sizeof(SegmentHeader);
+        die_assert( header.magic == 0x4244566f6e614eULL, "bad magic number in .nvdb segment header" );
+        die_assert( header.major == 14, "bad major number in .nvdb segment header" );
+
+        //------------------------------------------------------------
+        // Allocate new VolumeSegment.
+        //------------------------------------------------------------
+        perhaps_realloc<VolumeSegment>( volume_segments, hdr->volume_segment_cnt, max->volume_segment_cnt, 1 );
+        uint segment_i = hdr->volume_segment_cnt++;
+        VolumeSegment * segment = &volume_segments[segment_i];
+        segment->grid_cnt = header.grid_cnt;
+        segment->grid_i = hdr->volume_grid_cnt; // first
+
+        for( uint i = 0; i < segment->grid_cnt; i++ )
+        {
+            //------------------------------------------------------------
+            // Parse next GridMetaData.
+            //------------------------------------------------------------
+            struct AABB64
+            {
+                real64          min[3];
+                real64          max[3];
+            };
+
+            struct AABBI32
+            {
+                int32_t         min[3];
+                int32_t         max[3];
+            };
+
+            struct GridMetaData   // in the file
+            {
+                uint64_t        grid_size; 
+                uint64_t        file_size; 
+                uint64_t        name_key; 
+                uint64_t        voxel_cnt;
+                VolumeGridType  grid_type;
+                VolumeGridClass grid_class;
+                uint32_t        name_size;      // includes \0
+                uint32_t        node_cnt[4];
+                AABB64          world_box;
+                AABBI32         index_box;
+                double          voxel_size;
+            };
+            die_assert( sizeof(GridMetaData) == 136, "unexpected GridMetaData size" );
+            die_assert( size_t(nvdb_end-nvdb) >= sizeof(GridMetaData), "can't read GridMetaData - not enough bytes in .nvdb file" );
+            GridMetaData meta;
+            memcpy( &meta, nvdb, sizeof(GridMetaData) );
+            nvdb += sizeof(GridMetaData);
+
+            die_assert( meta.name_size > 0, "name_size=0 in GridMetaData in .nvdb file" );
+            std::string name( nvdb );
+            nvdb += meta.name_size;
+            uint name_i = string_alloc( name );
+
+            //------------------------------------------------------------
+            // Allocate new VolumeGrid and fill in header information.
+            //------------------------------------------------------------
+            perhaps_realloc<VolumeGrid>( volume_grids, hdr->volume_grid_cnt, max->volume_grid_cnt, 1 );
+            uint grid_i = hdr->volume_grid_cnt++;
+            VolumeGrid * grid = &volume_grids[grid_i];
+            grid->name_i = name_i;
+            grid->voxel_cnt = meta.voxel_cnt;
+            grid->voxel_type = meta.grid_type;
+            grid->grid_class = meta.grid_class;
+            for( uint j = 0; j < 4; j++ ) 
+            { 
+                grid->node_cnt[j] = meta.node_cnt[j];
+                if ( j < 3 ) {
+                    grid->world_box.min.c[j] = meta.world_box.min[j];
+                    grid->world_box.max.c[j] = meta.world_box.max[j];
+                    grid->index_box.min[j] = meta.index_box.min[j];
+                    grid->index_box.max[j] = meta.index_box.max[j];
+                }
+            }
+            grid->world_voxel_size = meta.voxel_size;
+
+            //------------------------------------------------------------
+            // Copy voxel data which is variable size.
+            // We always align this on an 8B boundary in the voxels[] array.
+            // Each voxels[] element is one byte even though each voxel in our
+            // grid will typically consume multiple bytes.
+            //------------------------------------------------------------
+            die_assert( header.codec == Codec::NONE, ".nvdb files must be uncompressed for now" );
+            die_assert( meta.file_size == meta.grid_size, "uncompressed grids must have equal file_size and grid_size" );
+            uint64_t alloc_voxel_cnt = ((meta.grid_size+7)/8) * 8;
+            perhaps_realloc<unsigned char>( voxels, hdr->voxel_cnt, max->voxel_cnt, alloc_voxel_cnt );
+            grid->voxel_i = hdr->voxel_cnt;
+            hdr->voxel_cnt += alloc_voxel_cnt;
+
+            memcpy( &voxels[grid->voxel_i], nvdb, meta.grid_size );
+            nvdb += meta.file_size;
+        }
+    }
+    return true;
 }
 
 //--------------------------------------------------------------------------------------
@@ -4556,9 +4818,11 @@ void Model::bvh_build( Model::BVH_TREE bvh_tree )
                 exit( 1 );
             }
         }
-    } else {
-        die_assert( hdr->inst_cnt != 0 && hdr->poly_cnt == 0, "poly_cnt should be 0" );
+    } else if ( hdr->inst_cnt != 0 ) {
+        die_assert( hdr->poly_cnt == 0, "poly_cnt should be 0" );
         hdr->bvh_root_i = bvh_node( false, 0, hdr->inst_cnt, 1 );
+    } else {
+        hdr->bvh_root_i = uint(-1);
     }
 }
 
@@ -5458,7 +5722,15 @@ inline bool Model::parse_real2( Model::real2& r2, char *& xxx, char *& xxx_end, 
            (!has_brackets || expect_char( ']', xxx, xxx_end, true ));
 }
 
-inline bool Model::parse_real( Model::real& r, char *& xxx, char *& xxx_end, bool skip_whitespace_first )
+inline bool Model::parse_real( Model::real& r, char *& xxx, char *& xxx_end, bool skip_whitespace_first ) 
+{
+    Model::real64 r64;
+    if ( !parse_real64( r64, xxx, xxx_end, skip_whitespace_first ) ) return false;
+    r = r64;
+    return true;
+}
+
+inline bool Model::parse_real64( Model::real64& r64, char *& xxx, char *& xxx_end, bool skip_whitespace_first )
 {
     if ( skip_whitespace_first ) skip_whitespace( xxx, xxx_end );   // can span lines unlike below
     std::string s = "";
@@ -5477,8 +5749,7 @@ inline bool Model::parse_real( Model::real& r, char *& xxx, char *& xxx_end, boo
             xxx++;
             if ( xxx == xxx_end || (*xxx != 'n' && *xxx != 'N') ) return false;
             xxx++;
-            //r = std::nan( "1" );
-            r = 0.0;                    // make them zeros
+            r64 = 0.0;                    // make them zeros
             return true;
         }
 
@@ -5514,7 +5785,7 @@ inline bool Model::parse_real( Model::real& r, char *& xxx, char *& xxx_end, boo
 
     rtn_assert( s.length() != 0, "unable to parse real in file " + surrounding_lines( xxx, xxx_end ) );
 
-    r = std::atof( s.c_str() );
+    r64 = std::atof( s.c_str() );
     dprint( "real=" + std::to_string( r ) );
     return true;
 }
@@ -7820,9 +8091,6 @@ STBIDEF int      stbi_is_hdr_from_file(FILE *f);
 // get a VERY brief reason for failure
 // NOT THREADSAFE
 STBIDEF const char *stbi_failure_reason  (void);
-
-// free the loaded image -- this is just free()
-STBIDEF void     stbi_image_free      (void *retval_from_stbi_load);
 
 // get image dimensions & components without fully decoding
 STBIDEF int      stbi_info_from_memory(stbi_uc *buffer, int len, int *x, int *y, int *comp);

@@ -1362,7 +1362,7 @@ Model::Model( std::string                top_file,
     hdr->graph_node_cnt = 1;
     hdr->graph_root_i = uint(-1);
     hdr->volume_cnt = 0;
-    hdr->volume_grid_cnt = 1;
+    hdr->volume_grid_cnt = 0;
     hdr->lighting_scale = 1.0;
     hdr->ambient_intensity = real3( 0.1, 0.1, 0.1 );
     hdr->sky_box_tex_i = uint(-1);
@@ -4962,19 +4962,23 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
     if ( box.hit( origin, direction, direction_inv, t_min, t_max ) ) {
         HitInfo left_hit_info;
         HitInfo right_hit_info;
-        bool hit_left  = (left_kind == BVH_NODE_KIND::POLYGON)   ? model->polygons[left_i].hit(    model, origin, direction, direction_inv,   
-                                                                                                   solid_angle, t_min, t_max, left_hit_info  ) :
-                         (left_kind == BVH_NODE_KIND::INSTANCE)  ? model->instances[left_i].hit(   model, origin, direction, direction_inv, 
-                                                                                                   solid_angle, t_min, t_max, left_hit_info  ) :
-                                                                   model->bvh_nodes[left_i].hit(   model, origin, direction, direction_inv, 
-                                                                                                   solid_angle, t_min, t_max, left_hit_info  );
-        bool hit_right = (left_i == right_i)                     ? false :   // lone leaf
-                         (right_kind == BVH_NODE_KIND::POLYGON)  ? model->polygons[right_i].hit(   model, origin, direction, direction_inv, 
-                                                                                                   solid_angle, t_min, t_max, right_hit_info ) :
-                         (right_kind == BVH_NODE_KIND::INSTANCE) ? model->instances[right_i].hit(  model, origin, direction, direction_inv, 
-                                                                                                   solid_angle, t_min, t_max, right_hit_info ) :
-                                                                   model->bvh_nodes[right_i].hit(  model, origin, direction, direction_inv, 
-                                                                                                   solid_angle, t_min, t_max, right_hit_info );
+        bool hit_left  = (left_kind == BVH_NODE_KIND::POLYGON)      ? model->polygons[left_i].hit(      model, origin, direction, direction_inv,   
+                                                                                                        solid_angle, t_min, t_max, left_hit_info  ) :
+                         (left_kind == BVH_NODE_KIND::VOLUME_GRID)  ? model->volume_grids[left_i].hit(  model, origin, direction, direction_inv, 
+                                                                                                        solid_angle, t_min, t_max, left_hit_info  ) :
+                         (left_kind == BVH_NODE_KIND::INSTANCE)     ? model->instances[left_i].hit(     model, origin, direction, direction_inv, 
+                                                                                                        solid_angle, t_min, t_max, left_hit_info  ) :
+                                                                      model->bvh_nodes[left_i].hit(     model, origin, direction, direction_inv, 
+                                                                                                        solid_angle, t_min, t_max, left_hit_info  );
+        bool hit_right = (left_i == right_i)                        ? false :   // lone leaf
+                         (right_kind == BVH_NODE_KIND::POLYGON)     ? model->polygons[right_i].hit(     model, origin, direction, direction_inv, 
+                                                                                                        solid_angle, t_min, t_max, right_hit_info ) :
+                         (right_kind == BVH_NODE_KIND::VOLUME_GRID) ? model->volume_grids[right_i].hit( model, origin, direction, direction_inv, 
+                                                                                                        solid_angle, t_min, t_max, right_hit_info ) :
+                         (right_kind == BVH_NODE_KIND::INSTANCE)    ? model->instances[right_i].hit(    model, origin, direction, direction_inv, 
+                                                                                                        solid_angle, t_min, t_max, right_hit_info ) :
+                                                                      model->bvh_nodes[right_i].hit(    model, origin, direction, direction_inv, 
+                                                                                                        solid_angle, t_min, t_max, right_hit_info );
         if ( hit_left && (!hit_right || left_hit_info.t < right_hit_info.t) ) {
             hit_info = left_hit_info;
             r = true;

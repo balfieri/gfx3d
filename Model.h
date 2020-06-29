@@ -4757,9 +4757,6 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, 
     // before and after variable-length fields.
     //-------------------------------------------------------------------
 
-    // grid
-    //
-
     // affine transform and its inverse represented as a 3x3 matrix and a vec3 translation
     //
     struct MapData { 
@@ -4854,11 +4851,12 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, 
         uint64_t mActiveVoxelCount;     // total number of active voxels in the root and all its child nodes
     };
 
-    const uint8_t * background  = tree_beyond + tree->mBytes[ROOT_LEVEL];
-    const uint8_t * mValueMin   = background + value_size;
-    const uint8_t * mValueMax   = mValueMin  + value_size;
+    const uint      root_size   = 3*value_size + sizeof(RootData);
+    const uint8_t * mBackground = tree_beyond + tree->mBytes[ROOT_LEVEL];
+    const uint8_t * mValueMin   = mBackground + value_size;
+    const uint8_t * mValueMax   = mValueMin + value_size;
     const RootData* root        = reinterpret_cast< const RootData *>( mValueMax + value_size );
-    const uint8_t * root_tile_data = reinterpret_cast< const uint8_t * >( root+1 );
+    const uint8_t * root_tile_data = reinterpret_cast< const uint8_t * >( mBackground + root_size );
 
     //-------------------------------------------------------------------
     // Hash [x, y, z] to a key.
@@ -4872,7 +4870,7 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, 
         uint8_t  state;                 // when childID < 0, indicates whether tile is active (1 or 0)
     };
 
-    const uint8_t * tile_data   = root_tile_data;
+    const uint8_t * tile_data = root_tile_data;
     const uint tile_size = sizeof( uint64_t ) + value_size + sizeof( TileData );
 
     die_assert( (32 - INTERNAL2_TOTAL) < 21, "key won't fit in 64 bits" );
@@ -4893,8 +4891,6 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, 
     //-------------------------------------------------------------------
     // Check to see if this is a value tile.
     //-------------------------------------------------------------------
-    // internal node (level = 1 or 2)
-    //
     const TileData * tile = reinterpret_cast< const TileData * >( tile_data + sizeof(uint64_t) + value_size );
     const uint8_t * value_ptr;
     if ( tile->childID < 0 ) {
@@ -4906,9 +4902,7 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, 
 
     } else {
         //-------------------------------------------------------------------
-        // Get to InternalData for root's childID.
-        // Hash [x,y,z] to child c for internal node.
-        // Test if mask[c] is 1 to decide whether to recurse.
+        // Get to InternalData for root's childID, which comes after root's tiles.
         //-------------------------------------------------------------------
         struct InternalData
         {
@@ -4951,6 +4945,9 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, 
         } else {
             //-------------------------------------------------------------------
             // Recurse to next level of internal nodes.
+            // There are only two levels of internal nodes, so we hardcode that for now.
+            // If it changes (doubtful), we can make this a loop.
+            //
             // Hash [x,y,z] to child c for internal node.
             // Test mChildMask[c].
             //-------------------------------------------------------------------
@@ -4976,8 +4973,8 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, 
             } else {
                 //-------------------------------------------------------------------
                 // Recurse to leaf node.
-                // Hash [x,y,z] to index c for leaf node.
-                // Pull out that value.
+                // Hash [x,y,z] to value index c for leaf node.
+                // Pull out mValues[c].
                 //-------------------------------------------------------------------
                 struct LeafData
                 {
@@ -5004,8 +5001,6 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, 
                 value_ptr = mValues + c*value_size;
             }
         }
-
-        value_ptr = nullptr;
     }
 
     return value_ptr;

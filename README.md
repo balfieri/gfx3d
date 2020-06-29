@@ -13,7 +13,7 @@ in the process of open-sourcing.
 The implementation uses a hand-optimized parser and can also write out a single compressed or uncompressed .model file, 
 the latter of which can be loaded instantaneously without translation.
 
-The implementation allocates contiguous arrays (instances, objects, polygons, vertexes, positions, normals, texcoords, materials, textures, texels, strings, volumes, volume_segments, volume_grids, voxels) that contain no pointers, only indices into other arrays.  This means that the arrays can be copied to a GPU without editing.  They can also be stored directly to a binary file.  A hdr structure holds the lengths of the arrays.  hdr->byte_cnt is set to the total number of bytes in the header and arrays (excluding any padding in the file).
+The implementation allocates contiguous arrays (instances, objects, polygons, vertexes, positions, normals, texcoords, materials, textures, texels, strings, volumes, volume_grids, voxels) that contain no pointers, only indices into other arrays.  This means that the arrays can be copied to a GPU without editing.  They can also be stored directly to a binary file.  A hdr structure holds the lengths of the arrays.  hdr->byte_cnt is set to the total number of bytes in the header and arrays (excluding any padding in the file).
 
 The Instance type allows instancing over other models, including a 4x4 Matrix transformation.
 

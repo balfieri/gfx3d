@@ -17,10 +17,7 @@ The implementation allocates contiguous arrays (instances, objects, polygons, ve
 
 Textures are not mipmapped by default, but Model can also generate mipmaps.  The texels are stored in RGB8, RGBA8, L8, LA8, or ASTC (compressed) formats.
 
-In addition, a model may optionally instance one or more other submodels, each with a per-instance 4x4 matrix transformation.  
-This instancing is done within a top-level (NVidia Falcor).fscene file which Model.h knows how to parse.
-The .fscene format supports other global scene information such as sky boxes, background, ambient, tone mapping, cameras, and user-inserted light sources.
-A submodel may also instance lower-level submodels.
+In addition, a model may optionally instance one or more other submodels, each with a per-instance 4x4 matrix transformation.  This instancing is done within a top-level (NVidia Falcor) .fscene file which Model.h knows how to parse.  The .fscene format supports other global scene information such as sky boxes, background, ambient, tone mapping, cameras, and user-inserted light sources.  A submodel may also instance lower-level submodels.
 
 Errors do not raise exceptions.  Instead the constructor sets is_good to false and sets error_msg to a useful string.  So the caller should check is_good in the newly created Model before proceeding to use the object.
 

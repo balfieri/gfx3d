@@ -15,10 +15,12 @@ the latter of which can be loaded instantaneously without translation.
 
 The implementation allocates contiguous arrays (instances, objects, polygons, vertexes, positions, normals, texcoords, materials, textures, texels, strings, volumes, volume_grids, voxels) that contain no pointers, only indices into other arrays.  This means that the arrays can be copied to a GPU without editing.  They can also be stored directly to a binary file without translation.  A hdr structure holds the lengths of the arrays.  
 
-The Instance type allows instancing of one or more other models with a 4x4 Matrix transformation applied to each model.  This instancing is typically done wihin Falcor
-.fscene files which Model.h can parse.  Those files support other concepts such as cameras, lights, paths, etc.
-
 Textures are not mipmapped by default, but Model can also generate mipmaps.  The texels are stored in RGB8, RGBA8, L8, LA8, or ASTC (compressed) formats.
+
+A model may instance one or more other models, each with a per-instance 4x4 matrix transformation.  
+This instancing is done within a top-level (NVidia Falcor).fscene file which Model.h knows how to parse.
+The .fscene format supports other global scene information such as sky boxes, background, ambient, tone mapping, cameras, and user-inserted light sources.
+A submodel may also instance lower-level submodels.
 
 Errors do not raise exceptions.  Instead the constructor sets is_good to false and sets error_msg to a useful string.  So the caller should check is_good in the newly created Model before proceeding to use the object.
 

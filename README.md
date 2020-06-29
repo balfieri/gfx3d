@@ -13,11 +13,10 @@ in the process of open-sourcing.
 The implementation uses a hand-optimized parser and can also write out a single compressed or uncompressed .model file, 
 the latter of which can be loaded instantaneously without translation.
 
-The implementation allocates contiguous arrays (instances, objects, polygons, vertexes, positions, normals, texcoords, materials, textures, texels, strings, volumes, volume_grids, voxels) that contain no pointers, only indices into other arrays.  This means that the arrays can be copied to a GPU without editing.  They can also be stored directly to a binary file.  A hdr structure holds the lengths of the arrays.  hdr->byte_cnt is set to the total number of bytes in the header and arrays (excluding any padding in the file).
+The implementation allocates contiguous arrays (instances, objects, polygons, vertexes, positions, normals, texcoords, materials, textures, texels, strings, volumes, volume_grids, voxels) that contain no pointers, only indices into other arrays.  This means that the arrays can be copied to a GPU without editing.  They can also be stored directly to a binary file without translation.  A hdr structure holds the lengths of the arrays.  
 
-The Instance type allows instancing over other models, including a 4x4 Matrix transformation.
-
-There are a couple std::map's (name_to_obj, name_to_tex) that take a string and return a pointer to the Object/Texture structure in the objects/textures array.  This are filled in only during the original parsing of the model files.
+The Instance type allows instancing of one or more other models with a 4x4 Matrix transformation applied to each model.  This instancing is typically done wihin Falcor
+.fscene files which Model.h can parse.  Those files support other concepts such as cameras, lights, paths, etc.
 
 Textures are not mipmapped by default, but Model can also generate mipmaps.  The texels are stored in RGB8, RGBA8, L8, LA8, or ASTC (compressed) formats.
 
@@ -26,7 +25,7 @@ Errors do not raise exceptions.  Instead the constructor sets is_good to false a
 This has been tested on macOS and Linux.  It should work in any UNIX-like environment including Cygwin. It requires the -std=c++17 
 (or later) compiler switch.
 
-Refer to Model.h for further instructions.
+Refer to Model.h for further instructions on usage.
 
 This is all open-source.  Refer to the LICENSE.md for licensing details.  We inline two well-known public-domain files, stb_image.h and
 stb_image_write.h so you don't have to worry about that.  Their licensing information is listed at the top of Model.h.

@@ -152,6 +152,9 @@ STBIDEF void     stbi_image_free(void *retval_from_stbi_load);
 #ifndef MODEL_INT_TYPE
 #define MODEL_INT_TYPE int32_t
 #endif
+#ifndef MODEL_INT64_TYPE
+#define MODEL_INT64_TYPE int64_t
+#endif
 #ifndef MODEL_UINT_TYPE
 #define MODEL_UINT_TYPE uint32_t
 #endif
@@ -177,6 +180,7 @@ class Model
 {
 public:
     typedef MODEL_INT_TYPE    _int;                  
+    typedef MODEL_INT64_TYPE  _int64;                  
     typedef MODEL_UINT_TYPE   uint;                 
     typedef MODEL_UINT64_TYPE uint64;              
     typedef MODEL_REAL_TYPE   real;
@@ -509,7 +513,7 @@ public:
 
     // VolumeGrid - made up of one or more VolumeGrid
     //
-    enum class VolumeGridType : uint16_t
+    enum class VolumeVoxelType : uint16_t
     {
         UNKNOWN = 0, 
         FLOAT   = 1, 
@@ -536,7 +540,7 @@ public:
     public:
         uint            name_i;                 // index in strings[] array (null-terminated strings)
         uint64          voxel_cnt;              // number of active voxels
-        VolumeGridType  voxel_type;             // voxel data type (float, double, etc.)
+        VolumeVoxelType voxel_type;             // voxel data type (float, double, etc.)
         VolumeGridClass grid_class;             // class of grid (level set, fog, staggered)
         uint            node_cnt[4];            // not sure yet what this is for
         AABB            world_box;              // AABB in world space (what we normally think of as the AABB)
@@ -544,9 +548,16 @@ public:
         real64          world_voxel_size;       // size of voxel in world units
         uint64          voxel_i;                // index into voxels[] of first voxel 
 
-        bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
-        bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
-                  real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const;
+        bool   bounding_box( const Model * model, AABB& box, real padding=0 ) const;
+        bool   is_active( const Model * model, uint x, uint y, uint z ) const;
+        const void * value_ptr( const Model * model, uint x, uint y, uint z ) const;
+        _int   int_value( const Model * model, uint x, uint y, uint z ) const;
+        _int64 int64_value( const Model * model, uint x, uint y, uint z ) const;
+        real   real_value( const Model * model, uint x, uint y, uint z ) const;
+        real64 real64_value( const Model * model, uint x, uint y, uint z ) const;
+        real3  real3_value( const Model * model, uint x, uint y, uint z ) const;
+        bool   hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
+                    real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const;
     };
 
     class Texture
@@ -3504,7 +3515,7 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
                 uint64_t        file_size; 
                 uint64_t        name_key; 
                 uint64_t        voxel_cnt;
-                VolumeGridType  grid_type;
+                VolumeVoxelType  grid_type;
                 VolumeGridClass grid_class;
                 uint32_t        name_size;      // includes \0
                 uint32_t        node_cnt[4];
@@ -3550,6 +3561,14 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
             // We always align this on an 8B boundary in the voxels[] array.
             // Each voxels[] element is one byte even though each voxel in our
             // grid will typically consume multiple bytes.
+            //
+            // Note that the voxel data is actually an elaborate tree structure
+            // that matches the NanoVDB format. We don't interpret the structure here.
+            // That occurs in the real_value() et al. methods that take voxel [x,y,z] 
+            // and walk the tree to get the required information.  The tree walk 
+            // is non-trivial.
+            //
+            // In other words, the voxel data is not a simple 3D array of floats. :-)
             //------------------------------------------------------------
             die_assert( header.codec == Codec::NONE, ".nvdb files must be uncompressed for now" );
             die_assert( meta.file_size == meta.grid_size, "uncompressed grids must have equal file_size and grid_size" );
@@ -4723,6 +4742,330 @@ bool Model::VolumeGrid::bounding_box( const Model * model, Model::AABB& box, rea
     box = world_box;
     box.pad( padding );
     return true;
+}
+
+const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, uint z ) const 
+{
+    //-------------------------------------------------------------------
+    // This is where the crazy stuff happens.  
+    // We walk the tree and attempt to find the voxel value at [x, y, z].
+    // If the value is inactive, then we return nullptr.
+    //
+    // All the tree data structures are localized to this routine.
+    //
+    // Some of the data structures are variable-length, so we split them
+    // before and after variable-length fields.
+    //-------------------------------------------------------------------
+
+    // grid
+    //
+
+    // affine transform and its inverse represented as a 3x3 matrix and a vec3 translation
+    //
+    struct MapData { 
+        float  mMatF[9]; 
+        float  mInvMatF[9];
+        float  mVecF[3];
+        float  mTaperF;
+        double mMatD[9];
+        double mInvMatD[9];
+        double mVecD[3];
+        double mTaperD;
+    };
+
+    struct GridData { 
+        uint64_t    mMagic;             // 8 byte magic to validate it is valid grid data.
+                                        // REFERENCEMAGIC = 0x4244566f6e614eL;
+        real64      mBBoxMin[3];        // min corner of AABB
+        real64      mBBoxMax[3];        // max corner of AABB
+        MapData     mMap;               // affine transformation between index and world space in both single and double precision
+        double      mUniformScale;      // size of a voxel in world units
+        VolumeGridClass mGridClass;     // 2 bytes
+        VolumeVoxelType mVoxelType;     // 2 bytes
+        uint32_t    mNameSize;          // 4 bytes (grid name c-string is right after this struct, mNameSize includes the null character)
+    };
+
+    // constants for 4-level tree structure
+    //
+    constexpr uint LEAF_LEVEL         = 0;
+    constexpr uint LEAF_LOG2DIM       = 3;
+    constexpr uint LEAF_TOTAL         = LEAF_LOG2DIM; // dimensions in index space
+    constexpr uint LEAF_SIZE          = 1 << (3 * LEAF_LOG2DIM);
+    constexpr uint LEAF_MASK_SIZE     = LEAF_SIZE >> 6;                       
+    constexpr uint LEAF_MASK          = (1 << LEAF_TOTAL) - 1; 
+
+    constexpr uint INTERNAL1_LEVEL    = LEAF_LEVEL + 1;
+    constexpr uint INTERNAL1_LOG2DIM  = LEAF_LOG2DIM + 1;
+    constexpr uint INTERNAL1_TOTAL    = INTERNAL1_LOG2DIM + LEAF_TOTAL;            // dimensions in index space
+    constexpr uint INTERNAL1_SIZE     = 1 << (3 * INTERNAL1_LOG2DIM);              // number of tile values
+    constexpr uint INTERNAL1_MASK_SIZE= INTERNAL1_SIZE >> 6;                       // bytes in value or child mask
+    constexpr uint INTERNAL1_MASK     = (1 << INTERNAL1_TOTAL) - 1; 
+
+    constexpr uint INTERNAL2_LEVEL    = INTERNAL1_LEVEL + 1;
+    constexpr uint INTERNAL2_LOG2DIM  = INTERNAL1_LOG2DIM + 1;
+    constexpr uint INTERNAL2_TOTAL    = INTERNAL2_LOG2DIM + INTERNAL1_TOTAL;
+    constexpr uint INTERNAL2_SIZE     = 1 << (3 * INTERNAL2_LOG2DIM);
+    constexpr uint INTERNAL2_MASK_SIZE= INTERNAL2_SIZE >> 6;                       
+    constexpr uint INTERNAL2_MASK     = (1 << INTERNAL2_TOTAL) - 1; 
+
+    constexpr uint ROOT_LEVEL         = INTERNAL2_LEVEL + 1;      
+
+    //-------------------------------------------------------------------
+    // The value size doesn't change.
+    // Figure that out now.
+    //-------------------------------------------------------------------
+    uint value_size;
+    switch( voxel_type ) 
+    {
+        case VolumeVoxelType::FLOAT:    value_size = sizeof(float);     break;
+        case VolumeVoxelType::DOUBLE:   value_size = sizeof(double);    break;
+        case VolumeVoxelType::INT16:    value_size = sizeof(int16_t);   break;
+        case VolumeVoxelType::INT32:    value_size = sizeof(int32_t);   break;
+        case VolumeVoxelType::INT64:    value_size = sizeof(int64_t);   break;
+        case VolumeVoxelType::VEC3F:    value_size = 3*sizeof(float);   break;
+        case VolumeVoxelType::VEC3D:    value_size = 3*sizeof(double);  break;
+        case VolumeVoxelType::MASK:     value_size = sizeof(uint64_t);  break;
+        case VolumeVoxelType::FP16:     value_size = 2;                 break;
+        default:                        value_size = 0; die_assert( false, "bad voxel_type" ); break;
+    }
+
+    //-------------------------------------------------------------------
+    // Get pointer to TreeData and to RootData and any 
+    // variable root values.
+    //-------------------------------------------------------------------
+    struct TreeData
+    {
+        uint64_t mBytes[ROOT_LEVEL + 1]; // byte offsets to nodes of each type
+        uint32_t mCount[ROOT_LEVEL + 1]; // total number of nodes of each type
+    };
+
+    const TreeData * tree = reinterpret_cast< const TreeData * >( &model->voxels[voxel_i] );
+    const uint8_t * tree_beyond = reinterpret_cast< const uint8_t * >( tree+1 );
+
+    struct RootData
+    {
+        // variable-length fields:
+//      ValueT   mBackground;           // background value, i.e., value of any unset voxel
+//      ValueT   mValueMin;             // minimum value
+//      ValueT   mValueMax;             // maximum value
+        real64   mBBoxMin[3];           // min corner of world bbox
+        real64   mBBoxMax[3];           // max corner of world bbox
+        uint32_t mTileCount;            // number of tiles and child pointers in the root node
+        uint64_t mActiveVoxelCount;     // total number of active voxels in the root and all its child nodes
+    };
+
+    const uint8_t * background  = tree_beyond + tree->mBytes[ROOT_LEVEL];
+    const uint8_t * mValueMin   = background + value_size;
+    const uint8_t * mValueMax   = mValueMin  + value_size;
+    const RootData* root        = reinterpret_cast< const RootData *>( mValueMax + value_size );
+    const uint8_t * root_tile_data = reinterpret_cast< const uint8_t * >( root+1 );
+
+    //-------------------------------------------------------------------
+    // Hash [x, y, z] to a key.
+    // Do a linear search through the root's tiles to find the key (binary search is disabled in nanovdb code).
+    //-------------------------------------------------------------------
+    struct TileData {
+        // skip through variable-length stuff
+//      uint64_t key;                   // hash key to match
+//      ValueT   value;                 // value of tile (i.e. no child node)
+        int32_t  childID;               // negative values indicate no child node, i.e. this is a value tile
+        uint8_t  state;                 // when childID < 0, indicates whether tile is active (1 or 0)
+    };
+
+    const uint8_t * tile_data   = root_tile_data;
+    const uint tile_size = sizeof( uint64_t ) + value_size + sizeof( TileData );
+
+    die_assert( (32 - INTERNAL2_TOTAL) < 21, "key won't fit in 64 bits" );
+    uint64_t key = ((uint64_t(z) >> INTERNAL2_TOTAL) <<  0) |
+                   ((uint64_t(y) >> INTERNAL2_TOTAL) << 21) |
+                   ((uint64_t(x) >> INTERNAL2_TOTAL) << 42);
+    uint i;
+    for( i = 0; i < root->mTileCount; i++ )
+    {
+        const uint64_t * tile_key = reinterpret_cast< const uint64_t * >( tile_data );
+        if ( key == *tile_key ) break;
+
+        tile_data += tile_size;
+    }
+
+    if ( i == root->mTileCount ) return nullptr;        // no matching tile => bail out
+
+    //-------------------------------------------------------------------
+    // Check to see if this is a value tile.
+    //-------------------------------------------------------------------
+    // internal node (level = 1 or 2)
+    //
+    const TileData * tile = reinterpret_cast< const TileData * >( tile_data + sizeof(uint64_t) + value_size );
+    const uint8_t * value_ptr;
+    if ( tile->childID < 0 ) {
+        //-------------------------------------------------------------------
+        // The value is the same for all voxels in the tile.
+        // Point to that.
+        //-------------------------------------------------------------------
+        value_ptr = tile_data + sizeof( uint64_t );
+
+    } else {
+        //-------------------------------------------------------------------
+        // Get to InternalData for root's childID.
+        // Hash [x,y,z] to child c for internal node.
+        // Test if mask[c] is 1 to decide whether to recurse.
+        //-------------------------------------------------------------------
+        struct InternalData
+        {
+            // skip through variable-length stuff
+//          MaskT    mValueMask;            
+//          MaskT    mChildMask;                   
+//          TileData mTable[INTERNAL1_SIZE];
+//          ValueT   mValueMin; 
+//          ValueT   mValueMax;
+            _int     mBBoxMin[3];           // min corner or index bbox
+            _int     mBBoxMax[3];           // max corner or index bbox
+            int32_t  mOffset;               // number of node offsets till first child node
+            uint32_t mFlags;                // get this for free (unused)
+        };
+
+        const uint  internal2_size = 2*INTERNAL2_MASK_SIZE + INTERNAL2_SIZE*tile_size + 2*value_size + sizeof(InternalData);
+        const uint8_t * mValueMask = root_tile_data + root->mTileCount*tile_size + tile->childID*internal2_size;
+        const uint8_t * mChildMask = mValueMask + INTERNAL2_MASK_SIZE;
+        const uint8_t * mTable     = mChildMask + INTERNAL2_MASK_SIZE;
+        const uint8_t * mValueMin  = mTable + INTERNAL2_SIZE*tile_size;
+        const uint8_t * mValueMax  = mValueMin + value_size;
+        const InternalData * internal = reinterpret_cast< const InternalData * >( mValueMax + value_size );
+
+        //-------------------------------------------------------------------
+        // Hash [x,y,z] to child c for internal node.
+        // Test mChildMask[c].
+        //-------------------------------------------------------------------
+        uint64_t c = (((x & INTERNAL2_MASK) >> INTERNAL2_TOTAL) << (2*INTERNAL2_LOG2DIM)) + 
+                     (((y & INTERNAL2_MASK) >> INTERNAL2_TOTAL) <<    INTERNAL2_LOG2DIM)  +
+                     (((z & INTERNAL2_MASK) >> INTERNAL2_TOTAL) <<                    0);
+        tile_data  = mTable + c*tile_size;
+        tile = reinterpret_cast< const TileData * >( tile_data + sizeof(uint64_t) + value_size );
+        bool is_on = (mChildMask[c/8] >> (c & 7)) & 1;
+        if ( !is_on || tile->childID < 0 ) {
+            //-------------------------------------------------------------------
+            // Pull value out of the mTable[c] Tile.
+            //-------------------------------------------------------------------
+            value_ptr = tile_data + sizeof( uint64_t );
+
+        } else {
+            //-------------------------------------------------------------------
+            // Recurse to next level of internal nodes.
+            // Hash [x,y,z] to child c for internal node.
+            // Test mChildMask[c].
+            //-------------------------------------------------------------------
+            const uint internal1_size = 2*INTERNAL1_MASK_SIZE + INTERNAL1_SIZE*tile_size + 2*value_size + sizeof(InternalData);
+            mValueMask = mValueMask + internal->mOffset*internal2_size + tile->childID*internal1_size;
+            mChildMask = mValueMask + INTERNAL1_MASK_SIZE;
+            mTable     = mChildMask + INTERNAL1_MASK_SIZE;
+            mValueMin  = mTable + INTERNAL1_SIZE*tile_size;
+            mValueMax  = mValueMin + value_size;
+            internal   = reinterpret_cast< const InternalData * >( mValueMax + value_size );
+
+            c = (((x & INTERNAL1_MASK) >> INTERNAL1_TOTAL) << (2*INTERNAL1_LOG2DIM)) + 
+                (((y & INTERNAL1_MASK) >> INTERNAL1_TOTAL) <<    INTERNAL1_LOG2DIM)  +
+                (((z & INTERNAL1_MASK) >> INTERNAL1_TOTAL) <<                    0);
+            tile_data  = mTable + c*tile_size;
+            tile = reinterpret_cast< const TileData * >( tile_data + sizeof(uint64_t) + value_size );
+            bool is_on = (mChildMask[c/8] >> (c & 7)) & 1;
+            if ( !is_on || tile->childID < 0 ) {
+                //-------------------------------------------------------------------
+                // Pull value out of the mTable[c] Tile.
+                //-------------------------------------------------------------------
+                value_ptr = tile_data + sizeof( uint64_t );
+            } else {
+                //-------------------------------------------------------------------
+                // Recurse to leaf node.
+                // Hash [x,y,z] to index c for leaf node.
+                // Pull out that value.
+                //-------------------------------------------------------------------
+                struct LeafData
+                {
+                    // skip through variable-length stuff
+//                  MaskT<LEAF_LOG2DIM> mValueMask;      
+//                  ValueType      mValues[LEAF_SIZE];
+//                  ValueType      mValueMin; 
+//                  ValueType      mValueMax;
+                    _int           mBBoxMin[3]; 
+                    uint8_t        mBBoxDif[3]; 
+                    uint8_t        mFlags;          // get this for free (unused)
+                };
+
+                const uint       leaf_size  = LEAF_MASK_SIZE + LEAF_SIZE*value_size + 2*value_size + sizeof(LeafData);
+                                 mValueMask = mValueMask + internal->mOffset*internal1_size + tile->childID*leaf_size;
+                const uint8_t *  mValues    = mValueMask + LEAF_MASK_SIZE;
+                                 mValueMin  = mValues + LEAF_SIZE*value_size;
+                                 mValueMax  = mValueMin + value_size;
+                const LeafData * leaf       = reinterpret_cast< const LeafData * >( mValueMax + value_size );
+
+                c = (((x & LEAF_MASK) >> LEAF_TOTAL) << (2*LEAF_LOG2DIM)) + 
+                    (((y & LEAF_MASK) >> LEAF_TOTAL) <<    LEAF_LOG2DIM)  +
+                    (((z & LEAF_MASK) >> LEAF_TOTAL) <<               0);
+                value_ptr = mValues + c*value_size;
+            }
+        }
+
+        value_ptr = nullptr;
+    }
+
+    return value_ptr;
+}
+
+bool Model::VolumeGrid::is_active( const Model * model, uint x, uint y, uint z ) const
+{
+    // TODO: this isn't right; need to add option to value_ptr() to return nullptr if not active
+    return value_ptr( model, x, y, z ) != nullptr;
+}
+
+Model::_int64 Model::VolumeGrid::int64_value( const Model * model, uint x, uint y, uint z ) const
+{
+    auto ptr  = value_ptr( model, x, y, z );
+    if ( ptr == nullptr ) return 0;
+
+    _int64 r;
+    switch( voxel_type ) 
+    {
+        case VolumeVoxelType::INT16:    r = *reinterpret_cast<const int16_t *>( ptr ); break;
+        case VolumeVoxelType::INT32:    r = *reinterpret_cast<const int32_t *>( ptr ); break;
+        case VolumeVoxelType::INT64:    r = *reinterpret_cast<const int64_t *>( ptr ); break;
+        default:                        r = 0; die_assert( false, "voxel_type is not INT{16,32,64}" ); break;
+    }        
+    return r;
+}
+
+Model::_int Model::VolumeGrid::int_value( const Model * model, uint x, uint y, uint z ) const
+{
+    return int64_value( model, x, y, z );
+}
+
+Model::real64 Model::VolumeGrid::real64_value( const Model * model, uint x, uint y, uint z ) const
+{
+    auto ptr  = value_ptr( model, x, y, z );
+    if ( ptr == nullptr ) return 0.0;
+
+    real64 r;
+    switch( voxel_type ) 
+    {
+        case VolumeVoxelType::FLOAT:    r = *reinterpret_cast<const float *>( ptr ); break;
+        case VolumeVoxelType::DOUBLE:   r = *reinterpret_cast<const double *>( ptr ); break;
+        default:                        r = 0; die_assert( false, "voxel_type is not FLOAT or DOUBLE" ); break;
+    }        
+    return r;
+}
+
+Model::real Model::VolumeGrid::real_value( const Model * model, uint x, uint y, uint z ) const
+{
+    return real64_value( model, x, y, z );
+}
+
+Model::real3 Model::VolumeGrid::real3_value( const Model * model, uint x, uint y, uint z ) const
+{
+    (void)model;
+    (void)x;
+    (void)y;
+    (void)z;
+    die_assert( false, "real3_value() not yet supported, but easy to add" );
+    return real3( 0, 0, 0 );
 }
 
 bool Model::VolumeGrid::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,

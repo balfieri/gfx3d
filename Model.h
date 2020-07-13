@@ -394,7 +394,7 @@ public:
 
         // it's a VolumeGrid hit when grid_i != -1
         uint            grid_i;
-        uint            voxel_xyz[3];           // voxel coordinates 
+        _int            voxel_xyz[3];           // voxel coordinates 
         real            voxel_value;            // voxel value
     };
 
@@ -411,8 +411,9 @@ public:
         void pad( real p );
         void expand( const AABB& other );
         void expand( const real3& p );
+        bool encloses( const real3& p ) const;
         bool encloses( const AABB& other ) const;
-        bool hit( const real3& origin, const real3& direction, const real3& direction_inv, real tmin, real tmax ) const; 
+        bool hit( const real3& origin, const real3& direction, const real3& direction_inv, real& tmin, real& tmax ) const; 
     };
 
     class AABBI                             // axis aligned bounding box with integers
@@ -557,13 +558,13 @@ public:
         uint64          voxel_i;                // index into voxels[] of first voxel 
 
         bool   bounding_box( const Model * model, AABB& box, real padding=0 ) const;
-        bool   is_active( const Model * model, uint x, uint y, uint z ) const;
-        const void * value_ptr( const Model * model, uint x, uint y, uint z, bool * is_active=nullptr ) const;
-        _int   int_value( const Model * model, uint x, uint y, uint z ) const;
-        _int64 int64_value( const Model * model, uint x, uint y, uint z ) const;
-        real   real_value( const Model * model, uint x, uint y, uint z ) const;
-        real64 real64_value( const Model * model, uint x, uint y, uint z ) const;
-        real3  real3_value( const Model * model, uint x, uint y, uint z ) const;
+        bool   is_active( const Model * model, _int x, _int y, _int z ) const;
+        const void * value_ptr( const Model * model, _int x, _int y, _int z, bool * is_active=nullptr ) const;
+        _int   int_value( const Model * model, _int x, _int y, _int z ) const;
+        _int64 int64_value( const Model * model, _int x, _int y, _int z ) const;
+        real   real_value( const Model * model, _int x, _int y, _int z ) const;
+        real64 real64_value( const Model * model, _int x, _int y, _int z ) const;
+        real3  real3_value( const Model * model, _int x, _int y, _int z ) const;
         bool   hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
                     real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const;
     };
@@ -1102,10 +1103,67 @@ inline std::ostream& operator << ( std::ostream& os, const Model::AABB& box )
     return os;
 }
 
+inline std::ostream& operator << ( std::ostream& os, const Model::AABBI& box ) 
+{
+    os << "[" << box.min[0] << "," << box.min[1] << "," << box.min[2] << "] .. [" <<
+                 box.max[0] << "," << box.max[1] << "," << box.max[2] << "]";
+    return os;
+}
+
 inline std::ostream& operator << ( std::ostream& os, const Model::Polygon& poly ) 
 {
     os << "mtl_i=" << poly.mtl_i << " vtx_cnt=" << poly.vtx_cnt << " vtx_i=" << poly.vtx_i <<
           " normal=" << poly.normal << " area=" << poly.area;
+    return os;
+}
+
+inline std::string str( const Model::VolumeVoxelType type ) 
+{
+    switch( type ) 
+    {
+        case Model::VolumeVoxelType::UNKNOWN:   return "UNKNOWN";       break;
+        case Model::VolumeVoxelType::FLOAT:     return "FLOAT";         break;
+        case Model::VolumeVoxelType::DOUBLE:    return "DOUBLE";        break;
+        case Model::VolumeVoxelType::INT16:     return "INT16";         break;
+        case Model::VolumeVoxelType::INT32:     return "INT32";         break;
+        case Model::VolumeVoxelType::INT64:     return "INT64";         break;
+        case Model::VolumeVoxelType::VEC3F:     return "VEC3F";         break;
+        case Model::VolumeVoxelType::VEC3D:     return "VEC3D";         break;
+        case Model::VolumeVoxelType::MASK:      return "MASK";          break;
+        case Model::VolumeVoxelType::FP16:      return "FP16";          break;
+        default:                                return "<unknown>";     break;
+    }
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::VolumeVoxelType& type ) 
+{
+    os << str( type );
+    return os;
+}
+
+inline std::string str( const Model::VolumeGridClass c ) 
+{
+    switch( c )
+    {
+        case Model::VolumeGridClass::UNKNOWN:   return "UNKNOWN";       break;
+        case Model::VolumeGridClass::LEVELSET:  return "LEVELSET";      break;
+        case Model::VolumeGridClass::FOGVOLUME: return "FOGVOLUME";     break;
+        case Model::VolumeGridClass::STAGGERED: return "STAGGERED";     break;
+        default:                                return "<unknown>";     break;
+    };
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::VolumeGridClass& c ) 
+{
+    os << str( c );
+    return os;
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::VolumeGrid& grid ) 
+{
+    os << "name_i=" << grid.name_i << " voxel_cnt=" << grid.voxel_cnt << " voxel_type=" << grid.voxel_type << 
+          " grid_class=" << grid.grid_class << " world_box=" << grid.world_box << " index_box=" << grid.index_box <<
+          " world_voxel_size=" << grid.world_voxel_size << " voxel_i=" << grid.voxel_i;
     return os;
 }
 
@@ -3558,8 +3616,8 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
                 if ( j < 3 ) {
                     grid->world_box.min.c[j] = meta.world_box.min[j];
                     grid->world_box.max.c[j] = meta.world_box.max[j];
-                    grid->index_box.min[j] = meta.index_box.min[j];
-                    grid->index_box.max[j] = meta.index_box.max[j];
+                    grid->index_box.min[j]   = meta.index_box.min[j];
+                    grid->index_box.max[j]   = meta.index_box.max[j];
                 }
             }
             grid->world_voxel_size = meta.voxel_size;
@@ -4526,6 +4584,16 @@ inline void Model::AABB::expand( const Model::real3& p )
     if ( p.c[2] > max.c[2] ) max.c[2] = p.c[2];
 }
 
+inline bool Model::AABB::encloses( const real3& p ) const
+{
+    return min.c[0] <= p.c[0] &&
+           min.c[1] <= p.c[1] &&
+           min.c[2] <= p.c[2] &&
+           max.c[0] >= p.c[0] &&
+           max.c[1] >= p.c[1] &&
+           max.c[2] >= p.c[2];
+}
+
 inline bool Model::AABB::encloses( const AABB& other ) const
 {
     return min.c[0] <= other.min.c[0] &&
@@ -4537,7 +4605,7 @@ inline bool Model::AABB::encloses( const AABB& other ) const
 }
 
 inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& direction, const Model::real3& direction_inv, 
-                              Model::real tmin, Model::real tmax ) const 
+                              Model::real& tmin, Model::real& tmax ) const 
 {
     mdout << "Model::AABB::hit: " << *this << " tmin=" << tmin << " tmax=" << tmax << "\n";
     (void)direction;
@@ -4633,6 +4701,7 @@ bool Model::Polygon::hit( const Model * model, const real3& origin, const real3&
                     v2 = 0.0;
                 }
                 hit_info.poly_i = poly_i;
+                hit_info.grid_i = uint(-1);
                 hit_info.t = t;
 
                  hit_info.normal = normal;
@@ -4752,7 +4821,7 @@ bool Model::VolumeGrid::bounding_box( const Model * model, Model::AABB& box, rea
     return true;
 }
 
-const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, uint z, bool * is_active ) const 
+const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, _int z, bool * is_active ) const 
 {
     //-------------------------------------------------------------------
     // This is where the crazy stuff happens.  
@@ -4764,6 +4833,7 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, 
     // Some of the data structures are variable-length, so we split them
     // before and after variable-length fields.
     //-------------------------------------------------------------------
+    mdout << "VOLUME: xyz=[" << x << "," << y << "," << z << "]\n";
 
     // affine transform and its inverse represented as a 3x3 matrix and a vec3 translation
     //
@@ -4900,9 +4970,9 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, 
     const uint8_t * tile_data = root_tile_data;
 
     die_assert( (32 - INTERNAL2_TOTAL) < 21, "key won't fit in 64 bits" );
-    uint64_t key = ((uint64_t(z) >> INTERNAL2_TOTAL) <<  0) |
-                   ((uint64_t(y) >> INTERNAL2_TOTAL) << 21) |
-                   ((uint64_t(x) >> INTERNAL2_TOTAL) << 42);
+    uint64_t key = (uint64_t(uint32_t(z) >> INTERNAL2_TOTAL) <<  0) |
+                   (uint64_t(uint32_t(y) >> INTERNAL2_TOTAL) << 21) |
+                   (uint64_t(uint32_t(x) >> INTERNAL2_TOTAL) << 42);
     uint i;
     for( i = 0; i < root->mTileCount; i++ )
     {
@@ -4925,9 +4995,9 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, 
     //-------------------------------------------------------------------
     // Check to see if this is a value tile.
     //-------------------------------------------------------------------
-    const RootTileData * tile = reinterpret_cast< const RootTileData * >( tile_data + sizeof(uint64_t) + value_size );
+    const RootTileData * tile = reinterpret_cast< const RootTileData * >( tile_data );
     const uint8_t * value_ptr;
-    mdout << "VOLUME: root=" << root << " childID=" << (tile ? tile->childID : -2) << "\n";
+    mdout << "VOLUME: root=" << root << " tile=" << reinterpret_cast<const void *>(tile_data) << " childID=" << (tile ? tile->childID : -2) << "\n";
     if ( tile->childID < 0 ) {
         //-------------------------------------------------------------------
         // The value is the same for all voxels in the tile.
@@ -4969,14 +5039,15 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, 
         // Hash [x,y,z] to child c for internal node.
         // Test mChildMask[c].
         //-------------------------------------------------------------------
-        uint64_t c = (((x & INTERNAL2_MASK) >> INTERNAL1_TOTAL) << (2*INTERNAL2_LOG2DIM)) + 
-                     (((y & INTERNAL2_MASK) >> INTERNAL1_TOTAL) <<    INTERNAL2_LOG2DIM)  +
-                     (((z & INTERNAL2_MASK) >> INTERNAL1_TOTAL) <<                    0);
+        uint64_t c = (((uint64_t(x) & INTERNAL2_MASK) >> INTERNAL1_TOTAL) << (2*INTERNAL2_LOG2DIM)) + 
+                     (((uint64_t(y) & INTERNAL2_MASK) >> INTERNAL1_TOTAL) <<    INTERNAL2_LOG2DIM)  +
+                     (((uint64_t(z) & INTERNAL2_MASK) >> INTERNAL1_TOTAL) <<                    0);
         tile_data  = mTable + c*internal_tile_size;
         const InternalTileData * tile = reinterpret_cast< const InternalTileData * >( tile_data );
         bool is_on = (mChildMask[c/8] >> (c & 7)) & 1;
         mdout << "VOLUME: internal2=" << reinterpret_cast<const void *>(internal_data) << " &mask=" << reinterpret_cast<const void *>(mChildMask) << 
-                " n=" << c << " tile=" << tile << " isOn=" << is_on << " TOTAL=" << INTERNAL2_TOTAL << " SIZE=" << INTERNAL2_SIZE << "\n";
+                " n=" << c << " tile=" << reinterpret_cast<const void *>(tile_data) << " isOn=" << is_on << 
+                " TOTAL=" << INTERNAL2_TOTAL << " SIZE=" << INTERNAL2_SIZE << "\n";
         if ( !is_on || tile->childID < 0 ) {
             //-------------------------------------------------------------------
             // Pull value out of the mTable[c] Tile.
@@ -5015,7 +5086,8 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, 
             tile = reinterpret_cast< const InternalTileData * >( tile_data );
             bool is_on = (mChildMask[c/8] >> (c & 7)) & 1;
             mdout << "VOLUME: internal1=" << reinterpret_cast<const void *>(internal_data) << " &mask=" << reinterpret_cast<const void *>( mChildMask ) << 
-                    " n=" << c << " tile=" << tile << " isOn=" << is_on << " TOTAL=" << INTERNAL1_TOTAL << " SIZE=" << INTERNAL1_SIZE << "\n";
+                    " n=" << c << " tile=" << reinterpret_cast<const void *>(tile_data) << " isOn=" << is_on << 
+                    " TOTAL=" << INTERNAL1_TOTAL << " SIZE=" << INTERNAL1_SIZE << "\n";
             if ( !is_on || tile->childID < 0 ) {
                 //-------------------------------------------------------------------
                 // Pull value out of the mTable[c] Tile.
@@ -5052,9 +5124,9 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, 
                 const uint8_t *  mValueMask = leaf_data;
                 const LeafData * leaf       = reinterpret_cast< const LeafData * >( leaf_data + leaf_size - sizeof(LeafData) );
 
-                c = ((x & LEAF_MASK) << (2*LEAF_LOG2DIM)) + 
-                    ((y & LEAF_MASK) <<    LEAF_LOG2DIM)  +
-                     (z & LEAF_MASK);
+                c = ((uint64_t(x) & LEAF_MASK) << (2*LEAF_LOG2DIM)) + 
+                    ((uint64_t(y) & LEAF_MASK) <<    LEAF_LOG2DIM)  +
+                     (uint64_t(z) & LEAF_MASK);
                 mdout << "VOLUME: leaf=" << reinterpret_cast<const void *>(leaf_data) << 
                         " &mask=" << reinterpret_cast< const void * >( mValueMask ) << " leaf_size=" << leaf_size <<
                         " n=" << c << "\n";
@@ -5070,7 +5142,7 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, uint x, uint y, 
     return value_ptr;
 }
 
-bool Model::VolumeGrid::is_active( const Model * model, uint x, uint y, uint z ) const
+bool Model::VolumeGrid::is_active( const Model * model, _int x, _int y, _int z ) const
 {
     //--------------------------------------------------------------------------
     // Use value_ptr() which can fill in the boolean.
@@ -5080,7 +5152,7 @@ bool Model::VolumeGrid::is_active( const Model * model, uint x, uint y, uint z )
     return _is_active;
 }
 
-Model::_int64 Model::VolumeGrid::int64_value( const Model * model, uint x, uint y, uint z ) const
+Model::_int64 Model::VolumeGrid::int64_value( const Model * model, _int x, _int y, _int z ) const
 {
     auto ptr  = value_ptr( model, x, y, z );
     if ( ptr == nullptr ) return 0;
@@ -5096,12 +5168,12 @@ Model::_int64 Model::VolumeGrid::int64_value( const Model * model, uint x, uint 
     return r;
 }
 
-Model::_int Model::VolumeGrid::int_value( const Model * model, uint x, uint y, uint z ) const
+Model::_int Model::VolumeGrid::int_value( const Model * model, _int x, _int y, _int z ) const
 {
     return int64_value( model, x, y, z );
 }
 
-Model::real64 Model::VolumeGrid::real64_value( const Model * model, uint x, uint y, uint z ) const
+Model::real64 Model::VolumeGrid::real64_value( const Model * model, _int x, _int y, _int z ) const
 {
     auto ptr  = value_ptr( model, x, y, z );
     if ( ptr == nullptr ) return 0.0;
@@ -5116,12 +5188,12 @@ Model::real64 Model::VolumeGrid::real64_value( const Model * model, uint x, uint
     return r;
 }
 
-Model::real Model::VolumeGrid::real_value( const Model * model, uint x, uint y, uint z ) const
+Model::real Model::VolumeGrid::real_value( const Model * model, _int x, _int y, _int z ) const
 {
     return real64_value( model, x, y, z );
 }
 
-Model::real3 Model::VolumeGrid::real3_value( const Model * model, uint x, uint y, uint z ) const
+Model::real3 Model::VolumeGrid::real3_value( const Model * model, _int x, _int y, _int z ) const
 {
     (void)model;
     (void)x;
@@ -5132,18 +5204,84 @@ Model::real3 Model::VolumeGrid::real3_value( const Model * model, uint x, uint y
 }
 
 bool Model::VolumeGrid::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
-        real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const
+        real /*solid_angle*/, real tmin, real tmax, HitInfo& hit_info ) const
 {
-    // TODO: next
-    (void)model;
-    (void)origin;
-    (void)direction;
-    (void)direction_inv;
-    (void)solid_angle;
-    (void)t_min;
-    (void)t_max;
-    (void)hit_info;
-    return false;
+    //-------------------------------------------------------------------
+    // Clip ray (origin -> direction with t_min,t_max) to our grid's bounding box.
+    // Calling AABB::hit() will update tmin,tmax if there's intersection.
+    // Then we can get the start and endpoints trivially.
+    //-------------------------------------------------------------------
+    if ( !world_box.hit( origin, direction, direction_inv, tmin, tmax ) ) { 
+        mdout << "Model::VolumeGrid::hit: ray does not intersect world_box\n";
+        return false;
+    }
+    real3 clipped_start = origin + tmin*direction;
+    real3 clipped_end   = origin + tmax*direction;
+
+    //-------------------------------------------------------------------
+    // Calculate step amount in each of three dimensions.
+    // It should be safe to step by world_voxel_size along the ray.
+    //-------------------------------------------------------------------
+    real3 step = world_voxel_size * direction.normalized();
+    mdout << "Model::VolumeGrid::hit: clipped start=" << clipped_start << " end=" << clipped_end << 
+             " world_voxel_size=" << world_voxel_size << " step=" << step << "\n";
+
+    //-------------------------------------------------------------------
+    // Start at the clipped ray's origin and voxel.
+    // Find a voxel along the ray that has a non-zero value,
+    // which we currently interpret like alpha.
+    // We use this "alpha" as the probability of stopping at that voxel.
+    //-------------------------------------------------------------------
+    real world_voxel_size_inv = 1.0 / world_voxel_size;
+    real3 p = clipped_start;
+    _int x_prev = -1;
+    _int y_prev = -1;
+    _int z_prev = -1;
+    for( ;; ) 
+    {
+        //-------------------------------------------------------------------
+        // Get voxel xyz for p.
+        // Retrieve voxel value.
+        //-------------------------------------------------------------------
+        _int x = p.c[0] * world_voxel_size_inv;
+        _int y = p.c[1] * world_voxel_size_inv;
+        _int z = p.c[1] * world_voxel_size_inv;
+        if ( x != x_prev || y != y_prev || z != z_prev ) {
+            real v = real_value( model, x, y, z );
+            mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] value=" << v << "\n";
+
+            //-------------------------------------------------------------------
+            // See if we should stop.
+            //-------------------------------------------------------------------
+            if ( false && v > 0.0 ) std::cout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] value=" << v << "\n";
+            if ( v > 0.0 && MODEL_UNIFORM_FN() < v ) {
+                hit_info.model = model;
+                hit_info.poly_i = uint(-1);
+                hit_info.grid_i = this - model->volume_grids;
+                hit_info.voxel_xyz[0] = x;
+                hit_info.voxel_xyz[1] = y;
+                hit_info.voxel_xyz[2] = z;
+                hit_info.voxel_value = v;
+                mdout << "Model::VolumeGrid::hit: success\n";
+                return true;  // success
+            }
+
+            x_prev = x;
+            y_prev = y;
+            z_prev = z;
+        } else {
+            mdout << "Model::VolumeGrid::hit: step ended up in same place, do another step\n";
+        }
+
+        //-------------------------------------------------------------------
+        // Nope, must step and try again unless we go outside the volume.
+        //-------------------------------------------------------------------
+        p += step;
+        if ( !world_box.encloses( p ) ) {
+            mdout << "Model::VolumeGrid::hit: stepped out of volume, returning false\n";
+            return false;
+        }
+    }
 }
 
 bool Model::Instance::bounding_box( const Model * model, AABB& b, real padding ) const

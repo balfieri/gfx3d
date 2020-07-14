@@ -5252,17 +5252,29 @@ bool Model::VolumeGrid::hit( const Model * model, const real3& origin, const rea
 
             //-------------------------------------------------------------------
             // See if we should stop.
+            //
+            // t is just (p - origin) * direction_inv.  We use the component that has the largest value in directino.
             //-------------------------------------------------------------------
             if ( false && v > 0.0 ) std::cout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] value=" << v << "\n";
             if ( v > 0.0 && MODEL_UNIFORM_FN() < v ) {
                 hit_info.model = model;
+                hit_info.p = p;
+                int c;
+                for( int i=0; i < 3; i++ )
+                {
+                    if ( i == 0 || direction.c[i] > direction.c[c] ) {
+                        c = i;
+                    }
+                }
+                hit_info.t = (p.c[c] - origin.c[c]) * direction_inv.c[c];
                 hit_info.poly_i = uint(-1);
                 hit_info.grid_i = this - model->volume_grids;
                 hit_info.voxel_xyz[0] = x;
                 hit_info.voxel_xyz[1] = y;
                 hit_info.voxel_xyz[2] = z;
                 hit_info.voxel_value = v;
-                mdout << "Model::VolumeGrid::hit: success\n";
+                mdout << "Model::VolumeGrid::hit: success origin=" << origin << " direction=" << direction << " direction_inv=" << direction_inv << 
+                         " p=" << p << " c=" << c << " t=" << hit_info.t << "\n";
                 return true;  // success
             }
 

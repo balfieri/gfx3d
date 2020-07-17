@@ -536,6 +536,13 @@ public:
         FP16    = 9
     };
 
+    enum class VolumeVoxelClass : uint16_t
+    {
+        UNKNOWN     = 0, 
+        DENSITY     = 1,
+        TEMPERATURE = 2,
+    };
+
     enum class VolumeGridClass : uint16_t
     {
         UNKNOWN   = 0, 
@@ -547,15 +554,16 @@ public:
     class VolumeGrid
     {
     public:
-        uint            name_i;                 // index in strings[] array (null-terminated strings)
-        uint64          voxel_cnt;              // number of active voxels
-        VolumeVoxelType voxel_type;             // voxel data type (float, double, etc.)
-        VolumeGridClass grid_class;             // class of grid (level set, fog, staggered)
-        uint            node_cnt[4];            // not sure yet what this is for
-        AABB            world_box;              // AABB in world space (what we normally think of as the AABB)
-        AABBI           index_box;              // AABB in index space
-        real64          world_voxel_size;       // size of voxel in world units
-        uint64          voxel_i;                // index into voxels[] of first voxel 
+        uint             name_i;                // index in strings[] array (null-terminated strings)
+        uint64           voxel_cnt;             // number of active voxels
+        VolumeVoxelType  voxel_type;            // voxel data type (float, double, etc.)
+        VolumeVoxelClass voxel_class;           // DENSITY, TEMPERATURE, etc.
+        VolumeGridClass  grid_class;            // class of grid (level set, fog, staggered)
+        uint             node_cnt[4];           // not sure yet what this is for
+        AABB             world_box;             // AABB in world space (what we normally think of as the AABB)
+        AABBI            index_box;             // AABB in index space
+        real64           world_voxel_size;      // size of voxel in world units
+        uint64           voxel_i;               // index into voxels[] of first voxel 
 
         bool   bounding_box( const Model * model, AABB& box, real padding=0 ) const;
         bool   is_active( const Model * model, _int x, _int y, _int z ) const;
@@ -1141,6 +1149,23 @@ inline std::ostream& operator << ( std::ostream& os, const Model::VolumeVoxelTyp
     return os;
 }
 
+inline std::string str( const Model::VolumeVoxelClass c ) 
+{
+    switch( c ) 
+    {
+        case Model::VolumeVoxelClass::UNKNOWN:          return "UNKNOWN";       break;
+        case Model::VolumeVoxelClass::DENSITY:          return "DENSITY";       break;
+        case Model::VolumeVoxelClass::TEMPERATURE:      return "TEMPERATURE";   break;
+        default:                                        return "<unknown>";     break;
+    }
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::VolumeVoxelClass& c ) 
+{
+    os << str( c );
+    return os;
+}
+
 inline std::string str( const Model::VolumeGridClass c ) 
 {
     switch( c )
@@ -1161,7 +1186,7 @@ inline std::ostream& operator << ( std::ostream& os, const Model::VolumeGridClas
 
 inline std::ostream& operator << ( std::ostream& os, const Model::VolumeGrid& grid ) 
 {
-    os << "name_i=" << grid.name_i << " voxel_cnt=" << grid.voxel_cnt << " voxel_type=" << grid.voxel_type << 
+    os << "name_i=" << grid.name_i << " voxel_cnt=" << grid.voxel_cnt << " voxel_type=" << grid.voxel_type << " voxel_class=" << grid.voxel_class <<
           " grid_class=" << grid.grid_class << " world_box=" << grid.world_box << " index_box=" << grid.index_box <<
           " world_voxel_size=" << grid.world_voxel_size << " voxel_i=" << grid.voxel_i;
     return os;
@@ -3609,6 +3634,8 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
             grid->name_i = name_i;
             grid->voxel_cnt = meta.voxel_cnt;
             grid->voxel_type = meta.grid_type;
+            grid->voxel_class = (name == "d" || name == "dens" || name == "density")     ? VolumeVoxelClass::DENSITY :
+                                (name == "t" || name == "temp" || name == "temperature") ? VolumeVoxelClass::TEMPERATURE : VolumeVoxelClass::UNKNOWN;
             grid->grid_class = meta.grid_class;
             for( uint j = 0; j < 4; j++ ) 
             { 

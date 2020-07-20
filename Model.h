@@ -5543,7 +5543,9 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
     bool r = false;
     uint bvh_i = this - model->bvh_nodes;
     mdout << "Model::BVH_Node::hit: bvh_i=" << bvh_i << "\n";
-    if ( box.hit( origin, direction, direction_inv, t_min, t_max ) ) {
+    real tmin = t_min;
+    real tmax = t_max;
+    if ( box.hit( origin, direction, direction_inv, tmin, tmax ) ) {
         HitInfo left_hit_info;
         HitInfo right_hit_info;
         bool hit_left  = (left_kind == BVH_NODE_KIND::POLYGON)      ? model->polygons[left_i].hit(      model, origin, direction, direction_inv,   

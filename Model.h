@@ -5261,6 +5261,8 @@ bool Model::VolumeGrid::hit( const Model * model, const real3& origin, const rea
     //-------------------------------------------------------------------
     real world_voxel_size_inv = 1.0 / world_voxel_size;
     real3 p = clipped_start;
+    if (tmin <=0)
+        p = origin;
     _int x_prev = -1;
     _int y_prev = -1;
     _int z_prev = -1;
@@ -5272,7 +5274,7 @@ bool Model::VolumeGrid::hit( const Model * model, const real3& origin, const rea
         //-------------------------------------------------------------------
         _int x = p.c[0] * world_voxel_size_inv;
         _int y = p.c[1] * world_voxel_size_inv;
-        _int z = p.c[1] * world_voxel_size_inv;
+        _int z = p.c[2] * world_voxel_size_inv;
         if ( x != x_prev || y != y_prev || z != z_prev ) {
             real v = real_value( model, x, y, z );
             mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] value=" << v << "\n";
@@ -5300,6 +5302,8 @@ bool Model::VolumeGrid::hit( const Model * model, const real3& origin, const rea
                 hit_info.voxel_xyz[1] = y;
                 hit_info.voxel_xyz[2] = z;
                 hit_info.voxel_value = v;
+                hit_info.normal = real3(0,1,0);
+                hit_info.shading_normal = hit_info.normal;
                 mdout << "Model::VolumeGrid::hit: success origin=" << origin << " direction=" << direction << " direction_inv=" << direction_inv << 
                          " p=" << p << " c=" << c << " t=" << hit_info.t << "\n";
                 return true;  // success

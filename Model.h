@@ -3580,7 +3580,7 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
         memcpy( &header, nvdb, sizeof(SegmentHeader) );
         nvdb += sizeof(SegmentHeader);
         die_assert( header.magic == 0x4244566f6e614eULL, "bad magic number in .nvdb segment header" );
-        die_assert( header.major == 14, "bad major number in .nvdb segment header" );
+        die_assert( header.major == 17, "bad major number in .nvdb segment header" );
         volume->grid_cnt += header.grid_cnt;
 
         for( uint i = 0; i < header.grid_cnt; i++ )
@@ -4924,7 +4924,9 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
     // TreeData comes after the name.
     // RootData comes after the TreeData.
     //-------------------------------------------------------------------
+    static const int MaxNameSize = 256;
     struct GridData { 
+        char        mGridName[MaxNameSize];
         uint64_t    mMagic;             // 8 byte magic to validate it is valid grid data.
                                         // REFERENCEMAGIC = 0x4244566f6e614eL;
         real64      mBBoxMin[3];        // min corner of AABB
@@ -4933,14 +4935,15 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
         double      mUniformScale;      // size of a voxel in world units
         VolumeGridClass mGridClass;     // 2 bytes
         VolumeVoxelType mVoxelType;     // 2 bytes
-        uint32_t    mNameSize;          // 4 bytes (grid name c-string is right after this struct, mNameSize includes the null character)
+        uint32_t    mBlindDataCount;    // count of GridBlindMetaData structures that follow this grid (after the gridname).
         uint32_t    padding[4];         // seems to be needed to match up with NanoVDB
     };
 
     const uint8_t * grid_data = &model->voxels[voxel_i];
     const GridData * grid = reinterpret_cast< const GridData * >( grid_data );
     die_assert( grid->mMagic == 0x4244566f6e614eULL, "bad magic number in GridData" );
-    mdout << "VOLUME: grid=" << grid << " mUniformScale=" << grid->mUniformScale << " mNameSize=" << grid->mNameSize << "\n";
+    die_assert( grid->mBlindDataCount == 0, "mBlindDataCount must be 0 currently" );
+    mdout << "VOLUME: grid=" << grid << " mUniformScale=" << "\n";
 
     struct TreeData
     {
@@ -4948,20 +4951,21 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
         uint32_t mCount[ROOT_LEVEL + 1]; // total number of nodes of each type
     };
 
-    const uint8_t * tree_data = grid_data + sizeof(GridData) + grid->mNameSize;
+    const uint8_t * tree_data = grid_data + sizeof(GridData);
     const TreeData * tree = reinterpret_cast< const TreeData * >( tree_data );
     mdout << "VOLUME: tree=" << tree << " mBytes[ROOT_LEVEL]=" << tree->mBytes[ROOT_LEVEL] << "\n";
 
     struct RootData32
     {
+        float    mBBoxMin[3];           // min corner of world bbox
+        float    mBBoxMax[3];           // max corner of world bbox
+        uint64_t mActiveVoxelCount;     // total number of active voxels in the root and all its child nodes
+        uint32_t mTileCount;            // number of tiles and child pointers in the root node
+        uint32_t mPadding1[3];          // to match reference
         float    mBackGround;           // background value, i.e., value of any unset voxel
         float    mValueMin;             // minimum value
         float    mValueMax;             // maximum value
-        float    mBBoxMin[3];           // min corner of world bbox
-        float    mBBoxMax[3];           // max corner of world bbox
-        uint32_t mTileCount;            // number of tiles and child pointers in the root node
-        uint64_t mActiveVoxelCount;     // total number of active voxels in the root and all its child nodes
-        uint64_t mPadding[2];           // to match reference
+        uint32_t mPadding2[1];          // to match reference
     };
 
     const uint8_t *   root_data = tree_data + tree->mBytes[ROOT_LEVEL];
@@ -5285,7 +5289,7 @@ bool Model::VolumeGrid::hit( const Model * model, const real3& origin, const rea
             // t is just (p - origin) * direction_inv.  We use the component that has the largest value in directino.
             //-------------------------------------------------------------------
             if ( false && v > 0.0 ) std::cout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] value=" << v << "\n";
-            if ( v > 0.0 && MODEL_UNIFORM_FN() < v ) {
+            if ( v > 0.0 && MODEL_UNIFORM_FN() < 0.1*v ) {
                 hit_info.model = model;
                 hit_info.p = p;
                 int c;
@@ -5303,7 +5307,7 @@ bool Model::VolumeGrid::hit( const Model * model, const real3& origin, const rea
                 hit_info.voxel_xyz[2] = z;
                 hit_info.voxel_value = v;
                 hit_info.normal = real3(0,1,0);
-                hit_info.shading_normal = hit_info.normal;
+                hit_info.shading_normal = real3(0,1,0);
                 mdout << "Model::VolumeGrid::hit: success origin=" << origin << " direction=" << direction << " direction_inv=" << direction_inv << 
                          " p=" << p << " c=" << c << " t=" << hit_info.t << "\n";
                 return true;  // success

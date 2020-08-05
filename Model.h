@@ -306,6 +306,17 @@ public:
         real2& operator /= ( const real s );
     };
 
+    class real3d     
+    {
+    public:
+        real64 c[3];
+
+        real3d( void )                            { c[0] = 0;  c[1] = 0;  c[2] = 0;  }
+        real3d( real64 c0, real64 c1, real64 c2 ) { c[0] = c0; c[1] = c1; c[2] = c2; }
+
+        // Used only for retrieving VEC3D type from volumes.  No operators supported.
+    };
+
     class Header                            // header (of future binary file)
     {
     public:
@@ -392,7 +403,13 @@ public:
         real3           tangent_normalized;
         real3           bitangent;
 
-        // it's a VolumeGrid hit when grid_i != -1
+        // It's a VolumeGrid hit when volume_i != -1.
+        // Currently, all grids must have the same bounding boxes.  This is so that
+        // we can return a Volume when a hit() occurs for whatever reason.
+        // We also return the grid_i that caused the hit() to stop.
+        // Typically, the caller will want to interrogate all grids during a hit.
+        //
+        uint            volume_i;               
         uint            grid_i;
         _int            voxel_xyz[3];           // voxel coordinates 
         real            voxel_value;            // voxel value
@@ -508,7 +525,11 @@ public:
 
     uint gph_node_alloc( Model::GRAPH_NODE_KIND kind, uint parent_i=uint(-1) );
 
-    // Volume - made up of one or more VolumeSegment
+    // Volume - made up of one or more VolumeGrid
+    //
+    // Note: Currently, all grids must have the same bounding boxes.  This is so that
+    //       we can return a Volume when a hit() occurs for whatever reason, though
+    //       we will also return the grid_i that caused the hit() to stop.
     //
     class Volume
     {
@@ -516,6 +537,10 @@ public:
         uint            name_i;                 // index in strings array (null-terminated strings)
         uint            grid_cnt;               // number of grids
         uint            grid_i;                 // index into volume_grids[] array of first grid
+
+        bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
+        bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
+                  real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const;
 
         std::string str( const Model * model, std::string indent="" ) const;       // recursive
     };
@@ -538,9 +563,14 @@ public:
 
     enum class VolumeVoxelClass : uint16_t
     {
-        UNKNOWN     = 0, 
-        DENSITY     = 1,
-        TEMPERATURE = 2,
+        UNKNOWN      = 0, 
+        DENSITY      = 1,
+        TEMPERATURE  = 2,
+        RGB          = 3,
+        EMISSIVE_RGB = 4,
+        NORMAL       = 5,
+        IOR          = 6,
+        F0           = 7
     };
 
     enum class VolumeGridClass : uint16_t
@@ -573,8 +603,7 @@ public:
         real   real_value( const Model * model, _int x, _int y, _int z ) const;
         real64 real64_value( const Model * model, _int x, _int y, _int z ) const;
         real3  real3_value( const Model * model, _int x, _int y, _int z ) const;
-        bool   hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
-                    real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const;
+        real3d real3d_value( const Model * model, _int x, _int y, _int z ) const;
     };
 
     class Texture
@@ -702,7 +731,7 @@ public:
         BVH_NODE,                           // BVH_Node
         POLYGON,                            // Polygon
         INSTANCE,                           // Instance
-        VOLUME_GRID,                        // VolumeGrid
+        VOLUME,                             // Volume
     };
 
     class BVH_Node
@@ -1156,6 +1185,11 @@ inline std::string str( const Model::VolumeVoxelClass c )
         case Model::VolumeVoxelClass::UNKNOWN:          return "UNKNOWN";       break;
         case Model::VolumeVoxelClass::DENSITY:          return "DENSITY";       break;
         case Model::VolumeVoxelClass::TEMPERATURE:      return "TEMPERATURE";   break;
+        case Model::VolumeVoxelClass::EMISSIVE_RGB:     return "EMISSIVE_RGB";  break;
+        case Model::VolumeVoxelClass::RGB:              return "RGB";           break;
+        case Model::VolumeVoxelClass::NORMAL:           return "NORMAL";        break;
+        case Model::VolumeVoxelClass::IOR:              return "IOR";           break;
+        case Model::VolumeVoxelClass::F0:               return "F0";            break;
         default:                                        return "<unknown>";     break;
     }
 }
@@ -3583,6 +3617,7 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
         die_assert( header.major == 17, "bad major number in .nvdb segment header" );
         volume->grid_cnt += header.grid_cnt;
 
+        const VolumeGrid * grid0 = &volume_grids[volume->grid_i];
         for( uint i = 0; i < header.grid_cnt; i++ )
         {
             //------------------------------------------------------------
@@ -3634,8 +3669,14 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
             grid->name_i = name_i;
             grid->voxel_cnt = meta.voxel_cnt;
             grid->voxel_type = meta.grid_type;
-            grid->voxel_class = (name == "d" || name == "dens" || name == "density")     ? VolumeVoxelClass::DENSITY :
-                                (name == "t" || name == "temp" || name == "temperature") ? VolumeVoxelClass::TEMPERATURE : VolumeVoxelClass::UNKNOWN;
+            grid->voxel_class = (name == "d" || name == "dens"     || name == "density")      ? VolumeVoxelClass::DENSITY :
+                                (name == "t" || name == "temp"     || name == "temperature")  ? VolumeVoxelClass::TEMPERATURE : 
+                                (name == "r" || name == "rgb"      || name == "RGB")          ? VolumeVoxelClass::RGB : 
+                                (name == "e" || name == "emissive" || name == "emissive_rgb") ? VolumeVoxelClass::EMISSIVE_RGB : 
+                                (name == "n" || name == "norm"     || name == "normal")       ? VolumeVoxelClass::NORMAL : 
+                                (name == "i" || name == "ior"      || name == "IOR")          ? VolumeVoxelClass::IOR : 
+                                (name == "f" || name == "f0"       || name == "F0")           ? VolumeVoxelClass::F0 : 
+                                                                                                VolumeVoxelClass::UNKNOWN;
             grid->grid_class = meta.grid_class;
             for( uint j = 0; j < 4; j++ ) 
             { 
@@ -3645,9 +3686,17 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
                     grid->world_box.max.c[j] = meta.world_box.max[j];
                     grid->index_box.min[j]   = meta.index_box.min[j];
                     grid->index_box.max[j]   = meta.index_box.max[j];
+                    if ( i > 0 ) {
+                        die_assert( grid->world_box.min.c[j] == grid0->world_box.min.c[j], "all grids in a volume must have same world box" );
+                        die_assert( grid->world_box.max.c[j] == grid0->world_box.max.c[j], "all grids in a volume must have same world box" );
+                        die_assert( grid->index_box.min[j]   == grid0->index_box.min[j],   "all grids in a volume must have same index box" );
+                        die_assert( grid->index_box.max[j]   == grid0->index_box.max[j],   "all grids in a volume must have same index box" );
+                    }
                 }
             }
             grid->world_voxel_size = meta.voxel_size;
+            die_assert( i == 0 || grid->world_voxel_size == grid0->world_voxel_size, 
+                        "all grids in a volume must have the same world voxel size" );
 
             //------------------------------------------------------------
             // Copy voxel data which is variable size.
@@ -4840,6 +4889,13 @@ bool Model::Polygon::hit( const Model * model, const real3& origin, const real3&
     return false;
 }
 
+bool Model::Volume::bounding_box( const Model * model, AABB& box, real padding ) const
+{
+    // all grids in a volume must have the same bbox
+    //
+    return model->volume_grids[0].bounding_box( model, box, padding );
+}
+
 bool Model::VolumeGrid::bounding_box( const Model * model, Model::AABB& box, real padding ) const 
 {
     (void)model;
@@ -5224,25 +5280,44 @@ Model::real Model::VolumeGrid::real_value( const Model * model, _int x, _int y, 
     return real64_value( model, x, y, z );
 }
 
-Model::real3 Model::VolumeGrid::real3_value( const Model * model, _int x, _int y, _int z ) const
+Model::real3d Model::VolumeGrid::real3d_value( const Model * model, _int x, _int y, _int z ) const
 {
-    (void)model;
-    (void)x;
-    (void)y;
-    (void)z;
-    die_assert( false, "real3_value() not yet supported, but easy to add" );
-    return real3( 0, 0, 0 );
+    auto ptr  = value_ptr( model, x, y, z );
+    if ( ptr == nullptr ) return real3d( 0, 0, 0 );
+
+    real3d r3d;
+    for( int i = 0; i < 3; i++ )
+    {
+        switch( voxel_type ) 
+        {
+            case VolumeVoxelType::VEC3F:    r3d.c[i] = *(reinterpret_cast<const float *>( ptr ) + i); break;
+            case VolumeVoxelType::VEC3D:    r3d.c[i] = *(reinterpret_cast<const double *>( ptr ) + i); break;
+            default:                        r3d.c[i] = 0; die_assert( false, "voxel_type is not VEC3F or VEC3D" ); break;
+        }        
+    }
+    return r3d;
 }
 
-bool Model::VolumeGrid::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
-        real /*solid_angle*/, real tmin, real tmax, HitInfo& hit_info ) const
+Model::real3 Model::VolumeGrid::real3_value( const Model * model, _int x, _int y, _int z ) const
+{
+    real3d r3d = real3d_value( model, x, y, z );
+    real3  r3;
+    r3.c[0] = r3d.c[0];
+    r3.c[1] = r3d.c[1];
+    r3.c[2] = r3d.c[2];
+    return r3;
+}
+
+bool Model::Volume::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
+                         real /*solid_angle*/, real tmin, real tmax, HitInfo& hit_info ) const
 {
     //-------------------------------------------------------------------
-    // Clip ray (origin -> direction with t_min,t_max) to our grid's bounding box.
+    // Clip ray (origin -> direction with t_min,t_max) to our bounding box.
     // Calling AABB::hit() will update tmin,tmax if there's intersection.
     // Then we can get the start and endpoints trivially.
     //-------------------------------------------------------------------
-    if ( !world_box.hit( origin, direction, direction_inv, tmin, tmax ) ) { 
+    const VolumeGrid * grid = &model->volume_grids[grid_i];  // all grids in volume have the same bbox
+    if ( !grid->world_box.hit( origin, direction, direction_inv, tmin, tmax ) ) { 
         mdout << "Model::VolumeGrid::hit: ray does not intersect world_box\n";
         return false;
     }
@@ -5253,9 +5328,9 @@ bool Model::VolumeGrid::hit( const Model * model, const real3& origin, const rea
     // Calculate step amount in each of three dimensions.
     // It should be safe to step by world_voxel_size along the ray.
     //-------------------------------------------------------------------
-    real3 step = world_voxel_size * direction.normalized();
+    real3 step = grid->world_voxel_size * direction.normalized();
     mdout << "Model::VolumeGrid::hit: clipped start=" << clipped_start << " end=" << clipped_end << 
-             " world_voxel_size=" << world_voxel_size << " step=" << step << "\n";
+             " world_voxel_size=" << grid->world_voxel_size << " step=" << step << "\n";
 
     //-------------------------------------------------------------------
     // Start at the clipped ray's origin and voxel.
@@ -5263,7 +5338,7 @@ bool Model::VolumeGrid::hit( const Model * model, const real3& origin, const rea
     // which we currently interpret like alpha.
     // We use this "alpha" as the probability of stopping at that voxel.
     //-------------------------------------------------------------------
-    real world_voxel_size_inv = 1.0 / world_voxel_size;
+    real world_voxel_size_inv = 1.0 / grid->world_voxel_size;
     real3 p = clipped_start;
     if (tmin <=0)
         p = origin;
@@ -5280,7 +5355,7 @@ bool Model::VolumeGrid::hit( const Model * model, const real3& origin, const rea
         _int y = p.c[1] * world_voxel_size_inv;
         _int z = p.c[2] * world_voxel_size_inv;
         if ( x != x_prev || y != y_prev || z != z_prev ) {
-            real v = real_value( model, x, y, z );
+            real v = grid->real_value( model, x, y, z );
             mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] value=" << v << "\n";
 
             //-------------------------------------------------------------------
@@ -5301,7 +5376,8 @@ bool Model::VolumeGrid::hit( const Model * model, const real3& origin, const rea
                 }
                 hit_info.t = (p.c[c] - origin.c[c]) * direction_inv.c[c];
                 hit_info.poly_i = uint(-1);
-                hit_info.grid_i = this - model->volume_grids;
+                hit_info.volume_i = this - model->volumes;
+                hit_info.grid_i = grid_i;
                 hit_info.voxel_xyz[0] = x;
                 hit_info.voxel_xyz[1] = y;
                 hit_info.voxel_xyz[2] = z;
@@ -5324,7 +5400,7 @@ bool Model::VolumeGrid::hit( const Model * model, const real3& origin, const rea
         // Nope, must step and try again unless we go outside the volume.
         //-------------------------------------------------------------------
         p += step;
-        if ( !world_box.encloses( p ) ) {
+        if ( !grid->world_box.encloses( p ) ) {
             mdout << "Model::VolumeGrid::hit: stepped out of volume, returning false\n";
             return false;
         }
@@ -5415,7 +5491,7 @@ void Model::bvh_build( Model::BVH_TREE bvh_tree )
         // For grids.
         //--------------------------------------------------
         die_assert( hdr->inst_cnt == 0, "inst_cnt should be 0 when volume_cnt is not 0" );
-        hdr->bvh_root_i = bvh_node( BVH_NODE_KIND::VOLUME_GRID, 0, hdr->volume_grid_cnt, 1 );
+        hdr->bvh_root_i = bvh_node( BVH_NODE_KIND::VOLUME, 0, hdr->volume_cnt, 1 );
 
     } else {
         //--------------------------------------------------
@@ -5445,11 +5521,11 @@ inline Model::uint Model::bvh_qsplit( BVH_NODE_KIND kind, Model::uint first, Mod
                     polygons[m]  = temp;
                     break;
                 }
-                case BVH_NODE_KIND::VOLUME_GRID:
+                case BVH_NODE_KIND::VOLUME:
                 {
-                    VolumeGrid temp = volume_grids[i];
-                    volume_grids[i]  = volume_grids[m];
-                    volume_grids[m]  = temp;
+                    Volume temp = volumes[i];
+                    volumes[i]  = volumes[m];
+                    volumes[m]  = temp;
                     break;
                 }
                 case BVH_NODE_KIND::INSTANCE:
@@ -5482,7 +5558,7 @@ Model::uint Model::bvh_node( BVH_NODE_KIND kind, Model::uint first, Model::uint 
     switch( kind )
     {
         case BVH_NODE_KIND::POLYGON:                polygons[first+0].bounding_box( this, node->box );          break;
-        case BVH_NODE_KIND::VOLUME_GRID:            volume_grids[first+0].bounding_box( this, node->box );      break;
+        case BVH_NODE_KIND::VOLUME:                 volumes[first+0].bounding_box( this, node->box );           break;
         case BVH_NODE_KIND::INSTANCE:               instances[first+0].bounding_box( this, node->box );         break;
         default:                                    die_assert( false, "unexpected BVH_NODE_KIND" );            break;
     }
@@ -5493,7 +5569,7 @@ Model::uint Model::bvh_node( BVH_NODE_KIND kind, Model::uint first, Model::uint 
         switch( kind )
         {
             case BVH_NODE_KIND::POLYGON:                polygons[first+i].bounding_box( this, new_box );        break;
-            case BVH_NODE_KIND::VOLUME_GRID:            volume_grids[first+i].bounding_box( this, new_box );    break;
+            case BVH_NODE_KIND::VOLUME:                 volumes[first+i].bounding_box( this, new_box );         break;
             case BVH_NODE_KIND::INSTANCE:               instances[first+i].bounding_box( this, new_box );       break;
             default:                                    die_assert( false, "unexpected BVH_NODE_KIND" );        break;
         }
@@ -5508,7 +5584,7 @@ Model::uint Model::bvh_node( BVH_NODE_KIND kind, Model::uint first, Model::uint 
         switch( kind )
         {
             case BVH_NODE_KIND::POLYGON:                polygons[first+0].bounding_box( this, new_box );        break;
-            case BVH_NODE_KIND::VOLUME_GRID:            volume_grids[first+0].bounding_box( this, new_box );    break;
+            case BVH_NODE_KIND::VOLUME:                 volumes[first+0].bounding_box( this, new_box );         break;
             case BVH_NODE_KIND::INSTANCE:               instances[first+0].bounding_box( this, new_box );       break;
             default:                                    die_assert( false, "unexpected BVH_NODE_KIND" );        break;
         }
@@ -5517,7 +5593,7 @@ Model::uint Model::bvh_node( BVH_NODE_KIND kind, Model::uint first, Model::uint 
             switch( kind )
             {
                 case BVH_NODE_KIND::POLYGON:                polygons[first+1].bounding_box( this, new_box );        break;
-                case BVH_NODE_KIND::VOLUME_GRID:            volume_grids[first+1].bounding_box( this, new_box );    break;
+                case BVH_NODE_KIND::VOLUME:                 volumes[first+1].bounding_box( this, new_box );     break;
                 case BVH_NODE_KIND::INSTANCE:               instances[first+1].bounding_box( this, new_box );       break;
                 default:                                    die_assert( false, "unexpected BVH_NODE_KIND" );        break;
             }
@@ -5558,7 +5634,7 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
         HitInfo right_hit_info;
         bool hit_left  = (left_kind == BVH_NODE_KIND::POLYGON)      ? model->polygons[left_i].hit(      model, origin, direction, direction_inv,   
                                                                                                         solid_angle, t_min, t_max, left_hit_info  ) :
-                         (left_kind == BVH_NODE_KIND::VOLUME_GRID)  ? model->volume_grids[left_i].hit(  model, origin, direction, direction_inv, 
+                         (left_kind == BVH_NODE_KIND::VOLUME)       ? model->volumes[left_i].hit(       model, origin, direction, direction_inv, 
                                                                                                         solid_angle, t_min, t_max, left_hit_info  ) :
                          (left_kind == BVH_NODE_KIND::INSTANCE)     ? model->instances[left_i].hit(     model, origin, direction, direction_inv, 
                                                                                                         solid_angle, t_min, t_max, left_hit_info  ) :
@@ -5567,7 +5643,7 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
         bool hit_right = (left_i == right_i)                        ? false :   // lone leaf
                          (right_kind == BVH_NODE_KIND::POLYGON)     ? model->polygons[right_i].hit(     model, origin, direction, direction_inv, 
                                                                                                         solid_angle, t_min, t_max, right_hit_info ) :
-                         (right_kind == BVH_NODE_KIND::VOLUME_GRID) ? model->volume_grids[right_i].hit( model, origin, direction, direction_inv, 
+                         (right_kind == BVH_NODE_KIND::VOLUME)      ? model->volumes[right_i].hit(      model, origin, direction, direction_inv, 
                                                                                                         solid_angle, t_min, t_max, right_hit_info ) :
                          (right_kind == BVH_NODE_KIND::INSTANCE)    ? model->instances[right_i].hit(    model, origin, direction, direction_inv, 
                                                                                                         solid_angle, t_min, t_max, right_hit_info ) :

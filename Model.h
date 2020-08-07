@@ -387,6 +387,12 @@ public:
     class HitInfo
     {
     public:
+        // input state that may affect hit decisions:
+        real3           F0;                 // incoming F0 (valid if F0[0] >= 0) used to decide when to stop in a volume
+                                            // if you have only IOR (index of refraction), construct F0 as follows:
+                                            //     a = (IOR-1)^2 / (IOR+1)^2)
+                                            //     F0 = (a, a, a)
+
         // fields common to all types of hits
         const Model *   model;              // model of owning BVH
         real            t;                  // t parameter to get to p from origin
@@ -396,7 +402,7 @@ public:
         uint            poly_i;                 
         real            u;
         real            v;
-        real            frac_uv_cov;            // UV footprint of hit surface (used by mip_level calculation)
+        real            frac_uv_cov;        // UV footprint of hit surface (used by mip_level calculation)
         real3           normal;
         real3           shading_normal;
         real3           tangent;
@@ -410,9 +416,17 @@ public:
         // Typically, the caller will want to interrogate all grids during a hit.
         //
         uint            volume_i;               
-        uint            grid_i;
-        _int            voxel_xyz[3];           // voxel coordinates 
-        real            voxel_value;            // voxel value
+        uint            grid_i;             // grid index that caused hit to stop
+        _int            voxel_xyz[3];       // voxel coordinates 
+        struct
+        {
+            real        r;
+            real64      r64;
+            real3       r3;
+            real3d      r3d;
+            _int        i;
+            _int64      i64;
+        }               voxel_value;        // based on voxel_type of grid_i
     };
 
     class AABB                              // axis aligned bounding box
@@ -531,19 +545,6 @@ public:
     //       we can return a Volume when a hit() occurs for whatever reason, though
     //       we will also return the grid_i that caused the hit() to stop.
     //
-    class Volume
-    {
-    public:
-        uint            name_i;                 // index in strings array (null-terminated strings)
-        uint            grid_cnt;               // number of grids
-        uint            grid_i;                 // index into volume_grids[] array of first grid
-
-        bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
-        bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
-                  real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const;
-
-        std::string str( const Model * model, std::string indent="" ) const;       // recursive
-    };
 
     // VolumeGrid - made up of one or more VolumeGrid
     //
@@ -564,13 +565,15 @@ public:
     enum class VolumeVoxelClass : uint16_t
     {
         UNKNOWN      = 0, 
-        DENSITY      = 1,
-        TEMPERATURE  = 2,
-        RGB          = 3,
-        EMISSIVE_RGB = 4,
-        NORMAL       = 5,
-        IOR          = 6,
-        F0           = 7
+        DENSITY      = 1,                       // particle density
+        TEMPERATURE  = 2,                       // used for fire
+        RGB          = 3,                       // scattering albedo
+        EMISSIVE_RGB = 4,                       // used for lightning
+        NORMAL       = 5,                       // surface normal
+        IOR          = 6,                       // index of refraction
+        F0           = 7,                       // more general 3D version of IOR (see early comments on how to convert from IOR to F0)
+        G            = 8,                       // scattering phase function mean cosine (0 == omnidirectional, 1 == forward)
+        ATTENUATION  = 9                        // 3D attenuation (default is 1,1,1 which means none)
     };
 
     enum class VolumeGridClass : uint16_t
@@ -579,6 +582,21 @@ public:
         LEVELSET  = 1, 
         FOGVOLUME = 2, 
         STAGGERED = 3
+    };
+
+    class Volume
+    {
+    public:
+        uint            name_i;                 // index in strings array (null-terminated strings)
+        uint            grid_cnt;               // number of grids
+        uint            grid_i;                 // index into volume_grids[] array of first grid
+
+        bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
+        bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
+                  real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const;
+        uint voxel_class_grid_i( const Model * model, VolumeVoxelClass c ) const;
+
+        std::string str( const Model * model, std::string indent="" ) const;       // recursive
     };
 
     class VolumeGrid
@@ -1190,6 +1208,8 @@ inline std::string str( const Model::VolumeVoxelClass c )
         case Model::VolumeVoxelClass::NORMAL:           return "NORMAL";        break;
         case Model::VolumeVoxelClass::IOR:              return "IOR";           break;
         case Model::VolumeVoxelClass::F0:               return "F0";            break;
+        case Model::VolumeVoxelClass::G:                return "G";             break;
+        case Model::VolumeVoxelClass::ATTENUATION:      return "ATTENUATION";   break;
         default:                                        return "<unknown>";     break;
     }
 }
@@ -3676,6 +3696,8 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
                                 (name == "n" || name == "norm"     || name == "normal")       ? VolumeVoxelClass::NORMAL : 
                                 (name == "i" || name == "ior"      || name == "IOR")          ? VolumeVoxelClass::IOR : 
                                 (name == "f" || name == "f0"       || name == "F0")           ? VolumeVoxelClass::F0 : 
+                                (name == "g" || name == "G")                                  ? VolumeVoxelClass::G : 
+                                (name == "a" || name == "A"        || name == "attenuation")  ? VolumeVoxelClass::ATTENUATION : 
                                                                                                 VolumeVoxelClass::UNKNOWN;
             grid->grid_class = meta.grid_class;
             for( uint j = 0; j < 4; j++ ) 
@@ -5325,8 +5347,30 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
     real3 clipped_end   = origin + tmax*direction;
 
     //-------------------------------------------------------------------
+    // Figure out which grids we have.
+    // This will affect our decision to stop.
+    //-------------------------------------------------------------------
+    uint grid_density_i          = -1;
+    uint grid_normal_i           = -1;
+    uint grid_IOR_i              = -1;
+    uint grid_F0_i               = -1;         
+    for( uint i = grid_i; i < (grid_i+grid_cnt); i++ )
+    {
+        switch( model->volume_grids[i].voxel_class ) 
+        {
+            case VolumeVoxelClass::DENSITY:             grid_density_i = i;             break;
+            case VolumeVoxelClass::NORMAL:              grid_normal_i = i;              break;
+            case VolumeVoxelClass::IOR:                 grid_IOR_i = i;                 break;
+            case VolumeVoxelClass::F0:                  grid_F0_i = i;                  break;
+            default:                                                                    break;
+        }
+    }
+
+    //-------------------------------------------------------------------
     // Calculate step amount in each of three dimensions.
     // It should be safe to step by world_voxel_size along the ray.
+    // Note that all grids in a volume must have the same world_voxel_size.
+    // So we can use the first grid here.
     //-------------------------------------------------------------------
     real3 step = grid->world_voxel_size * direction.normalized();
     mdout << "Model::VolumeGrid::hit: clipped start=" << clipped_start << " end=" << clipped_end << 
@@ -5345,50 +5389,65 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
     _int x_prev = -1;
     _int y_prev = -1;
     _int z_prev = -1;
+    hit_info.grid_i = grid_i;   // for now
+    _int x;
+    _int y;
+    _int z;
     for( ;; ) 
     {
         //-------------------------------------------------------------------
         // Get voxel xyz for p.
         // Retrieve voxel value.
         //-------------------------------------------------------------------
-        _int x = p.c[0] * world_voxel_size_inv;
-        _int y = p.c[1] * world_voxel_size_inv;
-        _int z = p.c[2] * world_voxel_size_inv;
+        x = p.c[0] * world_voxel_size_inv;
+        y = p.c[1] * world_voxel_size_inv;
+        z = p.c[2] * world_voxel_size_inv;
         if ( x != x_prev || y != y_prev || z != z_prev ) {
-            real v = grid->real_value( model, x, y, z );
-            mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] value=" << v << "\n";
-
             //-------------------------------------------------------------------
-            // See if we should stop.
+            // See if we should stop.  This occurs if any of these is true:
+            //
+            // 1) There is no density grid (rare).
+            // 2) We probabilistically choose using the density as the probability.
+            // 3) We have a change in F0 or if the caller didn't pass in a current F0.
             //
             // t is just (p - origin) * direction_inv.  We use the component that has the largest value in directino.
             //-------------------------------------------------------------------
-            if ( false && v > 0.0 ) std::cout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] value=" << v << "\n";
-            if ( v > 0.0 && MODEL_UNIFORM_FN() < 0.1*v ) {
-                hit_info.model = model;
-                hit_info.p = p;
-                int c;
-                for( int i=0; i < 3; i++ )
-                {
-                    if ( i == 0 || direction.c[i] > direction.c[c] ) {
-                        c = i;
-                    }
-                }
-                hit_info.t = (p.c[c] - origin.c[c]) * direction_inv.c[c];
-                hit_info.poly_i = uint(-1);
-                hit_info.volume_i = this - model->volumes;
-                hit_info.grid_i = grid_i;
-                hit_info.voxel_xyz[0] = x;
-                hit_info.voxel_xyz[1] = y;
-                hit_info.voxel_xyz[2] = z;
-                hit_info.voxel_value = v;
-                hit_info.normal = real3(0,1,0);
-                hit_info.shading_normal = real3(0,1,0);
-                mdout << "Model::VolumeGrid::hit: success origin=" << origin << " direction=" << direction << " direction_inv=" << direction_inv << 
-                         " p=" << p << " c=" << c << " t=" << hit_info.t << "\n";
-                return true;  // success
+            if ( grid_density_i == uint(-1) ) {
+                 // treat it like density = 1.0
+                 mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] NO DENSITY\n"; 
+                 break;
             }
 
+            grid = &model->volume_grids[grid_density_i];
+            real density = grid->real_value( model, x, y, z );
+            mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] density =" << density << "\n";
+            if ( density > 0.0 && MODEL_UNIFORM_FN() < 0.1*density ) {
+                hit_info.grid_i = grid_density_i;
+                break;
+            }
+
+            if ( grid_F0_i != uint(-1) || grid_IOR_i != uint(-1) ) {
+                real3 F0;
+                if ( grid_F0_i != uint(-1) ) {
+                    hit_info.grid_i = grid_F0_i;
+                    grid = &model->volume_grids[grid_F0_i];
+                    F0 = grid->real3_value( model, x, y, z );
+                } else {
+                    hit_info.grid_i = grid_IOR_i;
+                    grid = &model->volume_grids[grid_IOR_i];
+                    real IOR = grid->real_value( model, x, y, z );
+                    real a = ((IOR-1.0)*(IOR-1.0)) / ((IOR+1.0)*(IOR+1.0));
+                    F0 = real3( a, a, a );
+                }
+                if ( hit_info.F0.c[0] < 0.0 || hit_info.F0.c[0] != F0.c[0] || hit_info.F0.c[1] != F0.c[1] || hit_info.F0.c[2] != F0.c[2] ) {
+                    mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] F0 changed to " << F0 << "\n";
+                    break;
+                }
+            }
+
+            //-------------------------------------------------------------------
+            // Keep going.
+            //-------------------------------------------------------------------
             x_prev = x;
             y_prev = y;
             z_prev = z;
@@ -5404,7 +5463,57 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
             mdout << "Model::VolumeGrid::hit: stepped out of volume, returning false\n";
             return false;
         }
+    } // for
+
+    //-------------------------------------------------------------------
+    // Fill in rest of hit_info.
+    //-------------------------------------------------------------------
+    hit_info.model = model;
+    hit_info.p = p;
+    int c;
+    for( int i=0; i < 3; i++ )
+    {
+        if ( i == 0 || direction.c[i] > direction.c[c] ) {
+            c = i;
+        }
     }
+    hit_info.t = (p.c[c] - origin.c[c]) * direction_inv.c[c];
+    hit_info.poly_i = uint(-1);
+    hit_info.volume_i = this - model->volumes;
+    hit_info.voxel_xyz[0] = x;
+    hit_info.voxel_xyz[1] = y;
+    hit_info.voxel_xyz[2] = z;
+    grid = &model->volume_grids[hit_info.grid_i];
+    switch( grid->voxel_type )
+    {
+        case VolumeVoxelType::INT16:            hit_info.voxel_value.i   = grid->int_value( model, x, y, z );           break;
+        case VolumeVoxelType::INT32:            hit_info.voxel_value.i   = grid->int_value( model, x, y, z );           break;
+        case VolumeVoxelType::INT64:            hit_info.voxel_value.i64 = grid->int64_value( model, x, y, z );         break;
+        case VolumeVoxelType::FP16:             hit_info.voxel_value.r   = grid->real_value( model, x, y, z );          break;
+        case VolumeVoxelType::FLOAT:            hit_info.voxel_value.r   = grid->real_value( model, x, y, z );          break;
+        case VolumeVoxelType::DOUBLE:           hit_info.voxel_value.r64 = grid->real64_value( model, x, y, z );        break;
+        case VolumeVoxelType::VEC3F:            hit_info.voxel_value.r3  = grid->real3_value( model, x, y, z );         break;
+        case VolumeVoxelType::VEC3D:            hit_info.voxel_value.r3d = grid->real3d_value( model, x, y, z );        break;
+        default:                                                                                                        break;
+    }
+    if ( grid_normal_i != uint(-1) ) {
+        hit_info.normal = model->volume_grids[grid_normal_i].real3_value( model, x, y, z );
+    } else {
+        hit_info.normal = real3(0,1,0);
+    }
+    hit_info.shading_normal = hit_info.normal;
+    mdout << "Model::VolumeGrid::hit: success origin=" << origin << " direction=" << direction << " direction_inv=" << direction_inv << 
+             " p=" << p << " c=" << c << " t=" << hit_info.t << "\n";
+    return true;  // success
+}
+
+uint Model::Volume::voxel_class_grid_i( const Model * model, Model::VolumeVoxelClass c ) const
+{
+    for( uint i = grid_i; i < (grid_i + grid_cnt); i++ )
+    {
+        if ( model->volume_grids[i].voxel_class == c ) return i;
+    }
+    return uint(-1);
 }
 
 bool Model::Instance::bounding_box( const Model * model, AABB& b, real padding ) const

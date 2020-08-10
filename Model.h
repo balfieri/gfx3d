@@ -5407,8 +5407,8 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
             // See if we should stop.  This occurs if any of these is true:
             //
             // 1) There is no density grid (rare).
-            // 2) We probabilistically choose using the density as the probability.
-            // 3) We have a change in F0 or if the caller didn't pass in a current F0.
+            // 2) We have a change in IOR/F0 or if the caller didn't pass in a current F0.
+            // 3) We probabilistically choose using the density as the probability.
             //
             // t is just (p - origin) * direction_inv.  We use the component that has the largest value in directino.
             //-------------------------------------------------------------------
@@ -5416,14 +5416,6 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
                  // treat it like density = 1.0
                  mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] NO DENSITY\n"; 
                  break;
-            }
-
-            grid = &model->volume_grids[grid_density_i];
-            real density = grid->real_value( model, x, y, z );
-            mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] density =" << density << "\n";
-            if ( density > 0.0 && MODEL_UNIFORM_FN() < 0.1*density ) {
-                hit_info.grid_i = grid_density_i;
-                break;
             }
 
             if ( grid_F0_i != uint(-1) || grid_IOR_i != uint(-1) ) {
@@ -5443,6 +5435,14 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
                     mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] F0 changed to " << F0 << "\n";
                     break;
                 }
+            }
+
+            grid = &model->volume_grids[grid_density_i];
+            real density = grid->real_value( model, x, y, z );
+            mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] density =" << density << "\n";
+            if ( density > 0.0 && MODEL_UNIFORM_FN() < 0.1*density ) {
+                hit_info.grid_i = grid_density_i;
+                break;
             }
 
             //-------------------------------------------------------------------

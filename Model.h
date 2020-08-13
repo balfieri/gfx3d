@@ -5052,7 +5052,7 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
     const TreeData * tree = reinterpret_cast< const TreeData * >( tree_data );
     mdout << "VOLUME: tree=" << tree << " mBytes[ROOT_LEVEL]=" << tree->mBytes[ROOT_LEVEL] << "\n";
 
-    struct RootData32
+    struct RootData4
     {
         float    mBBoxMin[3];           // min corner of world bbox
         float    mBBoxMax[3];           // max corner of world bbox
@@ -5065,20 +5065,35 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
         uint32_t mPadding2[1];          // to match reference
     };
 
+    struct RootData12
+    {
+        float    mBBoxMin[3];           // min corner of world bbox
+        float    mBBoxMax[3];           // max corner of world bbox
+        uint64_t mActiveVoxelCount;     // total number of active voxels in the root and all its child nodes
+        uint32_t mTileCount;            // number of tiles and child pointers in the root node
+        uint32_t mPadding1[3];          // to match reference
+        float    mBackGround[3];        // background value, i.e., value of any unset voxel
+        float    mValueMin[3];          // minimum value
+        float    mValueMax[3];          // maximum value
+        uint32_t mPadding2[3];          // to match reference
+    };
+
+    assert( value_size == 4 || value_size == 12 );  // all we can handle at the moment
+
     const uint8_t *   root_data = tree_data + tree->mBytes[ROOT_LEVEL];
-    const uint        root_size = sizeof(RootData32);
-    const RootData32* root      = reinterpret_cast< const RootData32 *>( root_data );
+    const uint        root_size = (value_size == 4) ? sizeof(RootData4) : sizeof(RootData12);
+    const RootData4 * root4  = reinterpret_cast< const RootData4 *>( root_data );
     const uint8_t *   root_tile_data = reinterpret_cast< const uint8_t * >( root_data + root_size );
     mdout << "VOLUME: root=" << reinterpret_cast<const void *>(root_data) << " root_size=" << root_size << 
-            " &mTileCount=" << reinterpret_cast<const void *>(&root->mTileCount) << 
-            " &mActiveVoxelCount=" << reinterpret_cast<const void *>(&root->mActiveVoxelCount) << 
-            " mTileCount=" << root->mTileCount << " mActiveVoxelCount=" << root->mActiveVoxelCount << "\n";
+            " &mTileCount=" << reinterpret_cast<const void *>(&root4->mTileCount) << 
+            " &mActiveVoxelCount=" << reinterpret_cast<const void *>(&root4->mActiveVoxelCount) << 
+            " mTileCount=" << root4->mTileCount << " mActiveVoxelCount=" << root4->mActiveVoxelCount << "\n";
 
     //-------------------------------------------------------------------
     // Hash [x, y, z] to a key.
     // Do a linear search through the root's tiles to find the key (binary search is disabled in nanovdb code).
     //-------------------------------------------------------------------
-    struct RootTileData {
+    struct RootTileData4 {
         uint64_t key;                   // hash key to match
         float    value;                 // value of tile (i.e. no child node)
         int32_t  childID;               // negative values indicate no child node, i.e. this is a value tile
@@ -5086,14 +5101,25 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
         uint8_t  padding[12];           // to match NanoVDB
     };
 
-    const uint root_tile_size = sizeof( RootTileData );
+    struct RootTileData12 {
+        uint64_t key;                   // hash key to match
+        float    value[3];              // value of tile (i.e. no child node)
+        int32_t  childID;               // negative values indicate no child node, i.e. this is a value tile
+        uint8_t  state;                 // when childID < 0, indicates whether tile is active (1 or 0)
+        uint8_t  padding[4];            // to match NanoVDB
+    };
 
-    union InternalTileData {
+    const uint root_tile_size = (value_size == 4) ? sizeof( RootTileData4 ) : sizeof( RootTileData12 );
+
+    union InternalTileData4 {
         float    value;                 // value of tile (i.e. no child node)
         int32_t  childID;               // negative values indicate no child node, i.e. this is a value tile
     };
 
-    const uint internal_tile_size = sizeof( InternalTileData );
+    union InternalTileData12 {
+        float    value[3];              // value of tile (i.e. no child node)
+        int32_t  childID;               // negative values indicate no child node, i.e. this is a value tile
+    };
 
     const uint8_t * tile_data = root_tile_data;
 
@@ -5102,7 +5128,8 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
                    (uint64_t(uint32_t(y) >> INTERNAL2_TOTAL) << 21) |
                    (uint64_t(uint32_t(x) >> INTERNAL2_TOTAL) << 42);
     uint i;
-    for( i = 0; i < root->mTileCount; i++ )
+    mdout << "VOLUME: root_tile_size=" << root_tile_size << "\n";
+    for( i = 0; i < root4->mTileCount; i++ )
     {
         const uint64_t * tile_key = reinterpret_cast< const uint64_t * >( tile_data );
         if ( key == *tile_key ) {
@@ -5113,7 +5140,7 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
         tile_data += root_tile_size;
     }
 
-    if ( i == root->mTileCount ) {
+    if ( i == root4->mTileCount ) {
         // no matching tile => bail out
         mdout << "VOLUME: root key=0x" << std::hex << key << std::dec << " NO_MATCH\n";
         if ( is_active != nullptr ) *is_active = false;
@@ -5123,22 +5150,27 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
     //-------------------------------------------------------------------
     // Check to see if this is a value tile.
     //-------------------------------------------------------------------
-    const RootTileData * tile = reinterpret_cast< const RootTileData * >( tile_data );
+    const RootTileData4  * tile4  = reinterpret_cast< const RootTileData4 * >( tile_data );
+    const RootTileData12 * tile12 = reinterpret_cast< const RootTileData12 * >( tile_data );
+    int32_t childID = (value_size == 4) ? (tile4 ? tile4->childID : -2) : (tile12 ? tile12->childID : -2);
     const uint8_t * value_ptr;
-    mdout << "VOLUME: root=" << root << " tile=" << reinterpret_cast<const void *>(tile_data) << " childID=" << (tile ? tile->childID : -2) << "\n";
-    if ( tile->childID < 0 ) {
+    mdout << "VOLUME: root=" << root4 << " tile=" << tile4 << " childID=" << childID << "\n";
+    if ( childID < 0 ) {
         //-------------------------------------------------------------------
         // The value is the same for all voxels in the tile.
         // Point to that.
         //-------------------------------------------------------------------
         value_ptr = tile_data + sizeof( uint64_t );
-        if ( is_active != nullptr ) *is_active = tile->state;
+        if ( is_active != nullptr ) *is_active = tile4->state;
 
     } else {
         //-------------------------------------------------------------------
         // Get to InternalData for root's childID, which comes after root's tiles.
         //-------------------------------------------------------------------
-        struct InternalData
+        const uint internal_tile_size = (value_size == 4) ? sizeof( InternalTileData4 ) : sizeof( InternalTileData12 );
+        mdout << "VOLUME: internal_tile_size=" << internal_tile_size << "\n";
+
+        struct InternalData4
         {
             // skip through variable-length stuff
 //          MaskT    mValueMask;            
@@ -5153,15 +5185,33 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
             uint32_t mPadding[6];           // not sure why this is needed
         };
 
-        const uint      internal2_size = 2*INTERNAL2_MASK_SIZE + INTERNAL2_SIZE*internal_tile_size + sizeof(InternalData);
-        const uint8_t * internal_data = root_tile_data + root->mTileCount*root_tile_size + tile->childID*internal2_size;
+        struct InternalData12
+        {
+            // skip through variable-length stuff
+//          MaskT    mValueMask;            
+//          MaskT    mChildMask;                   
+//          InternalTileData mTable[INTERNAL1_SIZE];
+            float    mValueMin[3]; 
+            float    mValueMax[3];
+            int32_t  mBBoxMin[3];           // min corner or index bbox
+            int32_t  mBBoxMax[3];           // max corner or index bbox
+            int32_t  mOffset;               // number of node offsets till first child node
+            uint32_t mFlags;                // get this for free (unused)
+            uint32_t mPadding[2];           // not sure why this is needed
+        };
+
+        const uint      internal_data_size = (value_size == 4) ? sizeof(InternalData4) : sizeof(InternalData12);
+        const uint      internal2_size = 2*INTERNAL2_MASK_SIZE + INTERNAL2_SIZE*internal_tile_size + internal_data_size;
+        const uint8_t * internal_data = root_tile_data + root4->mTileCount*root_tile_size + childID*internal2_size;
         const uint8_t * mValueMask = internal_data;
         const uint8_t * mChildMask = mValueMask + INTERNAL2_MASK_SIZE;
         const uint8_t * mTable     = mChildMask + INTERNAL2_MASK_SIZE;
-        const InternalData * internal = reinterpret_cast< const InternalData * >( internal_data + internal2_size - sizeof(InternalData) );
-        mdout << "VOLUME: internal2_size=" << internal2_size << " LOG2DIM=" << INTERNAL2_LOG2DIM << 
+        const InternalData4  * internal4  = reinterpret_cast< const InternalData4 * >(  internal_data + internal2_size - sizeof(InternalData4)  );
+        const InternalData12 * internal12 = reinterpret_cast< const InternalData12 * >( internal_data + internal2_size - sizeof(InternalData12) );
+              int32_t   mOffset = (value_size == 4) ? internal4->mOffset : internal12->mOffset;
+        mdout << "VOLUME: internal_data_size=" << internal_data_size << " internal2_size=" << internal2_size << " LOG2DIM=" << INTERNAL2_LOG2DIM << 
                 " mask_size=" << INTERNAL2_MASK_SIZE << " tile_size=" << internal_tile_size << " mtable_size=" << (INTERNAL2_SIZE*internal_tile_size) <<
-                " size=" << internal2_size << " mOffset=" << internal->mOffset << "\n";
+                " size=" << internal2_size << " mOffset=" << mOffset << "\n";
 
         //-------------------------------------------------------------------
         // Hash [x,y,z] to child c for internal node.
@@ -5171,12 +5221,14 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
                      (((uint64_t(y) & INTERNAL2_MASK) >> INTERNAL1_TOTAL) <<    INTERNAL2_LOG2DIM)  +
                      (((uint64_t(z) & INTERNAL2_MASK) >> INTERNAL1_TOTAL) <<                    0);
         tile_data  = mTable + c*internal_tile_size;
-        const InternalTileData * tile = reinterpret_cast< const InternalTileData * >( tile_data );
+        auto tile4   = reinterpret_cast< const InternalTileData4 * >( tile_data );
+        auto tile12  = reinterpret_cast< const InternalTileData12 * >( tile_data );
+        childID = (value_size == 4) ? (tile4 ? tile4->childID : -2) : (tile12 ? tile12->childID : -2);
         bool is_on = (mChildMask[c/8] >> (c & 7)) & 1;
         mdout << "VOLUME: internal2=" << reinterpret_cast<const void *>(internal_data) << " &mask=" << reinterpret_cast<const void *>(mChildMask) << 
-                " n=" << c << " tile=" << reinterpret_cast<const void *>(tile_data) << " isOn=" << is_on << 
-                " TOTAL=" << INTERNAL2_TOTAL << " SIZE=" << INTERNAL2_SIZE << "\n";
-        if ( !is_on || tile->childID < 0 ) {
+                " n=" << c << " tile=" << tile4 << " childID=" << childID << 
+                " isOn=" << is_on << " TOTAL=" << INTERNAL2_TOTAL << " SIZE=" << INTERNAL2_SIZE << "\n";
+        if ( !is_on || childID < 0 ) {
             //-------------------------------------------------------------------
             // Pull value out of the mTable[c] Tile.
             //-------------------------------------------------------------------
@@ -5197,26 +5249,30 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
             // Hash [x,y,z] to child c for internal node.
             // Test mChildMask[c].
             //-------------------------------------------------------------------
-            const uint internal1_size = 2*INTERNAL1_MASK_SIZE + INTERNAL1_SIZE*internal_tile_size + sizeof(InternalData);
-            internal_data += internal->mOffset*internal2_size + tile->childID*internal1_size;
+            const uint internal1_size = 2*INTERNAL1_MASK_SIZE + INTERNAL1_SIZE*internal_tile_size + internal_data_size;
+            internal_data += mOffset*internal2_size + childID*internal1_size;
             mValueMask = internal_data;
             mChildMask = mValueMask + INTERNAL1_MASK_SIZE;
             mTable     = mChildMask + INTERNAL1_MASK_SIZE;
-            internal   = reinterpret_cast< const InternalData * >( internal_data + internal1_size - sizeof(InternalData) );
+            internal4  = reinterpret_cast< const InternalData4 * >(  internal_data + internal1_size - internal_data_size );
+            internal12 = reinterpret_cast< const InternalData12 * >( internal_data + internal1_size - internal_data_size );
+            mOffset    = (value_size == 4) ? internal4->mOffset : internal12->mOffset;
             mdout << "VOLUME: internal1_size=" << internal1_size << " LOG2DIM=" << INTERNAL1_LOG2DIM << 
                     " mask_size=" << INTERNAL1_MASK_SIZE << " tile_size=" << internal_tile_size << " mtable_size=" << (INTERNAL1_SIZE*internal_tile_size) <<
-                    " size=" << internal1_size << " mOffset=" << internal->mOffset << "\n";
+                    " size=" << internal1_size << " mOffset=" << mOffset << "\n";
 
             c = (((x & INTERNAL1_MASK) >> LEAF_TOTAL) << (2*INTERNAL1_LOG2DIM)) + 
                 (((y & INTERNAL1_MASK) >> LEAF_TOTAL) <<    INTERNAL1_LOG2DIM)  +
                 (((z & INTERNAL1_MASK) >> LEAF_TOTAL) <<                    0);
             tile_data  = mTable + c*internal_tile_size;
-            tile = reinterpret_cast< const InternalTileData * >( tile_data );
+            tile4  = reinterpret_cast< const InternalTileData4 * >( tile_data );
+            tile12 = reinterpret_cast< const InternalTileData12 * >( tile_data );
+            childID = (value_size == 4) ? (tile4 ? tile4->childID : -2) : (tile12 ? tile12->childID : -2);
             bool is_on = (mChildMask[c/8] >> (c & 7)) & 1;
             mdout << "VOLUME: internal1=" << reinterpret_cast<const void *>(internal_data) << " &mask=" << reinterpret_cast<const void *>( mChildMask ) << 
-                    " n=" << c << " tile=" << reinterpret_cast<const void *>(tile_data) << " isOn=" << is_on << 
-                    " TOTAL=" << INTERNAL1_TOTAL << " SIZE=" << INTERNAL1_SIZE << "\n";
-            if ( !is_on || tile->childID < 0 ) {
+                    " n=" << c << " tile=" << reinterpret_cast<const void *>(tile_data) << " childID=" << childID << 
+                    " isOn=" << is_on << " TOTAL=" << INTERNAL1_TOTAL << " SIZE=" << INTERNAL1_SIZE << "\n";
+            if ( !is_on || childID < 0 ) {
                 //-------------------------------------------------------------------
                 // Pull value out of the mTable[c] Tile.
                 //-------------------------------------------------------------------
@@ -5234,7 +5290,7 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
                 // Hash [x,y,z] to value index c for leaf node.
                 // Pull out mValues[c].
                 //-------------------------------------------------------------------
-                struct LeafData
+                struct LeafData4
                 {
                     // skip through variable-length stuff
 //                  MaskT<LEAF_LOG2DIM> mValueMask;      
@@ -5247,10 +5303,25 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
                     uint32_t       mPadding[2];
                 };
 
-                const uint       leaf_size  = LEAF_MASK_SIZE + sizeof(LeafData);
-                const uint8_t *  leaf_data  = internal_data + internal->mOffset*internal1_size + tile->childID*leaf_size;
-                const uint8_t *  mValueMask = leaf_data;
-                const LeafData * leaf       = reinterpret_cast< const LeafData * >( leaf_data + leaf_size - sizeof(LeafData) );
+                struct LeafData12
+                {
+                    // skip through variable-length stuff
+//                  MaskT<LEAF_LOG2DIM> mValueMask;      
+                    float          mValues[LEAF_SIZE][3];
+                    float          mValueMin[3];
+                    float          mValueMax[3];
+                    _int           mBBoxMin[3]; 
+                    uint8_t        mBBoxDif[3]; 
+                    uint8_t        mFlags;          // get this for free (unused)
+                    uint32_t       mPadding[6];
+                };
+
+                const uint         leaf_data_size = (value_size == 4) ? sizeof(LeafData4) : sizeof(LeafData12);
+                const uint         leaf_size  = LEAF_MASK_SIZE + leaf_data_size;
+                const uint8_t *    leaf_data  = internal_data + mOffset*internal1_size + childID*leaf_size;
+                const uint8_t *    mValueMask = leaf_data;
+                const LeafData4 *  leaf4      = reinterpret_cast< const LeafData4 * >(  leaf_data + leaf_size - sizeof(LeafData4) );
+                const LeafData12 * leaf12     = reinterpret_cast< const LeafData12 * >( leaf_data + leaf_size - sizeof(LeafData12) );
 
                 c = ((uint64_t(x) & LEAF_MASK) << (2*LEAF_LOG2DIM)) + 
                     ((uint64_t(y) & LEAF_MASK) <<    LEAF_LOG2DIM)  +
@@ -5258,7 +5329,9 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
                 mdout << "VOLUME: leaf=" << reinterpret_cast<const void *>(leaf_data) << 
                         " &mask=" << reinterpret_cast< const void * >( mValueMask ) << " leaf_size=" << leaf_size <<
                         " n=" << c << "\n";
-                value_ptr = reinterpret_cast< const uint8_t * >( &leaf->mValues[c] );
+                const uint8_t * value4_ptr  = reinterpret_cast< const uint8_t * >( &leaf4->mValues[c] );
+                const uint8_t * value12_ptr = reinterpret_cast< const uint8_t * >(  leaf12->mValues[c] );
+                value_ptr = (value_size == 4) ? value4_ptr : value12_ptr;
                 if ( is_active != nullptr ) {
                     *is_active = (mValueMask[c/8] >> (c & 7)) & 1; 
                     mdout << "VOLUME: is_active=" << *is_active << "\n";

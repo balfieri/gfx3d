@@ -573,7 +573,8 @@ public:
         IOR          = 6,                       // index of refraction
         F0           = 7,                       // more general 3D version of IOR (see early comments on how to convert from IOR to F0)
         G            = 8,                       // scattering phase function mean cosine (0 == omnidirectional, 1 == forward)
-        ATTENUATION  = 9                        // 3D attenuation (default is 1,1,1 which means none)
+        ATTENUATION  = 9,                       // 3D attenuation (default is 1,1,1 which means none)
+        MFPL         = 10                       // mean free path length
     };
 
     enum class VolumeGridClass : uint16_t
@@ -1111,7 +1112,17 @@ inline std::ostream& operator << ( std::ostream& os, const Model::real4& v )
     return os;
 }
 
-inline std::string str( uint u )
+inline std::string str( Model::_int i )
+{
+    return std::to_string( i );
+}
+
+inline std::string str( Model::_int64 i )
+{
+    return std::to_string( i );
+}
+
+inline std::string str( Model::uint u )
 {
     return std::to_string( u );
 }
@@ -1122,6 +1133,11 @@ inline std::string str( size_t s )
 }
 
 inline std::string str( Model::real r ) 
+{
+    return std::to_string( r );
+}
+
+inline std::string str( Model::real64 r ) 
 {
     return std::to_string( r );
 }
@@ -1210,6 +1226,7 @@ inline std::string str( const Model::VolumeVoxelClass c )
         case Model::VolumeVoxelClass::F0:               return "F0";            break;
         case Model::VolumeVoxelClass::G:                return "G";             break;
         case Model::VolumeVoxelClass::ATTENUATION:      return "ATTENUATION";   break;
+        case Model::VolumeVoxelClass::MFPL:             return "MFPL";          break;
         default:                                        return "<unknown>";     break;
     }
 }
@@ -3698,8 +3715,10 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
                                 (name == "f" || name == "f0"       || name == "F0")           ? VolumeVoxelClass::F0 : 
                                 (name == "g" || name == "G")                                  ? VolumeVoxelClass::G : 
                                 (name == "a" || name == "A"        || name == "attenuation")  ? VolumeVoxelClass::ATTENUATION : 
+                                (name == "m" || name == "M"        || name == "MFPL" || name == "mfpl") ? VolumeVoxelClass::MFPL : 
                                                                                                 VolumeVoxelClass::UNKNOWN;
             grid->grid_class = meta.grid_class;
+            std::cout << "grids[" << grid_i << "] is a " << grid->voxel_class << "\n";
             for( uint j = 0; j < 4; j++ ) 
             { 
                 grid->node_cnt[j] = meta.node_cnt[j];
@@ -5439,10 +5458,14 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
 
             grid = &model->volume_grids[grid_density_i];
             real density = grid->real_value( model, x, y, z );
-            mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] density =" << density << "\n";
-            if ( density > 0.0 && MODEL_UNIFORM_FN() < 0.1*density ) {
-                hit_info.grid_i = grid_density_i;
-                break;
+            if ( density > 0.0 ) {
+                mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] density =" << density << "\n";
+                uint mfpl_grid_i = voxel_class_grid_i(model, Model::VolumeVoxelClass::MFPL);
+                real mfpl = (mfpl_grid_i != uint(-1)) ? model->volume_grids[mfpl_grid_i].real_value(model, x, y, z) : 0.1;
+                if ( MODEL_UNIFORM_FN() < (mfpl*density) ) {
+                    hit_info.grid_i = grid_density_i;
+                    break;
+                }
             }
 
             //-------------------------------------------------------------------

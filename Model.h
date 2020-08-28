@@ -279,6 +279,35 @@ public:
         real3& operator /= ( const real s );
     };
 
+    class real3d        // double-precision
+    {
+    public:
+        real64 c[3];
+
+        real3d( void )                            { c[0] = 0;  c[1] = 0;  c[2] = 0;  }
+        real3d( real64 c0, real64 c1, real64 c2 ) { c[0] = c0; c[1] = c1; c[2] = c2; }
+
+        real64  dot( const real3d &v2 ) const;
+        real3d  cross( const real3d &v2 ) const;
+        real64  length( void ) const;
+        real64  length_sqr( void ) const ;
+        real3d& normalize( void );
+        real3d  normalized( void ) const;
+        real3d  operator + ( const real3d& v ) const;
+        real3d  operator - ( const real3d& v ) const;
+        real3d  operator * ( const real3d& v ) const;
+        real3d  operator * ( real64 s ) const;
+        real3d  operator / ( const real3d& v ) const;
+        real3d  operator / ( real64 s ) const;
+        bool    operator == ( const real3d &v2 ) const;
+        real3d& operator += ( const real3d &v2 );
+        real3d& operator -= ( const real3d &v2 );
+        real3d& operator *= ( const real3d &v2 );
+        real3d& operator *= ( const real64 s );
+        real3d& operator /= ( const real3d &v2 );
+        real3d& operator /= ( const real64 s );
+    };
+
     class real2
     {
     public:
@@ -304,17 +333,6 @@ public:
         real2& operator *= ( const real s );
         real2& operator /= ( const real2 &v2 );
         real2& operator /= ( const real s );
-    };
-
-    class real3d     
-    {
-    public:
-        real64 c[3];
-
-        real3d( void )                            { c[0] = 0;  c[1] = 0;  c[2] = 0;  }
-        real3d( real64 c0, real64 c1, real64 c2 ) { c[0] = c0; c[1] = c1; c[2] = c2; }
-
-        // Used only for retrieving VEC3D type from volumes.  No operators supported.
     };
 
     class Header                            // header (of future binary file)
@@ -452,6 +470,8 @@ public:
     public:
         _int            min[3];             // bounding box min
         _int            max[3];             // bounding box max
+
+        bool encloses( _int x, _int y, _int z ) const;
     };
 
     class Polygon
@@ -548,7 +568,7 @@ public:
 
     // VolumeGrid - made up of one or more VolumeGrid
     //
-    enum class VolumeVoxelType : uint16_t
+    enum class VolumeVoxelType : uint32_t
     {
         UNKNOWN = 0, 
         FLOAT   = 1, 
@@ -562,7 +582,7 @@ public:
         FP16    = 9
     };
 
-    enum class VolumeVoxelClass : uint16_t
+    enum class VolumeVoxelClass : uint32_t
     {
         UNKNOWN      = 0, 
         DENSITY      = 1,                       // particle density
@@ -577,12 +597,14 @@ public:
         MFPL         = 10                       // mean free path length
     };
 
-    enum class VolumeGridClass : uint16_t
+    enum class VolumeGridClass : uint32_t
     {
-        UNKNOWN   = 0, 
-        LEVELSET  = 1, 
-        FOGVOLUME = 2, 
-        STAGGERED = 3
+        UNKNOWN      = 0, 
+        LEVELSET     = 1, 
+        FOGVOLUME    = 2, 
+        STAGGERED    = 3,
+        POINTINDEX   = 4,
+        POINTDATA    = 5
     };
 
     class Volume
@@ -611,7 +633,9 @@ public:
         uint             node_cnt[4];           // not sure yet what this is for
         AABB             world_box;             // AABB in world space (what we normally think of as the AABB)
         AABBI            index_box;             // AABB in index space
-        real64           world_voxel_size;      // size of voxel in world units
+        real3d           world_voxel_size;      // 3D size of voxel in world units (a voxel is not always a cube)
+        real3d           world_voxel_size_inv;  // (1,1,1) / world_voxel_size
+        real3d           world_translate;       // 3D translation of scaled xyz index to get to world point
         uint64           voxel_i;               // index into voxels[] of first voxel 
 
         bool   bounding_box( const Model * model, AABB& box, real padding=0 ) const;
@@ -1147,7 +1171,18 @@ inline std::string str( Model::real3 v )
     return "[" + str(v.c[0]) + "," + str(v.c[1]) + "," + str(v.c[2]) + "]";
 }
 
+inline std::string str( Model::real3d v ) 
+{
+    return "[" + str(v.c[0]) + "," + str(v.c[1]) + "," + str(v.c[2]) + "]";
+}
+
 inline std::ostream& operator << ( std::ostream& os, const Model::real3& v ) 
+{
+    os << str( v );
+    return os;
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::real3d& v ) 
 {
     os << str( v );
     return os;
@@ -1259,7 +1294,8 @@ inline std::ostream& operator << ( std::ostream& os, const Model::VolumeGrid& gr
 {
     os << "name_i=" << grid.name_i << " voxel_cnt=" << grid.voxel_cnt << " voxel_type=" << grid.voxel_type << " voxel_class=" << grid.voxel_class <<
           " grid_class=" << grid.grid_class << " world_box=" << grid.world_box << " index_box=" << grid.index_box <<
-          " world_voxel_size=" << grid.world_voxel_size << " voxel_i=" << grid.voxel_i;
+          " world_voxel_size=" << grid.world_voxel_size << " world_voxel_size_inv=" << grid.world_voxel_size_inv << 
+          " world_translate=" << grid.world_translate << " voxel_i=" << grid.voxel_i;
     return os;
 }
 
@@ -3650,8 +3686,8 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
         SegmentHeader header;
         memcpy( &header, nvdb, sizeof(SegmentHeader) );
         nvdb += sizeof(SegmentHeader);
-        die_assert( header.magic == 0x4244566f6e614eULL, "bad magic number in .nvdb segment header" );
-        die_assert( header.major == 17, "bad major number in .nvdb segment header" );
+        die_assert( header.magic == 0x304244566f6e614eUL, "bad magic number in .nvdb segment header for grid_i=" + str(volume->grid_cnt));
+        die_assert( header.major == 19, "bad major number in .nvdb segment header" );
         volume->grid_cnt += header.grid_cnt;
 
         const VolumeGrid * grid0 = &volume_grids[volume->grid_i];
@@ -3678,15 +3714,15 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
                 uint64_t        file_size; 
                 uint64_t        name_key; 
                 uint64_t        voxel_cnt;
-                VolumeVoxelType  grid_type;
+                VolumeVoxelType grid_type;
                 VolumeGridClass grid_class;
                 uint32_t        name_size;      // includes \0
                 uint32_t        node_cnt[4];
                 AABB64          world_box;
                 AABBI32         index_box;
-                double          voxel_size;
+                double          voxel_size;     // can't use this; need to look at Map
             };
-            die_assert( sizeof(GridMetaData) == 136, "unexpected GridMetaData size" );
+            die_assert( sizeof(GridMetaData) == 144, "unexpected GridMetaData size" );
             die_assert( size_t(nvdb_end-nvdb) >= sizeof(GridMetaData), "can't read GridMetaData - not enough bytes in .nvdb file" );
             GridMetaData meta;
             memcpy( &meta, nvdb, sizeof(GridMetaData) );
@@ -3718,7 +3754,6 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
                                 (name == "m" || name == "M"        || name == "MFPL" || name == "mfpl") ? VolumeVoxelClass::MFPL : 
                                                                                                 VolumeVoxelClass::UNKNOWN;
             grid->grid_class = meta.grid_class;
-            std::cout << "grids[" << grid_i << "] is a " << grid->voxel_class << "\n";
             for( uint j = 0; j < 4; j++ ) 
             { 
                 grid->node_cnt[j] = meta.node_cnt[j];
@@ -3735,9 +3770,6 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
                     }
                 }
             }
-            grid->world_voxel_size = meta.voxel_size;
-            die_assert( i == 0 || grid->world_voxel_size == grid0->world_voxel_size, 
-                        "all grids in a volume must have the same world voxel size" );
 
             //------------------------------------------------------------
             // Copy voxel data which is variable size.
@@ -3762,6 +3794,50 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
 
             memcpy( &voxels[grid->voxel_i], nvdb, meta.grid_size );
             nvdb += meta.file_size;
+
+            //------------------------------------------------------------
+            // Obtain the world_voxel_size and world_translate from the NVDB MapData
+            // within the GridData.
+            //------------------------------------------------------------
+            struct MapData { 
+                float  mMatF[9]; 
+                float  mInvMatF[9];
+                float  mVecF[3];
+                float  mTaperF;
+                double mMatD[9];
+                double mInvMatD[9];
+                double mVecD[3];
+                double mTaperD;
+            };
+
+            static const int MaxNameSize = 256;
+            struct GridData { 
+                uint64_t    mMagic;             // 8 byte magic to validate it is valid grid data.
+                                                // REFERENCEMAGIC = 0x4244566f6e614eL;
+                char        mGridName[MaxNameSize];
+                real64      mBBoxMin[3];        // min corner of AABB
+                real64      mBBoxMax[3];        // max corner of AABB
+                MapData     mMap;               // affine transformation between index and world space in both single and double precision
+                double      mUniformScale;      // size of a voxel in world units
+                VolumeGridClass mGridClass;     // 4 bytes
+                VolumeVoxelType mVoxelType;     // 4 bytes
+                uint32_t    mBlindDataCount;    // count of GridBlindMetaData structures that follow this grid (after the gridname).
+                uint32_t    padding[2];         // seems to be needed to match up with NanoVDB
+            };
+
+            const GridData * ngrid = reinterpret_cast< const GridData * >( &voxels[grid->voxel_i] );
+
+            grid->world_voxel_size = real3d( ngrid->mMap.mMatD[0], ngrid->mMap.mMatD[4], ngrid->mMap.mMatD[8] );
+            grid->world_voxel_size_inv = real3d(1,1,1) / grid->world_voxel_size;
+            grid->world_translate  = real3d( ngrid->mMap.mVecD[0], ngrid->mMap.mVecD[1], ngrid->mMap.mVecD[2] );
+            std::cout << "grids[" << grid_i << "] voxel_class=" << grid->voxel_class << " world_box=" << grid->world_box << 
+                         " world_voxel_size=" << grid->world_voxel_size << " world_voxel_size_inv=" << grid->world_voxel_size_inv << 
+                         " world_translate=" << grid->world_translate << "\n";
+
+            if ( i != 0 ) {
+                die_assert( grid->world_voxel_size == grid0->world_voxel_size, "all grids in same volume must have the same world_voxel_size" );
+                die_assert( grid->world_translate  == grid0->world_translate,  "all grids in same volume must have the same world_translate" );
+            }
         }
     }
     return true;
@@ -4169,6 +4245,151 @@ inline Model::real3& Model::real3::operator /= ( const Model::real3 &v2 )
 }
 
 inline Model::real3& Model::real3::operator /= ( const Model::real s )
+{
+    c[0] /= s;
+    c[1] /= s;
+    c[2] /= s;
+    return *this;
+}
+
+inline Model::real64 Model::real3d::dot( const Model::real3d &v2 ) const
+{
+    return c[0] * v2.c[0] + c[1] * v2.c[1] + c[2] * v2.c[2];
+}
+
+inline Model::real3d Model::real3d::cross( const Model::real3d &v2 ) const
+{
+    return real3d( (c[1]*v2.c[2]   - c[2]*v2.c[1]),
+                  (-(c[0]*v2.c[2] - c[2]*v2.c[0])),
+                  (c[0]*v2.c[1]   - c[1]*v2.c[0]) );
+}
+
+inline Model::real64 Model::real3d::length( void ) const
+{ 
+    return std::sqrt( c[0]*c[0] + c[1]*c[1] + c[2]*c[2] ); 
+}
+
+inline Model::real64 Model::real3d::length_sqr( void ) const 
+{ 
+    return c[0]*c[0] + c[1]*c[1] + c[2]*c[2];
+}
+
+inline Model::real3d& Model::real3d::normalize( void )
+{
+    *this /= length();
+    return *this;
+}
+
+inline Model::real3d Model::real3d::normalized( void ) const
+{
+    return *this / length();
+}
+
+inline Model::real3d Model::real3d::operator + ( const Model::real3d& v2 ) const
+{
+    real3d r;
+    r.c[0] = c[0] + v2.c[0];
+    r.c[1] = c[1] + v2.c[1];
+    r.c[2] = c[2] + v2.c[2];
+    return r;
+}
+
+inline Model::real3d Model::real3d::operator - ( const Model::real3d& v2 ) const
+{
+    real3d r;
+    r.c[0] = c[0] - v2.c[0];
+    r.c[1] = c[1] - v2.c[1];
+    r.c[2] = c[2] - v2.c[2];
+    return r;
+}
+
+inline Model::real3d Model::real3d::operator * ( const Model::real3d& v2 ) const
+{
+    real3d r;
+    r.c[0] = c[0] * v2.c[0];
+    r.c[1] = c[1] * v2.c[1];
+    r.c[2] = c[2] * v2.c[2];
+    return r;
+}
+
+inline Model::real3d operator * ( Model::real64 s, const Model::real3d& v ) 
+{
+    return Model::real3d( s*v.c[0], s*v.c[1], s*v.c[2] );
+}
+
+inline Model::real3d Model::real3d::operator * ( Model::real64 s ) const
+{
+    real3d r;
+    r.c[0] = c[0] * s;
+    r.c[1] = c[1] * s;
+    r.c[2] = c[2] * s;
+    return r;
+}
+
+inline Model::real3d Model::real3d::operator / ( const Model::real3d& v2 ) const
+{
+    real3d r;
+    r.c[0] = c[0] / v2.c[0];
+    r.c[1] = c[1] / v2.c[1];
+    r.c[2] = c[2] / v2.c[2];
+    return r;
+}
+
+inline Model::real3d Model::real3d::operator / ( Model::real64 s ) const
+{
+    real3d r;
+    r.c[0] = c[0] / s;
+    r.c[1] = c[1] / s;
+    r.c[2] = c[2] / s;
+    return r;
+}
+
+inline bool Model::real3d::operator == ( const Model::real3d &v2 ) const
+{
+    return c[0] == v2.c[0] && c[1] == v2.c[1] && c[2] == v2.c[2];
+}
+
+inline Model::real3d& Model::real3d::operator += ( const Model::real3d &v2 )
+{
+    c[0] += v2.c[0];
+    c[1] += v2.c[1];
+    c[2] += v2.c[2];
+    return *this;
+}
+
+inline Model::real3d& Model::real3d::operator -= ( const Model::real3d &v2 )
+{
+    c[0] -= v2.c[0];
+    c[1] -= v2.c[1];
+    c[2] -= v2.c[2];
+    return *this;
+}
+
+inline Model::real3d& Model::real3d::operator *= ( const Model::real3d &v2 )
+{
+    c[0] *= v2.c[0];
+    c[1] *= v2.c[1];
+    c[2] *= v2.c[2];
+    return *this;
+}
+
+inline Model::real3d& Model::real3d::operator *= ( const Model::real64 s )
+{
+    c[0] *= s;
+    c[1] *= s;
+    c[2] *= s;
+    return *this;
+}
+
+inline Model::real3d& Model::real3d::operator /= ( const Model::real3d &v2 )
+{
+    c[0] /= v2.c[0];
+    c[1] /= v2.c[1];
+    c[2] /= v2.c[2];
+    return *this;
+}
+
+inline Model::real3d& Model::real3d::operator /= ( const Model::real64 s )
 {
     c[0] /= s;
     c[1] /= s;
@@ -4742,6 +4963,16 @@ inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& di
     return r;
 }
 
+inline bool Model::AABBI::encloses( _int x, _int y, _int z ) const
+{
+    return min[0] <= x &&
+           min[1] <= y &&
+           min[2] <= z &&
+           max[0] >= x &&
+           max[1] >= y && 
+           max[2] >= z;
+}
+
 bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real padding ) const 
 {
     const Vertex * vertexes = &model->vertexes[vtx_i];
@@ -4959,7 +5190,7 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
     //-------------------------------------------------------------------
     mdout << "VOLUME: xyz=[" << x << "," << y << "," << z << "]\n";
 
-    // affine transform and its inverse represented as a 3x3 matrix and a vec3 translation
+    // affine transform and its inverse represented as a 3x3 matrix and a real3 translation
     //
     struct MapData { 
         float  mMatF[9]; 
@@ -5023,22 +5254,22 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
     //-------------------------------------------------------------------
     static const int MaxNameSize = 256;
     struct GridData { 
-        char        mGridName[MaxNameSize];
         uint64_t    mMagic;             // 8 byte magic to validate it is valid grid data.
                                         // REFERENCEMAGIC = 0x4244566f6e614eL;
+        char        mGridName[MaxNameSize];
         real64      mBBoxMin[3];        // min corner of AABB
         real64      mBBoxMax[3];        // max corner of AABB
         MapData     mMap;               // affine transformation between index and world space in both single and double precision
         double      mUniformScale;      // size of a voxel in world units
-        VolumeGridClass mGridClass;     // 2 bytes
-        VolumeVoxelType mVoxelType;     // 2 bytes
+        VolumeGridClass mGridClass;     // 4 bytes
+        VolumeVoxelType mVoxelType;     // 4 bytes
         uint32_t    mBlindDataCount;    // count of GridBlindMetaData structures that follow this grid (after the gridname).
-        uint32_t    padding[4];         // seems to be needed to match up with NanoVDB
+        uint32_t    padding[2];         // seems to be needed to match up with NanoVDB
     };
 
     const uint8_t * grid_data = &model->voxels[voxel_i];
     const GridData * grid = reinterpret_cast< const GridData * >( grid_data );
-    die_assert( grid->mMagic == 0x4244566f6e614eULL, "bad magic number in GridData" );
+    die_assert( grid->mMagic == 0x304244566f6e614eUL, "bad magic number in GridData" );
     die_assert( grid->mBlindDataCount == 0, "mBlindDataCount must be 0 currently" );
     mdout << "VOLUME: grid=" << grid << " mUniformScale=" << "\n";
 
@@ -5078,7 +5309,7 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
         uint32_t mPadding2[3];          // to match reference
     };
 
-    assert( value_size == 4 || value_size == 12 );  // all we can handle at the moment
+    die_assert( value_size == 4 || value_size == 12, "unexpected value_size" );
 
     const uint8_t *   root_data = tree_data + tree->mBytes[ROOT_LEVEL];
     const uint        root_size = (value_size == 4) ? sizeof(RootData4) : sizeof(RootData12);
@@ -5432,11 +5663,11 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
     //-------------------------------------------------------------------
     const VolumeGrid * grid = &model->volume_grids[grid_i];  // all grids in volume have the same bbox
     if ( !grid->world_box.hit( origin, direction, direction_inv, tmin, tmax ) ) { 
-        mdout << "Model::VolumeGrid::hit: ray does not intersect world_box\n";
+        mdout << "Model::Volume::hit: ray does not intersect world_box\n";
         return false;
     }
-    real3 clipped_start = origin + tmin*direction;
-    real3 clipped_end   = origin + tmax*direction;
+    if ( tmin < 0.0 )  tmin = 0.0;
+    if ( tmax < tmin ) tmax = tmin;
 
     //-------------------------------------------------------------------
     // Figure out which grids we have.
@@ -5459,54 +5690,78 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
     }
 
     //-------------------------------------------------------------------
-    // Calculate step amount in each of three dimensions.
-    // It should be safe to step by world_voxel_size along the ray.
-    // Note that all grids in a volume must have the same world_voxel_size.
-    // So we can use the first grid here.
-    //-------------------------------------------------------------------
-    real3 step = grid->world_voxel_size * direction.normalized();
-    mdout << "Model::VolumeGrid::hit: clipped start=" << clipped_start << " end=" << clipped_end << 
-             " world_voxel_size=" << grid->world_voxel_size << " step=" << step << "\n";
-
-    //-------------------------------------------------------------------
     // Start at the clipped ray's origin and voxel.
     // Find a voxel along the ray that has a non-zero value,
     // which we currently interpret like alpha.
     // We use this "alpha" as the probability of stopping at that voxel.
     //-------------------------------------------------------------------
-    real world_voxel_size_inv = 1.0 / grid->world_voxel_size;
-    real3 p = clipped_start;
-    if (tmin <=0)
-        p = origin;
-    _int x_prev = -1;
-    _int y_prev = -1;
-    _int z_prev = -1;
+    real64 max_length_within_voxel_inv = 1.0 / grid->world_voxel_size.length();
+    mdout << "Model::Volume::hit: origin=" << origin << " direction=" << direction << 
+                                " grid_i=" << grid_i << " grid_density_i=" << grid_density_i << " grid_normal_i=" << grid_normal_i << 
+                                " grid_IOR_i=" << grid_IOR_i << " grid_F0_i=" << grid_F0_i << 
+                                " world_box=" << grid->world_box << " world_voxel_size=" << grid->world_voxel_size << " world_voxel_size_inv=" << grid->world_voxel_size_inv <<
+                                " max_length_within_voxel_inv=" << max_length_within_voxel_inv <<
+                                " index_box=" << grid->index_box << " tmin=" << tmin << " tmax=" << tmax << "\n";
     hit_info.grid_i = grid_i;   // for now
     _int x;
     _int y;
     _int z;
+    real voxel_tmin;
+    real voxel_tmax;
+    real3 p = origin + tmin*direction;
+    _int x_prev = -0x7fffffff;
+    _int y_prev = -0x7fffffff;
+    _int z_prev = -0x7fffffff;
+    real t_epsilon = 1e-8;
     for( ;; ) 
     {
         //-------------------------------------------------------------------
-        // Get voxel xyz for p.
-        // Retrieve voxel value.
+        // Get voxel indexes xyz for p.
+        // Figure out starting and ending points of ray within the voxel.
+        // Calculate length of that line segment.
         //-------------------------------------------------------------------
-        x = p.c[0] * world_voxel_size_inv;
-        y = p.c[1] * world_voxel_size_inv;
-        z = p.c[2] * world_voxel_size_inv;
-        if ( x != x_prev || y != y_prev || z != z_prev ) {
+        real3d pd = real3d( p.c[0], p.c[1], p.c[2] );
+        real3d p_scaledd = (pd - grid->world_translate) * grid->world_voxel_size_inv;
+        real3  p_scaled = real3( p_scaledd.c[0], p_scaledd.c[1], p_scaledd.c[2] );
+        x = std::floor( p_scaled.c[0] );
+        y = std::floor( p_scaled.c[1] );
+        z = std::floor( p_scaled.c[2] );
+        if ( !grid->index_box.encloses( x, y, z ) ) {
+            mdout << "Model::Volume::hit: stepped out of volume's index_box=" << grid->index_box << " p_scaled=" << p_scaled << " returning false\n";
+            return false;
+        }
+        real3d voxel_mind = real3d( x, y, z ) * grid->world_voxel_size + grid->world_translate;
+        real3  voxel_min  = real3( voxel_mind.c[0], voxel_mind.c[1], voxel_mind.c[2] );
+        real3d voxel_maxd = voxel_mind + grid->world_voxel_size;
+        real3  voxel_max  = real3( voxel_maxd.c[0], voxel_maxd.c[1], voxel_maxd.c[2] );
+        AABB   voxel_box  = AABB( voxel_min );
+        voxel_box.expand( voxel_max );
+        mdout << "Model::Volume::hit: p=" << p << " p_scaled=" << p_scaled << " xyz=[" << x << "," << y << "," << z << "] voxel_box=" << voxel_box << "\n";
+        voxel_tmin = tmin;
+        voxel_tmax = tmax;
+        if ( (x != x_prev || y != y_prev || z != z_prev) && voxel_box.hit( origin, direction, direction_inv, voxel_tmin, voxel_tmax ) ) { // allowing a little slop here
+            if ( voxel_tmin < tmin ) voxel_tmin = tmin;
+            if ( voxel_tmax > tmax ) voxel_tmax = tmax;
+            real3 voxel_start = origin + voxel_tmin*direction;
+            real3 voxel_end   = origin + voxel_tmax*direction;
+            real ray_length_within_voxel = (voxel_end-voxel_start).length();
+            mdout << "Model::Volume::hit: voxel_tmin=" << voxel_tmin << " voxel_tmax=" << voxel_tmax << 
+                                        " voxel_start=" << voxel_start << " voxel_end=" << voxel_end <<
+                                        " ray_length_within_voxel=" << ray_length_within_voxel << "\n";
+
             //-------------------------------------------------------------------
             // See if we should stop.  This occurs if any of these is true:
             //
             // 1) There is no density grid (rare).
             // 2) We have a change in IOR/F0 or if the caller didn't pass in a current F0.
-            // 3) We probabilistically choose using the density as the probability.
+            // 3) We probabilistically choose using the density as the probability, modulated
+            //    by mean free path length (MFPL) and length of ray within the voxel.
             //
-            // t is just (p - origin) * direction_inv.  We use the component that has the largest value in directino.
+            // t is just (p - origin) * direction_inv.  We use the component that has the largest value in direction.
             //-------------------------------------------------------------------
             if ( grid_density_i == uint(-1) ) {
                  // treat it like density = 1.0
-                 mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] NO DENSITY\n"; 
+                 mdout << "Model::Volume::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] NO DENSITY\n"; 
                  break;
             }
 
@@ -5524,48 +5779,62 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
                     F0 = real3( a, a, a );
                 }
                 if ( hit_info.F0.c[0] < 0.0 || hit_info.F0.c[0] != F0.c[0] || hit_info.F0.c[1] != F0.c[1] || hit_info.F0.c[2] != F0.c[2] ) {
-                    mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] F0 changed to " << F0 << "\n";
+                    mdout << "Model::Volume::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] F0 changed to " << F0 << "\n";
                     break;
                 }
             }
 
             grid = &model->volume_grids[grid_density_i];
             real density = grid->real_value( model, x, y, z );
+            mdout << "Model::Volume::hit: density=" << density << "\n";
             if ( density > 0.0 ) {
-                mdout << "Model::VolumeGrid::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] density =" << density << "\n";
                 uint mfpl_grid_i = voxel_class_grid_i(model, Model::VolumeVoxelClass::MFPL);
                 real mfpl = (mfpl_grid_i != uint(-1)) ? model->volume_grids[mfpl_grid_i].real_value(model, x, y, z) : 0.1;
-                if ( MODEL_UNIFORM_FN() < (mfpl*density) ) {
-                    hit_info.grid_i = grid_density_i;
-                    break;
+                mdout << "Model::Volume::hit: mfpl=" << mfpl << "\n";
+                if ( mfpl > 0.0 ) {
+                    if ( MODEL_UNIFORM_FN() < (ray_length_within_voxel*max_length_within_voxel_inv*mfpl*density) ) {
+                        hit_info.grid_i = grid_density_i;
+                        break;
+                    }
                 }
             }
 
             //-------------------------------------------------------------------
-            // Keep going.
+            // Keep going just within the next voxel.
             //-------------------------------------------------------------------
-            x_prev = x;
-            y_prev = y;
-            z_prev = z;
+            t_epsilon = (voxel_tmax-voxel_tmin)*0.1;  
+            if ( t_epsilon <= 0.0 ) t_epsilon = 1e-8;
         } else {
-            mdout << "Model::VolumeGrid::hit: step ended up in same place, do another step\n";
+            //-------------------------------------------------------------------
+            // Double t_epsilon and try again.
+            // We are probably very close to a corner.
+            //-------------------------------------------------------------------
+            t_epsilon *= 2.0;
         }
 
-        //-------------------------------------------------------------------
-        // Nope, must step and try again unless we go outside the volume.
-        //-------------------------------------------------------------------
-        p += step;
-        if ( !grid->world_box.encloses( p ) ) {
-            mdout << "Model::VolumeGrid::hit: stepped out of volume, returning false\n";
+        real t_new = voxel_tmax + t_epsilon;
+        mdout << "Model::Volume::hit: t_epsilon=" << t_epsilon << " t_new=" << t_new << "\n";
+        if ( t_new > tmax ) {
+            mdout << "Model::Volume::hit: t_epsilon move stepped out of volume, returning false\n";
             return false;
         }
+        p = origin + t_new*direction;
+        x_prev = x;
+        y_prev = y;
+        z_prev = z;
     } // for
 
+    //-------------------------------------------------------------------
+    // Change p to some uniformly random location between voxel_start and voxel_end.
+    //-------------------------------------------------------------------
+    real t = voxel_tmin + MODEL_UNIFORM_FN()*(voxel_tmax-voxel_tmin);
+    p = origin + t*direction;
+    
     //-------------------------------------------------------------------
     // Fill in rest of hit_info.
     //-------------------------------------------------------------------
     hit_info.model = model;
-    hit_info.p = p;
+    hit_info.p = real3( p.c[0], p.c[1], p.c[2] );
     int c;
     for( int i=0; i < 3; i++ )
     {
@@ -5598,7 +5867,7 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
         hit_info.normal = real3(0,1,0);
     }
     hit_info.shading_normal = hit_info.normal;
-    mdout << "Model::VolumeGrid::hit: success origin=" << origin << " direction=" << direction << " direction_inv=" << direction_inv << 
+    mdout << "Model::Volume::hit: success origin=" << origin << " direction=" << direction << " direction_inv=" << direction_inv << 
              " p=" << p << " c=" << c << " t=" << hit_info.t << "\n";
     return true;  // success
 }

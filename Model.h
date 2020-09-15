@@ -618,6 +618,7 @@ public:
         bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
                   real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const;
         uint voxel_class_grid_i( const Model * model, VolumeVoxelClass c ) const;
+        bool rand_emissive_xyz( const Model * model, _int& x, _int& y, _int& z ) const;  // returns true and xyz of some emissive voxel, else false if none found
 
         std::string str( const Model * model, std::string indent="" ) const;       // recursive
     };
@@ -1067,6 +1068,8 @@ private:
     char * nvdb_start;
     char * nvdb_end;
     char * nvdb;
+
+    const uint64_t **   volume_to_emissive;             // information about emissive voxels
 
     bool load_fsc( std::string fsc_file, std::string dir_name );        // .fscene 
     bool load_obj( std::string obj_file, std::string dir_name );        // .obj
@@ -1844,27 +1847,87 @@ Model::Model( std::string model_path, bool is_compressed )
     }
 
     //------------------------------------------------------------
-    // Recreate name maps.
+    // Recreate maps.
     //------------------------------------------------------------
-    for ( uint i = 0; i < hdr->obj_cnt; i++ )
+    for( uint i = 0; i < hdr->obj_cnt; i++ )
     {
         std::string name = &strings[objects[i].name_i];
         name_to_obj_i[name] = i;
         mdout << "obj_i=" << i << " name_i=" << objects[i].name_i << " name=" << name << "\n";
     }
 
-    for ( uint i = 0; i < hdr->mtl_cnt; i++ )
+    for( uint i = 0; i < hdr->mtl_cnt; i++ )
     {
         std::string name = &strings[materials[i].name_i];
         name_to_mtl_i[name] = i;
         mdout << "mtl_i=" << i << " name_i=" << materials[i].name_i << " name=" << name << "\n";
     }
 
-    for ( uint i = 0; i < hdr->tex_cnt; i++ )
+    for( uint i = 0; i < hdr->tex_cnt; i++ )
     {
         std::string name = &strings[textures[i].name_i];
         name_to_tex_i[name] = i;
         mdout << "tex_i=" << i << " name_i=" << textures[i].name_i << " name=" << name << "\n";
+    }
+
+    volume_to_emissive = (hdr->volume_cnt == 0) ? nullptr : (new const uint64_t *[hdr->volume_cnt]);
+    for( uint i = 0; i < hdr->volume_cnt; i++ )
+    {
+        volume_to_emissive[i] = nullptr;
+
+        //------------------------------------------------------------
+        // Precompute emissive information if this is an emissive volume.
+        // We store bitmasks for 4x4x4 supervoxels in uint64_t.
+        //------------------------------------------------------------
+        const Volume * volume = &volumes[i];
+        uint t_grid_i = volume->voxel_class_grid_i( this, Model::VolumeVoxelClass::TEMPERATURE );
+        if ( t_grid_i == uint(-1) ) continue;
+        uint d_grid_i = volume->voxel_class_grid_i( this, Model::VolumeVoxelClass::DENSITY );
+        if ( d_grid_i == uint(-1) ) continue;
+        const VolumeGrid * d_grid_ptr = &volume_grids[d_grid_i];
+        const VolumeGrid * t_grid_ptr = &volume_grids[t_grid_i];
+
+        _int x_min = d_grid_ptr->index_box.min[0];
+        _int y_min = d_grid_ptr->index_box.min[0];
+        _int z_min = d_grid_ptr->index_box.min[0];
+        _int x_max = d_grid_ptr->index_box.max[0];
+        _int y_max = d_grid_ptr->index_box.max[0];
+        _int z_max = d_grid_ptr->index_box.max[0];
+        uint x_cnt = x_max - x_min + 1;
+        uint y_cnt = y_max - y_min + 1;
+        uint z_cnt = z_max - z_min + 1;
+        uint super_x_cnt = (x_cnt + 3) / 4;
+        uint super_y_cnt = (x_cnt + 3) / 4;
+        uint super_xy_cnt = super_x_cnt * super_y_cnt;
+        uint super_z_cnt = (x_cnt + 3) / 4;
+        uint super_cnt = super_x_cnt * super_y_cnt * super_z_cnt;
+        uint64_t * super_voxels = new uint64_t[super_cnt];
+        memset( super_voxels, 0, super_cnt * sizeof(super_voxels[0]) );
+        volume_to_emissive[i] = super_voxels;
+
+        //------------------------------------------------------------
+        // Now set bits for each voxel with density > 0 and temperature > 0.
+        //------------------------------------------------------------
+        for( _int z = z_min; z <= z_max; z++ )
+        {
+            for( _int y = y_min; y <= y_max; y++ )
+            {
+                for( _int x = x_min; x <= x_max; x++ )
+                {
+                    if ( t_grid_ptr->real_value( this, x, y, z ) > 0.0 && d_grid_ptr->real_value( this, x, y, z ) > 0.0 ) {
+                        uint super_x = (x - x_min) / 4;
+                        uint super_y = (y - y_min) / 4;
+                        uint super_z = (z - z_min) / 4;
+                        uint x_off   = (x - x_min) % 4;
+                        uint y_off   = (y - y_min) % 4;
+                        uint z_off   = (z - x_min) % 4;
+                        uint super_i = super_z*super_xy_cnt + super_y*super_x_cnt + super_x;
+                        uint bit_i   = z_off*16 + y_off*4 + x_off;
+                        super_voxels[super_i] |= 1ULL << bit_i;
+                    }
+                }
+            }
+        }
     }
 
     is_good = true;
@@ -5574,6 +5637,77 @@ const void * Model::VolumeGrid::value_ptr( const Model * model, _int x, _int y, 
     return value_ptr;
 }
 
+uint Model::Volume::voxel_class_grid_i( const Model * model, Model::VolumeVoxelClass c ) const
+{
+    for( uint i = grid_i; i < (grid_i + grid_cnt); i++ )
+    {
+        if ( model->volume_grids[i].voxel_class == c ) return i;
+    }
+    return uint(-1);
+}
+
+bool Model::Volume::rand_emissive_xyz( const Model * model, _int& x, _int& y, _int& z ) const
+{
+    //--------------------------------------------------------------------------
+    // Bit masks have been precomputed if this truly is an emissive volume.
+    //--------------------------------------------------------------------------
+    const uint64_t * super_voxels = model->volume_to_emissive[this - model->volumes];
+    if ( super_voxels == nullptr ) return false;
+
+    //--------------------------------------------------------------------------
+    // Start at some random supervoxel and try to find any supervoxel with a non-zero bitmask.
+    // If there is such a supervoxel (there should be unless all temperatures are 0 :-), then 
+    // pick a random voxel in the supervoxel with its bit set and use that voxel's xyz.
+    //--------------------------------------------------------------------------
+    uint d_grid_i = voxel_class_grid_i( model, Model::VolumeVoxelClass::DENSITY );
+    const VolumeGrid * d_grid_ptr = &model->volume_grids[d_grid_i];
+    _int x_min = d_grid_ptr->index_box.min[0];
+    _int y_min = d_grid_ptr->index_box.min[0];
+    _int z_min = d_grid_ptr->index_box.min[0];
+    _int x_max = d_grid_ptr->index_box.max[0];
+    _int y_max = d_grid_ptr->index_box.max[0];
+    _int z_max = d_grid_ptr->index_box.max[0];
+    uint x_cnt = x_max - x_min + 1;
+    uint y_cnt = y_max - y_min + 1;
+    uint z_cnt = z_max - z_min + 1;
+    uint super_x_cnt = (x_cnt + 3) / 4;
+    uint super_y_cnt = (x_cnt + 3) / 4;
+    uint super_xy_cnt = super_x_cnt * super_xy_cnt;
+    uint super_z_cnt = (x_cnt + 3) / 4;
+    uint super_cnt = super_x_cnt * super_y_cnt * super_z_cnt;
+    uint super_i_start = uint( MODEL_UNIFORM_FN() * float(super_cnt) );
+    uint super_i = super_i_start;
+    for( ;; )
+    {
+        if ( super_voxels[super_i] != 0 ) {
+            // excellent, we found one
+            // pick voxel out of 64 possible
+            uint64_t super_voxel = super_voxels[super_i];
+            uint b = uint( MODEL_UNIFORM_FN() * 64.0 );
+            for( ;; )
+            {
+                if ( (super_voxel >> b) & 1 ) {
+                    // got it
+                    z = b / 16;
+                    b -= z*16;
+                    y = b / 4;
+                    x = b - y*4;
+                    return true;
+                }
+                
+                // we should eventually find a bit set
+                b++;
+                if ( b == 16 ) b = 0;  
+            }
+        }
+
+        // try next supervoxel
+        super_i++;
+        if ( super_i == super_cnt ) super_i = 0;
+        if ( super_i == super_i_start ) return false; // rare
+    }
+}
+
 bool Model::VolumeGrid::is_active( const Model * model, _int x, _int y, _int z ) const
 {
     //--------------------------------------------------------------------------
@@ -5870,15 +6004,6 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
     mdout << "Model::Volume::hit: success origin=" << origin << " direction=" << direction << " direction_inv=" << direction_inv << 
              " p=" << p << " c=" << c << " t=" << hit_info.t << "\n";
     return true;  // success
-}
-
-uint Model::Volume::voxel_class_grid_i( const Model * model, Model::VolumeVoxelClass c ) const
-{
-    for( uint i = grid_i; i < (grid_i + grid_cnt); i++ )
-    {
-        if ( model->volume_grids[i].voxel_class == c ) return i;
-    }
-    return uint(-1);
 }
 
 bool Model::Instance::bounding_box( const Model * model, AABB& b, real padding ) const

@@ -1897,9 +1897,9 @@ Model::Model( std::string model_path, bool is_compressed )
         uint y_cnt = y_max - y_min + 1;
         uint z_cnt = z_max - z_min + 1;
         uint super_x_cnt = (x_cnt + 3) / 4;
-        uint super_y_cnt = (x_cnt + 3) / 4;
+        uint super_y_cnt = (y_cnt + 3) / 4;
         uint super_xy_cnt = super_x_cnt * super_y_cnt;
-        uint super_z_cnt = (x_cnt + 3) / 4;
+        uint super_z_cnt = (z_cnt + 3) / 4;
         uint super_cnt = super_x_cnt * super_y_cnt * super_z_cnt;
         uint64_t * super_voxels = new uint64_t[super_cnt];
         memset( super_voxels, 0, super_cnt * sizeof(super_voxels[0]) );
@@ -5671,9 +5671,8 @@ bool Model::Volume::rand_emissive_xyz( const Model * model, _int& x, _int& y, _i
     uint y_cnt = y_max - y_min + 1;
     uint z_cnt = z_max - z_min + 1;
     uint super_x_cnt = (x_cnt + 3) / 4;
-    uint super_y_cnt = (x_cnt + 3) / 4;
-    uint super_xy_cnt = super_x_cnt * super_xy_cnt;
-    uint super_z_cnt = (x_cnt + 3) / 4;
+    uint super_y_cnt = (y_cnt + 3) / 4;
+    uint super_z_cnt = (z_cnt + 3) / 4;
     uint super_cnt = super_x_cnt * super_y_cnt * super_z_cnt;
     uint super_i_start = uint( MODEL_UNIFORM_FN() * float(super_cnt) );
     uint super_i = super_i_start;

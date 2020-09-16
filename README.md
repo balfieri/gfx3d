@@ -2,7 +2,7 @@
 
 This is a single C++ Model.h file that reads in 3D models in .obj/.mtl format
 and helps prepare them for rendering, which is handled separately.  You can think of this as the MECHANISM of 3D
-graphics and rendering as the POLICY. If done right, the mechanism is most of the code. :-)
+graphics and rendering as the POLICY. If done right, the policy is very little code. :-)
 
 It reads in any textures that are listed in the .mtl files and supports ASTC compression.
 It optionally generate mipmaps, and it can also generate a BVH tree for ray tracing.

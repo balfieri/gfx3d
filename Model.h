@@ -243,41 +243,38 @@ public:
         real4( void )                               { c[0] = 0;  c[1] = 0;  c[2] = 0;  c[3] = 0;  }
         real4( real c0, real c1, real c2, real c3 ) { c[0] = c0; c[1] = c1; c[2] = c2; c[3] = c3; }
 
-        real   dot( const real4 &v2 ) const;
-        real   length( void ) const;
-        real   length_sqr( void ) const ;
-        real4& normalize( void );
-        real4  normalized( void ) const;
-        bool   operator == ( const real4 &v2 ) const;
-        real4& operator += ( const real4 &v2 );
-        real4& operator -= ( const real4 &v2 );
-        real4& operator *= ( const real4 &v2 );
-        real4& operator *= ( const real s );
-        real4& operator /= ( const real4 &v2 );
-        real4& operator /= ( const real s );
-    };
-
-    class real3
-    {
-    public:
-        real c[3];
+        inline real x() const { return c[0]; }
+        inline real y() const { return c[1]; }
+        inline real z() const { return c[2]; }
+        inline real w() const { return c[3]; }
+        inline real r() const { return c[0]; }
+        inline real g() const { return c[1]; }
+        inline real b() const { return c[2]; }
+        inline real a() const { return c[3]; }
         
-        real3( void )                      { c[0] = 0;  c[1] = 0;  c[2] = 0;  }
-        real3( real c0, real c1, real c2 ) { c[0] = c0; c[1] = c1; c[2] = c2; }
-
-        real   dot( const real3 &v2 ) const;
-        real3  cross( const real3 &v2 ) const;
-        real   length( void ) const;
-        real   length_sqr( void ) const ;
-        real3& normalize( void );
-        real3  normalized( void ) const;
-        bool   operator == ( const real3 &v2 ) const;
-        real3& operator += ( const real3 &v2 );
-        real3& operator -= ( const real3 &v2 );
-        real3& operator *= ( const real3 &v2 );
-        real3& operator *= ( const real s );
-        real3& operator /= ( const real3 &v2 );
-        real3& operator /= ( const real s );
+        inline const real4& operator+() const           { return *this; }
+        inline real4    operator-() const               { return real4(-c[0], -c[1], -c[2], -c[3]); }
+        inline real     operator[](int i) const         { return c[i]; }
+        inline real&    operator[](int i)               { return c[i]; };
+        inline bool     operator == ( const real4 &v2 ) const;
+        inline real4&   operator += ( const real4 &v2 );
+        inline real4&   operator -= ( const real4 &v2 );
+        inline real4&   operator *= ( const real4 &v2 );
+        inline real4&   operator *= ( const real s );
+        inline real4&   operator /= ( const real4 &v2 );
+        inline real4&   operator /= ( const real s );
+    
+        inline real     dot( const real4 &v2 ) const;
+        inline real     length( void ) const;
+        inline real     length_sqr( void ) const ;
+        inline real4&   normalize( void );
+        inline real4    normalized( void ) const;
+        inline void     clamp( real min=0.0, real max=1.0 );
+        inline real4    clamped( void ) const;
+        inline real4    mulby2( void ) const;
+        inline real4    mulby4( void ) const;
+        inline real4    divby2( void ) const;
+        inline real4    divby4( void ) const;
     };
 
     class real3d        // double-precision
@@ -288,19 +285,92 @@ public:
         real3d( void )                            { c[0] = 0;  c[1] = 0;  c[2] = 0;  }
         real3d( real64 c0, real64 c1, real64 c2 ) { c[0] = c0; c[1] = c1; c[2] = c2; }
 
-        real64  dot( const real3d &v2 ) const;
-        real3d  cross( const real3d &v2 ) const;
-        real64  length( void ) const;
-        real64  length_sqr( void ) const ;
-        real3d& normalize( void );
-        real3d  normalized( void ) const;
-        bool    operator == ( const real3d &v2 ) const;
-        real3d& operator += ( const real3d &v2 );
-        real3d& operator -= ( const real3d &v2 );
-        real3d& operator *= ( const real3d &v2 );
-        real3d& operator *= ( const real64 s );
-        real3d& operator /= ( const real3d &v2 );
-        real3d& operator /= ( const real64 s );
+        inline real64 x() const { return c[0]; }
+        inline real64 y() const { return c[1]; }
+        inline real64 z() const { return c[2]; }
+        inline real64 r() const { return c[0]; }
+        inline real64 g() const { return c[1]; }
+        inline real64 b() const { return c[2]; }
+        
+        inline const real3d& operator+() const   { return *this; }
+        inline real3d   operator-() const       { return real3d(-c[0], -c[1], -c[2]); }
+        inline real64   operator[](int i) const { return c[i]; }
+        inline real64&  operator[](int i)       { return c[i]; };
+        inline bool     operator == ( const real3d &v2 ) const;
+        inline real3d&  operator += ( const real3d &v2 );
+        inline real3d&  operator -= ( const real3d &v2 );
+        inline real3d&  operator *= ( const real3d &v2 );
+        inline real3d&  operator *= ( const real64 s );
+        inline real3d&  operator /= ( const real3d &v2 );
+        inline real3d&  operator /= ( const real64 s );
+    
+        inline real64   dot( const real3d &v2 ) const;
+        inline real3d   cross( const real3d &v2 ) const;
+        inline real64   length( void ) const;
+        inline real64   length_sqr( void ) const ;
+        inline real3d&  normalize( void );
+        inline real3d   normalized( void ) const;
+        inline void     clamp( real64 min=0.0, real64 max=1.0 );
+        inline real3d   clamped( void ) const;
+        inline real3d   mulby2( void ) const;
+        inline real3d   mulby4( void ) const;
+        inline real3d   divby2( void ) const;
+        inline real3d   divby4( void ) const;
+        inline real64   luminance( void ) const { return c[0]*0.299 +  c[1]*0.587  + c[2]*0.114; }
+        inline real64   average( void ) const   { return 0.333333333333333333333333333*(c[0] + c[1] + c[2]); }
+        inline real3d   sqrt( void ) const      { return real3d( std::sqrt(c[0]), std::sqrt(c[1]), std::sqrt(c[2]) ); }
+        inline real3d   pow( real n ) const     { return real3d( std::pow(c[0], n), std::pow(c[1], n), std::pow(c[2], n) ); }
+        inline bool     is_zero( void ) const   { return c[0] == 0.0 && c[1] == 0.0 && c[2] == 0.0; }
+        inline bool     is_one( void ) const    { return c[0] == 1.0 && c[1] == 1.0 && c[2] == 1.0; }
+    };
+
+    class real3         // default precision 
+    {
+    public:
+        real c[3];
+        
+        real3( void )                      { c[0] = 0;  c[1] = 0;  c[2] = 0;  }
+        real3( real c0, real c1, real c2 ) { c[0] = c0; c[1] = c1; c[2] = c2; }
+        real3( const real3d& v )           { c[0] = v.c[0]; c[1] = v.c[1]; c[2] = v.c[2]; }
+        real3( const real4& v4 )           { c[0] = v4.c[0]; c[1] = v4.c[1]; c[2] = v4.c[2]; }
+
+        inline real x() const { return c[0]; }
+        inline real y() const { return c[1]; }
+        inline real z() const { return c[2]; }
+        inline real r() const { return c[0]; }
+        inline real g() const { return c[1]; }
+        inline real b() const { return c[2]; }
+        
+        inline const real3& operator+() const   { return *this; }
+        inline real3    operator-() const       { return real3(-c[0], -c[1], -c[2]); }
+        inline real     operator[](int i) const { return c[i]; }
+        inline real&    operator[](int i)       { return c[i]; };
+        inline bool     operator == ( const real3 &v2 ) const;
+        inline real3&   operator += ( const real3 &v2 );
+        inline real3&   operator -= ( const real3 &v2 );
+        inline real3&   operator *= ( const real3 &v2 );
+        inline real3&   operator *= ( const real s );
+        inline real3&   operator /= ( const real3 &v2 );
+        inline real3&   operator /= ( const real s );
+    
+        inline real     dot( const real3 &v2 ) const;
+        inline real3    cross( const real3 &v2 ) const;
+        inline real     length( void ) const;
+        inline real     length_sqr( void ) const ;
+        inline real3&   normalize( void );
+        inline real3    normalized( void ) const;
+        inline void     clamp( real min=0.0, real max=1.0 );
+        inline real3    clamped( void ) const;
+        inline real3    mulby2( void ) const;
+        inline real3    mulby4( void ) const;
+        inline real3    divby2( void ) const;
+        inline real3    divby4( void ) const;
+        inline real     luminance( void ) const { return c[0]*0.299 +  c[1]*0.587  + c[2]*0.114; }
+        inline real     average( void ) const   { return 0.333333333333333333333333333*(c[0] + c[1] + c[2]); }
+        inline real3    sqrt( void ) const      { return real3( std::sqrt(c[0]), std::sqrt(c[1]), std::sqrt(c[2]) ); }
+        inline real3    pow( real n ) const     { return real3( std::pow(c[0], n), std::pow(c[1], n), std::pow(c[2], n) ); }
+        inline bool     is_zero( void ) const   { return c[0] == 0.0 && c[1] == 0.0 && c[2] == 0.0; }
+        inline bool     is_one( void ) const    { return c[0] == 1.0 && c[1] == 1.0 && c[2] == 1.0; }
     };
 
     class real2
@@ -311,18 +381,29 @@ public:
         real2( void )             { c[0] = 0;  c[1] = 0;  }
         real2( real c0, real c1 ) { c[0] = c0; c[1] = c1; }
 
-        real   dot( const real2 &v2 ) const;
-        real   length( void ) const;
-        real   length_sqr( void ) const ;
-        real2& normalize( void );
-        real2  normalized( void ) const;
+        inline real x() const { return c[0]; }
+        inline real y() const { return c[1]; }
+        inline real u() const { return c[0]; }
+        inline real v() const { return c[1]; }
+        
+        inline const real2& operator+() const   { return *this; }
+        inline real2    operator-() const       { return real2(-c[0], -c[1]); }
+        inline real     operator[](int i) const { return c[i]; }
+        inline real&    operator[](int i)       { return c[i]; };
+        inline real2&   operator += ( const real2 &v2 );
+        inline real2&   operator -= ( const real2 &v2 );
+        inline real2&   operator *= ( const real2 &v2 );
+        inline real2&   operator *= ( const real s );
+        inline real2&   operator /= ( const real2 &v2 );
+        inline real2&   operator /= ( const real s );
 
-        real2& operator += ( const real2 &v2 );
-        real2& operator -= ( const real2 &v2 );
-        real2& operator *= ( const real2 &v2 );
-        real2& operator *= ( const real s );
-        real2& operator /= ( const real2 &v2 );
-        real2& operator /= ( const real s );
+        inline real     dot( const real2 &v2 ) const;
+        inline real     length( void ) const;
+        inline real     length_sqr( void ) const ;
+        inline real2&   normalize( void );
+        inline real2    normalized( void ) const;
+        inline void     clamp( real min=0.0, real max=1.0 );
+        inline real2    clamped( void ) const;
     };
 
     class Header                            // header (of future binary file)
@@ -440,16 +521,21 @@ public:
     class AABB                              // axis aligned bounding box
     {
     public:
-        real3           min;                // bounding box min
-        real3           max;                // bounding box max
+        real3           _min;               // bounding box min
+        real3           _max;               // bounding box max
 
         AABB( void ) {}
         AABB( const real3& p );             // init with one point
+        AABB( const real3& p0, const real3& p1 );
         AABB( const real3& p0, const real3& p1, const real3& p2 );
+
+        inline real3 min() const { return _min; }
+        inline real3 max() const { return _max; }
 
         void pad( real p );
         void expand( const AABB& other );
         void expand( const real3& p );
+        real volume(void) const         { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
         bool encloses( const real3& p ) const;
         bool encloses( const AABB& other ) const;
         bool hit( const real3& origin, const real3& direction, const real3& direction_inv, real& tmin, real& tmax ) const; 
@@ -458,10 +544,74 @@ public:
     class AABBI                             // axis aligned bounding box with integers
     {
     public:
-        _int            min[3];             // bounding box min
-        _int            max[3];             // bounding box max
+        _int            _min[3];            // bounding box min
+        _int            _max[3];            // bounding box max
 
         bool encloses( _int x, _int y, _int z ) const;
+    };
+
+    enum class RAY_KIND 
+    {
+        DIRECT,
+        REFLECTED,
+        REFRACTED
+    };
+
+    class Ray
+    {
+    public: 
+        inline Ray() { top = -1;}
+        inline Ray( const real3& a, const real3& b, RAY_KIND kind, real solid_angle=0 );
+        inline void init_normalized( const real3& a, const real3& b, RAY_KIND kind, real32 solid_angle=0 ); 
+
+        inline const real3& origin() const            { return A; }
+        inline const real3& direction() const         { return B; }
+        inline const real3& direction_inv() const     { return B_inv; }
+        inline const real3& normalized_direction() const { return B_norm; }
+        inline real32 solid_angle() const             { return SOLID_ANGLE; }
+        inline real3 point_at_parameter(real t) const;
+        inline real3 normalized_point_at_parameter(real t) const;
+        inline real3 endpoint() const                 { return point_at_parameter(1.0); }
+        inline real32 length() const                  { return direction().length(); }
+
+        real3 A;
+        real3 B;
+        real3 B_inv;
+        real3 B_norm;
+        RAY_KIND KIND;
+        real32 SOLID_ANGLE;
+        int top;
+    };
+
+    class Camera 
+    {
+    public:
+        Camera(real3 lookfrom, real3 lookat, real3 vup, real vfov, real aspect, real aperture, real focus_dist, int nx, int ny, int spp, uint name_i=uint(-1));
+
+        Ray get_ray(real s_pixel, real t_pixel, real s_lens, real t_lens) const;  // simple thin lens camera by default
+
+        // inputs
+        real3           lookfrom;           // camera location
+        real3           lookat;             // point camera is aimed at
+        real3           vup;                // camera up direction
+        real            aperture;           // lens aperture
+        real            focus_dist;         // aka focal_length
+        real            near;               // near clip plane distance (typical: 0.1)
+        real            far;                // far clip plane distance (typical: 10000)
+        real            vfov;               // vertical field of view
+        real            aspect;             // aspect ratio
+        uint            name_i;             // index in strings array (null-terminated strings)
+
+        // derived
+        real3           lower_left_corner;
+        real3           horizontal;
+        real3           vertical;
+        real3           u, v, w;
+        real32          lens_radius;
+        real32          solid_angle;
+
+    private:
+        void concentric_point_on_unit_disk(real s, real t, real& x, real& y) const;
     };
 
     class Polygon
@@ -869,21 +1019,6 @@ public:
         uint64_t        unused[8];          // leave room for temporary hacks
     };
 
-    class Camera
-    {
-    public:
-        uint            name_i;             // index in strings array (null-terminated strings)
-        real3           lookfrom;           // camera location
-        real3           lookat;             // point camera is aimed at
-        real3           vup;                // camera up direction
-        real            aperture;           // lens aperture
-        real            focus_dist;         // aka focal_length
-        real            near;               // near clip plane distance (typical: 0.1)
-        real            far;                // far clip plane distance (typical: 10000)
-        real            vfov;               // vertical field of view
-        real            aspect_ratio;       // aspect ratio
-    };
-
     class Frame                             // one frame in an animation sequence
     {
     public:
@@ -1099,6 +1234,23 @@ private:
 //--------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------
 //
+// USEFUL CONSTANTS (IN FLOAT)
+//
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+constexpr Model::real32 PI          = M_PI;
+constexpr Model::real32 PI2         = M_PI*2.0;          // aka TAU
+constexpr Model::real32 PI4         = M_PI*4.0;
+constexpr Model::real32 ONE_OVER_PI = 1.0/M_PI;
+constexpr Model::real32 ONE_OVER_PI2= 1.0/(2.0*M_PI);    
+constexpr Model::real32 ONE_OVER_PI4= 1.0/(4.0*M_PI);    
+constexpr Model::real32 PI_DIV_2    = M_PI/2.0;
+constexpr Model::real32 PI_DIV_4    = M_PI/4.0;
+constexpr Model::real32 PI_DIV_180  = M_PI/180.0;
+
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+//
 // USEFUL REAL FUNCTIONS
 //
 //--------------------------------------------------------------------------------------
@@ -1118,7 +1270,6 @@ inline Model::real hypoth( const Model::real& x, const Model::real& y )         
 inline Model::real hypoth1( const Model::real& y )                                   { return std::sqrt( 1.0 - y*y ); }
 inline void sincos( const Model::real& x, Model::real& si, Model::real& co )         { si = std::sin( x ); co = std::cos( x ); }
 inline void sincos( const Model::real& x, Model::real& si, Model::real& co, const Model::real& r ) { si = r*std::sin( x ); co = r*std::cos( x ); }
-
 
 //--------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------
@@ -1283,14 +1434,21 @@ inline std::ostream& operator << ( std::ostream& os, const Model::Matrix& m )
 
 inline std::ostream& operator << ( std::ostream& os, const Model::AABB& box ) 
 {
-    os << box.min << ".." << box.max;
+    os << box._min << ".." << box._max;
     return os;
 }
 
 inline std::ostream& operator << ( std::ostream& os, const Model::AABBI& box ) 
 {
-    os << "[" << box.min[0] << "," << box.min[1] << "," << box.min[2] << "] .. [" <<
-                 box.max[0] << "," << box.max[1] << "," << box.max[2] << "]";
+    os << "[" << box._min[0] << "," << box._min[1] << "," << box._min[2] << "] .. [" <<
+                 box._max[0] << "," << box._max[1] << "," << box._max[2] << "]";
+    return os;
+}
+
+inline std::ostream& operator << ( std::ostream &os, const Model::Ray &r ) 
+{
+    os << "{ origin=" << r.A << " direction=" << r.B << " direction_inv=" << r.B_inv << " direction_norm=" << r.B_norm << " kind=" << int(r.KIND) << 
+             " solid_angle=" << r.SOLID_ANGLE << "}";
     return os;
 }
 
@@ -1802,8 +1960,8 @@ Model::Model( std::string                top_file,
                 // here in the instance->box.
                 Matrix * M = &matrixes[instance->matrix_i];
                 AABB *   t_box = &model->bvh_nodes[model->hdr->bvh_root_i].box;
-                M->transform( t_box->min, instance->box.min );
-                M->transform( t_box->max, instance->box.max );
+                M->transform( t_box->_min, instance->box._min );
+                M->transform( t_box->_max, instance->box._max );
             }
         }
     }
@@ -1962,12 +2120,12 @@ Model::Model( std::string model_path, bool is_compressed )
         const VolumeGrid * d_grid_ptr = &volume_grids[d_grid_i];
         const VolumeGrid * t_grid_ptr = &volume_grids[t_grid_i];
 
-        _int x_min = d_grid_ptr->index_box.min[0];
-        _int y_min = d_grid_ptr->index_box.min[0];
-        _int z_min = d_grid_ptr->index_box.min[0];
-        _int x_max = d_grid_ptr->index_box.max[0];
-        _int y_max = d_grid_ptr->index_box.max[0];
-        _int z_max = d_grid_ptr->index_box.max[0];
+        _int x_min = d_grid_ptr->index_box._min[0];
+        _int y_min = d_grid_ptr->index_box._min[0];
+        _int z_min = d_grid_ptr->index_box._min[0];
+        _int x_max = d_grid_ptr->index_box._max[0];
+        _int y_max = d_grid_ptr->index_box._max[0];
+        _int z_max = d_grid_ptr->index_box._max[0];
         uint x_cnt = x_max - x_min + 1;
         uint y_cnt = y_max - y_min + 1;
         uint z_cnt = z_max - z_min + 1;
@@ -2766,7 +2924,7 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
                 camera->focus_dist = 21.0;
                 camera->near = 0.1;
                 camera->far = 10000.0;
-                camera->aspect_ratio = 1.0;
+                camera->aspect = 1.0;
 
                 for( ;; ) 
                 {
@@ -2812,7 +2970,7 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
                         if ( !parse_real( camera->vfov, fsc, fsc_end, true ) ) goto error;
 
                     } else if ( strcmp( camera_field, "aspect_ratio" ) == 0 ) {
-                        if ( !parse_real( camera->aspect_ratio, fsc, fsc_end, true ) ) goto error;
+                        if ( !parse_real( camera->aspect, fsc, fsc_end, true ) ) goto error;
 
                     } else {
                         fsc_assert( 0, "unexpected camera field '" + std::string(camera_field) + "' in " + fsc_file );
@@ -2962,7 +3120,7 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
                             camera->near = -1.0;
                             camera->far = -1.0;
                             camera->vfov = 40.0;
-                            camera->aspect_ratio = -1.0;
+                            camera->aspect = -1.0;
 
                             for( ;; ) 
                             {
@@ -3003,7 +3161,7 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
                                     camera->far  = near_far.c[1];
 
                                 } else if ( strcmp( frame_field, "aspect_ratio" ) == 0 ) {
-                                    if ( !parse_real( camera->aspect_ratio, fsc, fsc_end, true ) ) goto error;
+                                    if ( !parse_real( camera->aspect, fsc, fsc_end, true ) ) goto error;
 
                                 } else {
                                     fsc_assert( 0, "unexpected frame field '" + std::string(frame_field) + "' in " + fsc_file );
@@ -3836,14 +3994,14 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
             //------------------------------------------------------------
             struct AABB64
             {
-                real64          min[3];
-                real64          max[3];
+                real64          _min[3];
+                real64          _max[3];
             };
 
             struct AABBI32
             {
-                int32_t         min[3];
-                int32_t         max[3];
+                int32_t         _min[3];
+                int32_t         _max[3];
             };
 
             struct GridMetaData   // in the file
@@ -3896,15 +4054,15 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
             { 
                 grid->node_cnt[j] = meta.node_cnt[j];
                 if ( j < 3 ) {
-                    grid->world_box.min.c[j] = meta.world_box.min[j];
-                    grid->world_box.max.c[j] = meta.world_box.max[j];
-                    grid->index_box.min[j]   = meta.index_box.min[j];
-                    grid->index_box.max[j]   = meta.index_box.max[j];
+                    grid->world_box._min.c[j] = meta.world_box._min[j];
+                    grid->world_box._max.c[j] = meta.world_box._max[j];
+                    grid->index_box._min[j]   = meta.index_box._min[j];
+                    grid->index_box._max[j]   = meta.index_box._max[j];
                     if ( i > 0 ) {
-                        die_assert( grid->world_box.min.c[j] == grid0->world_box.min.c[j], "all grids in a volume must have same world box" );
-                        die_assert( grid->world_box.max.c[j] == grid0->world_box.max.c[j], "all grids in a volume must have same world box" );
-                        die_assert( grid->index_box.min[j]   == grid0->index_box.min[j],   "all grids in a volume must have same index box" );
-                        die_assert( grid->index_box.max[j]   == grid0->index_box.max[j],   "all grids in a volume must have same index box" );
+                        die_assert( grid->world_box._min.c[j] == grid0->world_box._min.c[j], "all grids in a volume must have same world box" );
+                        die_assert( grid->world_box._max.c[j] == grid0->world_box._max.c[j], "all grids in a volume must have same world box" );
+                        die_assert( grid->index_box._min[j]   == grid0->index_box._min[j],   "all grids in a volume must have same index box" );
+                        die_assert( grid->index_box._max[j]   == grid0->index_box._max[j],   "all grids in a volume must have same index box" );
                     }
                 }
             }
@@ -4121,6 +4279,45 @@ inline Model::real4 Model::real4::normalized( void ) const
     return *this / length();
 }
 
+inline void Model::real4::clamp( real min, real max ) 
+{
+    if ( c[0] < min ) c[0] = 0;
+    if ( c[1] < min ) c[1] = 0;
+    if ( c[2] < min ) c[2] = 0;
+    if ( c[3] < min ) c[3] = 0;
+    if ( c[0] > max ) c[0] = 1;
+    if ( c[1] > max ) c[1] = 1;
+    if ( c[2] > max ) c[2] = 1;
+    if ( c[3] > max ) c[3] = 1;
+}
+
+inline Model::real4 Model::real4::clamped() const 
+{
+    Model::real4 v = *this;
+    v.clamp();
+    return v;
+}
+
+inline Model::real4 Model::real4::mulby2() const 
+{
+    return Model::real4( ::mulby2(c[0]), ::mulby2(c[1]), ::mulby2(c[2]), ::mulby2(c[3]) );
+}
+
+inline Model::real4 Model::real4::mulby4() const 
+{
+    return Model::real4( ::mulby4(c[0]), ::mulby4(c[1]), ::mulby4(c[2]), ::mulby4(c[3]) );
+}
+
+inline Model::real4 Model::real4::divby2() const 
+{
+    return Model::real4( ::divby2(c[0]), ::divby2(c[1]), ::divby2(c[2]), ::divby2(c[3]) );
+}
+
+inline Model::real4 Model::real4::divby4() const 
+{
+    return Model::real4( ::divby4(c[0]), ::divby4(c[1]), ::divby4(c[2]), ::divby4(c[3]) );
+}
+
 inline bool Model::real4::operator == ( const Model::real4 &v2 ) const
 {
     return c[0] == v2.c[0] && c[1] == v2.c[1] && c[2] == v2.c[2] && c[3] == v2.c[3];
@@ -4180,6 +4377,129 @@ inline Model::real4& Model::real4::operator /= ( const Model::real s )
     return *this;
 }
 
+inline Model::real64 Model::real3d::dot( const Model::real3d &v2 ) const
+{
+    return c[0] * v2.c[0] + c[1] * v2.c[1] + c[2] * v2.c[2];
+}
+
+inline Model::real3d Model::real3d::cross( const Model::real3d &v2 ) const
+{
+    return real3d( (c[1]*v2.c[2]   - c[2]*v2.c[1]),
+                  (-(c[0]*v2.c[2] - c[2]*v2.c[0])),
+                  (c[0]*v2.c[1]   - c[1]*v2.c[0]) );
+}
+
+inline Model::real64 Model::real3d::length( void ) const
+{ 
+    return std::sqrt( c[0]*c[0] + c[1]*c[1] + c[2]*c[2] ); 
+}
+
+inline Model::real64 Model::real3d::length_sqr( void ) const 
+{ 
+    return c[0]*c[0] + c[1]*c[1] + c[2]*c[2];
+}
+
+inline Model::real3d& Model::real3d::normalize( void )
+{
+    *this /= length();
+    return *this;
+}
+
+inline Model::real3d Model::real3d::normalized( void ) const
+{
+    return *this / length();
+}
+
+inline bool Model::real3d::operator == ( const Model::real3d &v2 ) const
+{
+    return c[0] == v2.c[0] && c[1] == v2.c[1] && c[2] == v2.c[2];
+}
+
+inline void Model::real3d::clamp( real64 min, real64 max ) 
+{
+    if ( c[0] < min ) c[0] = 0;
+    if ( c[1] < min ) c[1] = 0;
+    if ( c[2] < min ) c[2] = 0;
+    if ( c[0] > max ) c[0] = 1;
+    if ( c[1] > max ) c[1] = 1;
+    if ( c[2] > max ) c[2] = 1;
+}
+
+inline Model::real3d Model::real3d::clamped( void ) const 
+{
+    Model::real3d v = *this;
+    v.clamp();
+    return v;
+}
+
+inline Model::real3d Model::real3d::mulby2( void ) const 
+{
+    return Model::real3d( ::mulby2(c[0]), ::mulby2(c[1]), ::mulby2(c[2]) );
+}
+
+inline Model::real3d Model::real3d::mulby4( void ) const 
+{
+    return Model::real3d( ::mulby4(c[0]), ::mulby4(c[1]), ::mulby4(c[2]) );
+}
+
+inline Model::real3d Model::real3d::divby2( void ) const 
+{
+    return Model::real3d( ::divby2(c[0]), ::divby2(c[1]), ::divby2(c[2]) );
+}
+
+inline Model::real3d Model::real3d::divby4( void ) const 
+{
+    return Model::real3d( ::divby4(c[0]), ::divby4(c[1]), ::divby4(c[2]) );
+}
+
+inline Model::real3d& Model::real3d::operator += ( const Model::real3d &v2 )
+{
+    c[0] += v2.c[0];
+    c[1] += v2.c[1];
+    c[2] += v2.c[2];
+    return *this;
+}
+
+inline Model::real3d& Model::real3d::operator -= ( const Model::real3d &v2 )
+{
+    c[0] -= v2.c[0];
+    c[1] -= v2.c[1];
+    c[2] -= v2.c[2];
+    return *this;
+}
+
+inline Model::real3d& Model::real3d::operator *= ( const Model::real3d &v2 )
+{
+    c[0] *= v2.c[0];
+    c[1] *= v2.c[1];
+    c[2] *= v2.c[2];
+    return *this;
+}
+
+inline Model::real3d& Model::real3d::operator *= ( const Model::real64 s )
+{
+    c[0] *= s;
+    c[1] *= s;
+    c[2] *= s;
+    return *this;
+}
+
+inline Model::real3d& Model::real3d::operator /= ( const Model::real3d &v2 )
+{
+    c[0] /= v2.c[0];
+    c[1] /= v2.c[1];
+    c[2] /= v2.c[2];
+    return *this;
+}
+
+inline Model::real3d& Model::real3d::operator /= ( const Model::real64 s )
+{
+    c[0] /= s;
+    c[1] /= s;
+    c[2] /= s;
+    return *this;
+}
+
 inline Model::real Model::real3::dot( const Model::real3 &v2 ) const
 {
     return c[0] * v2.c[0] + c[1] * v2.c[1] + c[2] * v2.c[2];
@@ -4211,6 +4531,43 @@ inline Model::real3& Model::real3::normalize( void )
 inline Model::real3 Model::real3::normalized( void ) const
 {
     return *this / length();
+}
+
+inline void Model::real3::clamp( real min, real max ) 
+{
+    if ( c[0] < min ) c[0] = 0;
+    if ( c[1] < min ) c[1] = 0;
+    if ( c[2] < min ) c[2] = 0;
+    if ( c[0] > max ) c[0] = 1;
+    if ( c[1] > max ) c[1] = 1;
+    if ( c[2] > max ) c[2] = 1;
+}
+
+inline Model::real3 Model::real3::clamped( void ) const 
+{
+    Model::real3 v = *this;
+    v.clamp();
+    return v;
+}
+
+inline Model::real3 Model::real3::mulby2( void ) const 
+{
+    return Model::real3( ::mulby2(c[0]), ::mulby2(c[1]), ::mulby2(c[2]) );
+}
+
+inline Model::real3 Model::real3::mulby4( void ) const 
+{
+    return Model::real3( ::mulby4(c[0]), ::mulby4(c[1]), ::mulby4(c[2]) );
+}
+
+inline Model::real3 Model::real3::divby2( void ) const 
+{
+    return Model::real3( ::divby2(c[0]), ::divby2(c[1]), ::divby2(c[2]) );
+}
+
+inline Model::real3 Model::real3::divby4( void ) const 
+{
+    return Model::real3(::divby4(c[0]), ::divby4(c[1]), ::divby4(c[2]));
 }
 
 inline bool Model::real3::operator == ( const Model::real3 &v2 ) const
@@ -4266,92 +4623,6 @@ inline Model::real3& Model::real3::operator /= ( const Model::real s )
     return *this;
 }
 
-inline Model::real64 Model::real3d::dot( const Model::real3d &v2 ) const
-{
-    return c[0] * v2.c[0] + c[1] * v2.c[1] + c[2] * v2.c[2];
-}
-
-inline Model::real3d Model::real3d::cross( const Model::real3d &v2 ) const
-{
-    return real3d( (c[1]*v2.c[2]   - c[2]*v2.c[1]),
-                  (-(c[0]*v2.c[2] - c[2]*v2.c[0])),
-                  (c[0]*v2.c[1]   - c[1]*v2.c[0]) );
-}
-
-inline Model::real64 Model::real3d::length( void ) const
-{ 
-    return std::sqrt( c[0]*c[0] + c[1]*c[1] + c[2]*c[2] ); 
-}
-
-inline Model::real64 Model::real3d::length_sqr( void ) const 
-{ 
-    return c[0]*c[0] + c[1]*c[1] + c[2]*c[2];
-}
-
-inline Model::real3d& Model::real3d::normalize( void )
-{
-    *this /= length();
-    return *this;
-}
-
-inline Model::real3d Model::real3d::normalized( void ) const
-{
-    return *this / length();
-}
-
-inline bool Model::real3d::operator == ( const Model::real3d &v2 ) const
-{
-    return c[0] == v2.c[0] && c[1] == v2.c[1] && c[2] == v2.c[2];
-}
-
-inline Model::real3d& Model::real3d::operator += ( const Model::real3d &v2 )
-{
-    c[0] += v2.c[0];
-    c[1] += v2.c[1];
-    c[2] += v2.c[2];
-    return *this;
-}
-
-inline Model::real3d& Model::real3d::operator -= ( const Model::real3d &v2 )
-{
-    c[0] -= v2.c[0];
-    c[1] -= v2.c[1];
-    c[2] -= v2.c[2];
-    return *this;
-}
-
-inline Model::real3d& Model::real3d::operator *= ( const Model::real3d &v2 )
-{
-    c[0] *= v2.c[0];
-    c[1] *= v2.c[1];
-    c[2] *= v2.c[2];
-    return *this;
-}
-
-inline Model::real3d& Model::real3d::operator *= ( const Model::real64 s )
-{
-    c[0] *= s;
-    c[1] *= s;
-    c[2] *= s;
-    return *this;
-}
-
-inline Model::real3d& Model::real3d::operator /= ( const Model::real3d &v2 )
-{
-    c[0] /= v2.c[0];
-    c[1] /= v2.c[1];
-    c[2] /= v2.c[2];
-    return *this;
-}
-
-inline Model::real3d& Model::real3d::operator /= ( const Model::real64 s )
-{
-    c[0] /= s;
-    c[1] /= s;
-    c[2] /= s;
-    return *this;
-}
-
 inline Model::real Model::real2::dot( const Model::real2 &v2 ) const
 {
     return c[0] * v2.c[0] + c[1] * v2.c[1];
@@ -4376,6 +4647,21 @@ inline Model::real2& Model::real2::normalize( void )
 inline Model::real2 Model::real2::normalized( void ) const
 {
     return *this / length();
+}
+
+inline void Model::real2::clamp( real min, real max ) 
+{
+    if ( c[0] < min ) c[0] = 0;
+    if ( c[1] < min ) c[1] = 0;
+    if ( c[0] > max ) c[0] = 1;
+    if ( c[1] > max ) c[1] = 1;
+}
+
+inline Model::real2 Model::real2::clamped( void ) const 
+{
+    Model::real2 v = *this;
+    v.clamp();
+    return v;
 }
 
 inline Model::real2& Model::real2::operator += ( const Model::real2 &v2 )
@@ -4792,92 +5078,190 @@ double Model::Matrix::subdeterminant( uint exclude_row, uint exclude_col ) const
 //--------------------------------------------------------------------------------------
 inline Model::AABB::AABB( const Model::real3& p )
 {
-    min = p;
-    max = p;
+    _min = p;
+    _max = p;
+}  
+
+inline Model::AABB::AABB( const Model::real3& p0, const Model::real3& p1 )
+{
+    _min = p0;
+    _max = p0;
+    expand( p1 );
 }  
 
 inline Model::AABB::AABB( const Model::real3& p0, const Model::real3& p1, const Model::real3& p2 ) 
 {
-    min = p0;
-    max = p0;
+    _min = p0;
+    _max = p0;
     expand( p1 );
     expand( p2 );
 }  
 
 inline void Model::AABB::pad( Model::real p ) 
 {
-    min -= real3( p, p, p );
-    max += real3( p, p, p );
+    _min -= real3( p, p, p );
+    _max += real3( p, p, p );
 }
 
 inline void Model::AABB::expand( const Model::AABB& other )
 {
     for( uint i = 0; i < 3; i++ )
     {
-        if ( other.min.c[i] < min.c[i] ) min.c[i] = other.min.c[i];
-        if ( other.max.c[i] > max.c[i] ) max.c[i] = other.max.c[i];
+        if ( other._min.c[i] < _min.c[i] ) _min.c[i] = other._min.c[i];
+        if ( other._max.c[i] > _max.c[i] ) _max.c[i] = other._max.c[i];
     }
 }
 
 inline void Model::AABB::expand( const Model::real3& p ) 
 {
-    if ( p.c[0] < min.c[0] ) min.c[0] = p.c[0];
-    if ( p.c[1] < min.c[1] ) min.c[1] = p.c[1];
-    if ( p.c[2] < min.c[2] ) min.c[2] = p.c[2];
-    if ( p.c[0] > max.c[0] ) max.c[0] = p.c[0];
-    if ( p.c[1] > max.c[1] ) max.c[1] = p.c[1];
-    if ( p.c[2] > max.c[2] ) max.c[2] = p.c[2];
+    if ( p.c[0] < _min.c[0] ) _min.c[0] = p.c[0];
+    if ( p.c[1] < _min.c[1] ) _min.c[1] = p.c[1];
+    if ( p.c[2] < _min.c[2] ) _min.c[2] = p.c[2];
+    if ( p.c[0] > _max.c[0] ) _max.c[0] = p.c[0];
+    if ( p.c[1] > _max.c[1] ) _max.c[1] = p.c[1];
+    if ( p.c[2] > _max.c[2] ) _max.c[2] = p.c[2];
 }
 
 inline bool Model::AABB::encloses( const real3& p ) const
 {
-    return min.c[0] <= p.c[0] &&
-           min.c[1] <= p.c[1] &&
-           min.c[2] <= p.c[2] &&
-           max.c[0] >= p.c[0] &&
-           max.c[1] >= p.c[1] &&
-           max.c[2] >= p.c[2];
+    return _min.c[0] <= p.c[0] &&
+           _min.c[1] <= p.c[1] &&
+           _min.c[2] <= p.c[2] &&
+           _max.c[0] >= p.c[0] &&
+           _max.c[1] >= p.c[1] &&
+           _max.c[2] >= p.c[2];
 }
 
 inline bool Model::AABB::encloses( const AABB& other ) const
 {
-    return min.c[0] <= other.min.c[0] &&
-           min.c[1] <= other.min.c[1] &&
-           min.c[2] <= other.min.c[2] &&
-           max.c[0] >= other.max.c[0] &&
-           max.c[1] >= other.max.c[1] &&
-           max.c[2] >= other.max.c[2];
+    return _min.c[0] <= other._min.c[0] &&
+           _min.c[1] <= other._min.c[1] &&
+           _min.c[2] <= other._min.c[2] &&
+           _max.c[0] >= other._max.c[0] &&
+           _max.c[1] >= other._max.c[1] &&
+           _max.c[2] >= other._max.c[2];
 }
 
 inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& direction, const Model::real3& direction_inv, 
-                              Model::real& tmin, Model::real& tmax ) const 
+                              Model::real& t_min, Model::real& t_max ) const 
 {
-    mdout << "Model::AABB::hit: " << *this << " tmin=" << tmin << " tmax=" << tmax << "\n";
+    mdout << "Model::AABB::hit: " << *this << " t_min=" << t_min << " t_max=" << t_max << "\n";
     (void)direction;
     for( uint a = 0; a < 3; a++ ) 
     {
         real dir_inv = direction_inv.c[a];
-        real v0 = (min.c[a] - origin.c[a]) * dir_inv;
-        real v1 = (max.c[a] - origin.c[a]) * dir_inv;
-        tmin = std::fmax( tmin, std::fmin( v0, v1 ) );
-        tmax = std::fmin( tmax, std::fmax( v0, v1 ) );
-        mdout << "Model::AABB::hit:     " << a << ": min=" << min.c[a] << " max=" << max.c[a] << 
+        real v0 = (_min.c[a] - origin.c[a]) * dir_inv;
+        real v1 = (_max.c[a] - origin.c[a]) * dir_inv;
+        t_min = std::fmax( t_min, std::fmin( v0, v1 ) );
+        t_max = std::fmin( t_max, std::fmax( v0, v1 ) );
+        mdout << "Model::AABB::hit:     " << a << ": _min=" << _min.c[a] << " _max=" << _max.c[a] << 
                                    " dir_inv=" << dir_inv << " origin=" << origin.c[a] << 
-                                   " v0=" << v0 << " v1=" << v1 << " tmin=" << tmin << " tmax=" << tmax << "\n";
+                                   " v0=" << v0 << " v1=" << v1 << " t_min=" << t_min << " t_max=" << t_max << "\n";
     }
-    bool r = tmax >= std::fmax( tmin, real(0.0) );
+    bool r = t_max >= std::fmax( t_min, real(0.0) );
     mdout << "Model::AABB::hit: return=" << r << "\n";
     return r;
 }
 
 inline bool Model::AABBI::encloses( _int x, _int y, _int z ) const
 {
-    return min[0] <= x &&
-           min[1] <= y &&
-           min[2] <= z &&
-           max[0] >= x &&
-           max[1] >= y && 
-           max[2] >= z;
+    return _min[0] <= x &&
+           _min[1] <= y &&
+           _min[2] <= z &&
+           _max[0] >= x &&
+           _max[1] >= y && 
+           _max[2] >= z;
+}
+
+inline Model::Ray::Ray( const Model::real3& a, const Model::real3& b, Model::RAY_KIND kind, Model::real solid_angle ) : A(a), B(b), KIND(kind), SOLID_ANGLE(solid_angle) 
+{
+    B_norm = B; 
+    B_norm.normalize(); 
+    B_inv = Model::real3(1,1,1); 
+    B_inv /= B; 
+    top = -1;
+}
+
+inline void Model::Ray::init_normalized( const Model::real3& a, const Model::real3& b, RAY_KIND kind, Model::real32 solid_angle ) 
+{
+    A = a; 
+    B = b; 
+    SOLID_ANGLE = solid_angle;
+    B_norm = b; 
+    B_inv = Model::real3(1,1,1); 
+    B_inv /= B; 
+    KIND = kind;
+    top = -1;
+}
+
+inline Model::real3 Model::Ray::point_at_parameter( Model::real t ) const 
+{ 
+    return A + t*B; 
+}
+
+inline Model::real3 Model::Ray::normalized_point_at_parameter( Model::real t ) const 
+{ 
+    return A + t*B_norm; 
+}
+
+Model::Camera::Camera( real3 lookfrom, real3 lookat, real3 vup, real vfov, real aspect, real aperture, real focus_dist, int nx, int ny, int spp, uint name_i ) 
+    : lookfrom(lookfrom), lookat(lookat), vup(vup), vfov(vfov), aspect(aspect), aperture(aperture), focus_dist(focus_dist), name_i(name_i)
+{ 
+    lens_radius = divby2(aperture);
+    real theta = vfov*PI_DIV_180;
+    real half_height = std::tan(divby2(theta));
+    real half_width = aspect * half_height;
+    w = (lookfrom - lookat).normalized();
+    u = cross(vup, w).normalized();
+    v = cross(w, u);
+    lower_left_corner = lookfrom - half_width*focus_dist*u -half_height*focus_dist*v - focus_dist*w;
+    horizontal = mulby2(half_width*focus_dist)*u;
+    vertical = mulby2(half_height*focus_dist)*v;
+    real32 area = cross(horizontal, vertical).length();
+    real3 screen_center = lower_left_corner + (horizontal + vertical).divby2();
+    real32 distance_to_screen = (lookfrom - screen_center).length();
+    solid_angle = area / (distance_to_screen*real32(nx*ny*spp));
+}
+
+Model::Ray Model::Camera::get_ray( real s_pixel, real t_pixel, real s_lens, real t_lens ) const 
+{
+    real _x, _y;
+    concentric_point_on_unit_disk(s_lens, t_lens, _x, _y);
+    real32 x = _x;
+    real32 y = _y;
+    x *= lens_radius;
+    y *= lens_radius;
+    real3 offset;
+    for(int i = 0; i < 3; i++)
+    {
+        offset[i] = real32(u[0]) * x + real32(v[0]) * y;
+    }
+    Ray r = Ray( lookfrom + offset, lower_left_corner + s_pixel*horizontal + t_pixel*vertical - lookfrom - offset, RAY_KIND::DIRECT, solid_angle ); 
+    mdout << "camera::get_ray: s_lens=" << s_lens << " t_lens=" << t_lens << " x=" << x << " y=" << y << 
+                            " u=" << u << " v=" << v << " lens_radius=" << lens_radius << " offset=" << offset <<
+                            " lower_left_corner=" << lower_left_corner << " s_pixel=" << s_pixel << " t_pixel=" << t_pixel <<
+                            " solid_angle=" << solid_angle << " r=" << r << "\n";
+    return r;
+}
+
+inline void Model::Camera::concentric_point_on_unit_disk( real s, real t, real& x, real& y ) const
+{
+    // more complex than polar, but according to 
+    // A Realistic Camera Model for Computer Graphics (Kolb et al)
+    // has 15% improvement in error over polar for camera lens sampling
+    // possibly similar improvement for sampling cones?
+    real a = mulby2(s) - 1.0;
+    real b = mulby2(t) - 1.0;
+    real rad, theta;
+
+    if (std::abs(a) > std::abs(b)) {
+        rad = a;
+        theta = PI_DIV_4*(b/a);
+    } else {
+        rad = b;
+        theta = PI_DIV_2 - PI_DIV_4*(a/b);
+    }
+    sincos(theta, y, x, rad);
 }
 
 bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real padding ) const 
@@ -5505,12 +5889,12 @@ bool Model::Volume::rand_emissive_xyz( const Model * model, _int& x, _int& y, _i
     //--------------------------------------------------------------------------
     uint d_grid_i = voxel_class_grid_i( model, Model::VolumeVoxelClass::DENSITY );
     const VolumeGrid * d_grid_ptr = &model->volume_grids[d_grid_i];
-    _int x_min = d_grid_ptr->index_box.min[0];
-    _int y_min = d_grid_ptr->index_box.min[0];
-    _int z_min = d_grid_ptr->index_box.min[0];
-    _int x_max = d_grid_ptr->index_box.max[0];
-    _int y_max = d_grid_ptr->index_box.max[0];
-    _int z_max = d_grid_ptr->index_box.max[0];
+    _int x_min = d_grid_ptr->index_box._min[0];
+    _int y_min = d_grid_ptr->index_box._min[0];
+    _int z_min = d_grid_ptr->index_box._min[0];
+    _int x_max = d_grid_ptr->index_box._max[0];
+    _int y_max = d_grid_ptr->index_box._max[0];
+    _int z_max = d_grid_ptr->index_box._max[0];
     uint x_cnt = x_max - x_min + 1;
     uint y_cnt = y_max - y_min + 1;
     uint z_cnt = z_max - z_min + 1;
@@ -5952,7 +6336,7 @@ inline Model::uint Model::bvh_qsplit( BVH_NODE_KIND kind, Model::uint first, Mod
     {
         AABB box;
         polygons[i].bounding_box( this, box );
-        real centroid = (box.min.c[axis] + box.max.c[axis]) * 0.5;
+        real centroid = (box._min.c[axis] + box._max.c[axis]) * 0.5;
         if ( centroid < pivot ) {
             switch( kind )
             {
@@ -6048,7 +6432,7 @@ Model::uint Model::bvh_node( BVH_NODE_KIND kind, Model::uint first, Model::uint 
     } else {
         node->left_kind = Model::BVH_NODE_KIND::BVH_NODE;
         node->right_kind = Model::BVH_NODE_KIND::BVH_NODE;
-        real pivot = (node->box.min.c[axis] + node->box.max.c[axis]) * 0.5;
+        real pivot = (node->box._min.c[axis] + node->box._max.c[axis]) * 0.5;
         uint m = bvh_qsplit( kind, first, n, pivot, axis );
         uint nm = m - first;
         uint left_i  = bvh_node( kind, first, nm,   (axis + 1) % 3 );

@@ -163,9 +163,21 @@ STBIDEF void     stbi_image_free(void *retval_from_stbi_load);
 #endif
 #ifndef MODEL_REAL_TYPE
 #define MODEL_REAL_TYPE float
+#define MODEL_REAL_MAX FLT_MAX
+#define MODEL_REAL_EXP_W 7
+#define MODEL_REAL_FRAC_W 23
+#endif
+#ifndef MODEL_REAL32_TYPE
+#define MODEL_REAL32_TYPE float
+#define MODEL_REAL32_MAX FLT_MAX
+#define MODEL_REAL32_EXP_W 7
+#define MODEL_REAL32_FRAC_W 23
 #endif
 #ifndef MODEL_REAL64_TYPE
 #define MODEL_REAL64_TYPE double
+#define MODEL_REAL64_MAX DBL_MAX
+#define MODEL_REAL64_EXP_W 11
+#define MODEL_REAL64_FRAC_W 53
 #endif
 
 // user-definable RNG function used in a few places
@@ -184,6 +196,7 @@ public:
     typedef MODEL_UINT_TYPE   uint;                 
     typedef MODEL_UINT64_TYPE uint64;              
     typedef MODEL_REAL_TYPE   real;
+    typedef MODEL_REAL32_TYPE real32;
     typedef MODEL_REAL64_TYPE real64;
 
     enum class MIPMAP_FILTER
@@ -235,12 +248,6 @@ public:
         real   length_sqr( void ) const ;
         real4& normalize( void );
         real4  normalized( void ) const;
-        real4  operator + ( const real4& v ) const;
-        real4  operator - ( const real4& v ) const;
-        real4  operator * ( const real4& v ) const;
-        real4  operator * ( real s ) const;
-        real4  operator / ( const real4& v ) const;
-        real4  operator / ( real s ) const;
         bool   operator == ( const real4 &v2 ) const;
         real4& operator += ( const real4 &v2 );
         real4& operator -= ( const real4 &v2 );
@@ -264,12 +271,6 @@ public:
         real   length_sqr( void ) const ;
         real3& normalize( void );
         real3  normalized( void ) const;
-        real3  operator + ( const real3& v ) const;
-        real3  operator - ( const real3& v ) const;
-        real3  operator * ( const real3& v ) const;
-        real3  operator * ( real s ) const;
-        real3  operator / ( const real3& v ) const;
-        real3  operator / ( real s ) const;
         bool   operator == ( const real3 &v2 ) const;
         real3& operator += ( const real3 &v2 );
         real3& operator -= ( const real3 &v2 );
@@ -293,12 +294,6 @@ public:
         real64  length_sqr( void ) const ;
         real3d& normalize( void );
         real3d  normalized( void ) const;
-        real3d  operator + ( const real3d& v ) const;
-        real3d  operator - ( const real3d& v ) const;
-        real3d  operator * ( const real3d& v ) const;
-        real3d  operator * ( real64 s ) const;
-        real3d  operator / ( const real3d& v ) const;
-        real3d  operator / ( real64 s ) const;
         bool    operator == ( const real3d &v2 ) const;
         real3d& operator += ( const real3d &v2 );
         real3d& operator -= ( const real3d &v2 );
@@ -321,12 +316,7 @@ public:
         real   length_sqr( void ) const ;
         real2& normalize( void );
         real2  normalized( void ) const;
-        real2  operator + ( const real2& v ) const;
-        real2  operator - ( const real2& v ) const;
-        real2  operator * ( const real2& v ) const;
-        real2  operator * ( real s ) const;
-        real2  operator / ( const real2& v ) const;
-        real2  operator / ( real s ) const;
+
         real2& operator += ( const real2 &v2 );
         real2& operator -= ( const real2 &v2 );
         real2& operator *= ( const real2 &v2 );
@@ -1105,6 +1095,91 @@ private:
     bool write_uncompressed( std::string file_path );
     bool read_uncompressed( std::string file_path );
 };
+
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+//
+// USEFUL REAL FUNCTIONS
+//
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+inline Model::real mulby2( const Model::real& x )                                    { return 2.0 * x;                }
+inline Model::real mulby4( const Model::real& x )                                    { return 4.0 * x;                }
+inline Model::real divby2( const Model::real& x )                                    { return 0.5 * x;                }
+inline Model::real divby4( const Model::real& x )                                    { return 0.25 * x;               }
+inline Model::real sqr( const Model::real& x )                                       { return x*x;                    }
+inline Model::real rcp( const Model::real& x )                                       { return 1.0 / x;                }
+inline Model::real rsqrt( const Model::real& x )                                     { return 1.0 / std::sqrt( x );   }
+inline Model::real clamp( const Model::real& x )                                     { return std::fmin(std::fmax(x, 0.0), 1.0);} 
+inline Model::real clamp( const Model::real& x, const Model::real& min, const Model::real& max )   { return std::fmin(std::fmax(x, min), max);} 
+inline Model::real lerp( const Model::real& x, const Model::real& y, const Model::real& t )        { return (1.0 - t)*x + t*y;      }
+inline Model::real expc( double b, const Model::real& x )                            { return std::pow( b, x );       }
+inline Model::real hypoth( const Model::real& x, const Model::real& y )              { return std::sqrt( x*x - y*y ); }
+inline Model::real hypoth1( const Model::real& y )                                   { return std::sqrt( 1.0 - y*y ); }
+inline void sincos( const Model::real& x, Model::real& si, Model::real& co )         { si = std::sin( x ); co = std::cos( x ); }
+inline void sincos( const Model::real& x, Model::real& si, Model::real& co, const Model::real& r ) { si = r*std::sin( x ); co = r*std::cos( x ); }
+
+
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+//
+// USEFUL VECTOR FUNCTIONS
+//
+//--------------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------------
+inline Model::real2 operator +( const Model::real2& v1, const Model::real2& v2 )                                { return Model::real2(v1.c[0] + v2.c[0], v1.c[1] + v2.c[1]);            }
+inline Model::real2 operator -( const Model::real2& v1, const Model::real2& v2 )                                { return Model::real2(v1.c[0] - v2.c[0], v1.c[1] - v2.c[1]);            }
+inline Model::real2 operator *( const Model::real2& v1, const Model::real2& v2 )                                { return Model::real2(v1.c[0] * v2.c[0], v1.c[1] * v2.c[1]);            }
+inline Model::real2 operator /( const Model::real2& v1, const Model::real2& v2 )                                { return Model::real2(v1.c[0] / v2.c[0], v1.c[1] / v2.c[1]);            }
+inline Model::real2 operator *( Model::real t, const Model::real2& v )                                          { return Model::real2(t*v.c[0], t*v.c[1]);                              }
+inline Model::real2 operator /( Model::real2 v, Model::real t )                                                 { return Model::real2(v.c[0]/t, v.c[1]/t);                              }
+inline Model::real2 operator *( const Model::real2& v, Model::real t )                                          { return Model::real2(t*v.c[0], t*v.c[1]);                              }
+
+inline Model::real2 sqr( const Model::real2& v )                                                                { return Model::real2(::sqr(v.c[0]), ::sqr(v.c[1]));                    }
+inline Model::real  dot( const Model::real2& v0, const Model::real2& v1 )                                       { return v0.dot( v1 );                                                  }
+inline Model::real2 lerp( const Model::real2& v0, const Model::real2& v1, Model::real t )                       { return (Model::real(1.0) - t) * v0 + t * v1;                          }
+inline Model::real2 lerp( const Model::real2 &v0, const Model::real2 &v1, const Model::real2 &vt)               { return (Model::real2(1,1) - vt) * v0 + vt * v1;                       }
+
+inline Model::real3 operator +( const Model::real3& v1, const Model::real3& v2 )                                { return Model::real3(v1.c[0] + v2.c[0], v1.c[1] + v2.c[1], v1.c[2] + v2.c[2]); }
+inline Model::real3 operator -( const Model::real3& v1, const Model::real3& v2 )                                { return Model::real3(v1.c[0] - v2.c[0], v1.c[1] - v2.c[1], v1.c[2] - v2.c[2]); }
+inline Model::real3 operator *( const Model::real3& v1, const Model::real3& v2 )                                { return Model::real3(v1.c[0] * v2.c[0], v1.c[1] * v2.c[1], v1.c[2] * v2.c[2]); }
+inline Model::real3 operator /( const Model::real3& v1, const Model::real3& v2 )                                { return Model::real3(v1.c[0] / v2.c[0], v1.c[1] / v2.c[1], v1.c[2] / v2.c[2]); }
+inline Model::real3 operator *( Model::real t, const Model::real3& v )                                          { return Model::real3(t*v.c[0], t*v.c[1], t*v.c[2]);                    }
+inline Model::real3 operator /( Model::real3 v, Model::real t )                                                 { return Model::real3(v.c[0]/t, v.c[1]/t, v.c[2]/t);                    }
+inline Model::real3 operator *( const Model::real3& v, Model::real t )                                          { return Model::real3(t*v.c[0], t*v.c[1], t*v.c[2]);                    }
+
+inline Model::real3 sqr( const Model::real3& v )                                                                { return Model::real3(::sqr(v.c[0]), ::sqr(v.c[1]), ::sqr(v.c[2]));     }
+inline Model::real  dot( const Model::real3& v0, const Model::real3& v1 )                                       { return v0.dot( v1 );                                                  }
+inline Model::real3 cross( const Model::real3& v0, const Model::real3& v1 )                                     { return v0.cross( v1 );                                                }
+inline Model::real3 lerp( const Model::real3& v0, const Model::real3& v1, Model::real t )                       { return (Model::real(1.0) - t) * v0 + t * v1;                          }
+inline Model::real3 lerp( const Model::real3 &v0, const Model::real3 &v1, const Model::real3 &vt)               { return (Model::real3(1,1,1) - vt) * v0 + vt * v1;                     }
+
+inline Model::real3d operator +( const Model::real3d& v1, const Model::real3d& v2 )                             { return Model::real3d(v1.c[0] + v2.c[0], v1.c[1] + v2.c[1], v1.c[2] + v2.c[2]); }
+inline Model::real3d operator -( const Model::real3d& v1, const Model::real3d& v2 )                             { return Model::real3d(v1.c[0] - v2.c[0], v1.c[1] - v2.c[1], v1.c[2] - v2.c[2]); }
+inline Model::real3d operator *( const Model::real3d& v1, const Model::real3d& v2 )                             { return Model::real3d(v1.c[0] * v2.c[0], v1.c[1] * v2.c[1], v1.c[2] * v2.c[2]); }
+inline Model::real3d operator /( const Model::real3d& v1, const Model::real3d& v2 )                             { return Model::real3d(v1.c[0] / v2.c[0], v1.c[1] / v2.c[1], v1.c[2] / v2.c[2]); }
+inline Model::real3d operator *( Model::real64 t, const Model::real3d& v )                                      { return Model::real3d(t*v.c[0], t*v.c[1], t*v.c[2]);                   }
+inline Model::real3d operator /( Model::real3d v, Model::real64 t )                                             { return Model::real3d(v.c[0]/t, v.c[1]/t, v.c[2]/t);                   }
+inline Model::real3d operator *( const Model::real3d& v, Model::real64 t )                                      { return Model::real3d(t*v.c[0], t*v.c[1], t*v.c[2]);                   }
+
+inline Model::real3d sqr( const Model::real3d& v )                                                              { return Model::real3d(::sqr(v.c[0]), ::sqr(v.c[1]), ::sqr(v.c[2]));    }
+inline Model::real   dot( const Model::real3d& v0, const Model::real3d& v1 )                                    { return v0.dot( v1 );                                                  }
+inline Model::real3d cross( const Model::real3d& v0, const Model::real3d& v1 )                                  { return v0.cross( v1 );                                                }
+inline Model::real3d lerp( const Model::real3d& v0, const Model::real3d& v1, Model::real64 t )                  { return (Model::real64(1.0) - t) * v0 + t * v1;                        }
+inline Model::real3d lerp( const Model::real3d &v0, const Model::real3d &v1, const Model::real3d &vt)           { return (Model::real3d(1,1,1) - vt) * v0 + vt * v1;                    }
+
+inline Model::real4 operator +( const Model::real4& v1, const Model::real4& v2 )                                { return Model::real4(v1.c[0] + v2.c[0], v1.c[1] + v2.c[1], v1.c[2] + v2.c[2], v1.c[3] + v2.c[3] ); }
+inline Model::real4 operator -( const Model::real4& v1, const Model::real4& v2 )                                { return Model::real4(v1.c[0] - v2.c[0], v1.c[1] - v2.c[1], v1.c[2] - v2.c[2], v1.c[3] - v2.c[3] ); }
+inline Model::real4 operator *( const Model::real4& v1, const Model::real4& v2 )                                { return Model::real4(v1.c[0] * v2.c[0], v1.c[1] * v2.c[1], v1.c[2] * v2.c[2], v1.c[3] * v2.c[3] ); }
+inline Model::real4 operator /( const Model::real4& v1, const Model::real4& v2 )                                { return Model::real4(v1.c[0] / v2.c[0], v1.c[1] / v2.c[1], v1.c[2] / v2.c[2], v1.c[3] / v2.c[3] ); }
+inline Model::real4 operator *( Model::real t, const Model::real4& v )                                          { return Model::real4(t*v.c[0], t*v.c[1], t*v.c[2], t*v.c[3]);          }
+inline Model::real4 operator /( Model::real4 v, Model::real t )                                                 { return Model::real4(v.c[0]/t, v.c[1]/t, v.c[2]/t, v.c[3]/t);          }
+inline Model::real4 operator *( const Model::real4& v, Model::real t )                                          { return Model::real4(t*v.c[0], t*v.c[1], t*v.c[2], t*v.c[3]);          }
+
+inline Model::real4 sqr( const Model::real4& v )                                                                { return Model::real4(::sqr(v.c[0]), ::sqr(v.c[1]), ::sqr(v.c[2]), ::sqr(v.c[3])); }
+inline Model::real  dot( const Model::real4& v0, const Model::real4& v1 )                                       { return v0.dot( v1 );                                                  }
+inline Model::real4 lerp( const Model::real4& v0, const Model::real4& v1, Model::real t )                       { return (Model::real(1.0) - t) * v0 + t * v1;                          }
+inline Model::real4 lerp( const Model::real4 &v0, const Model::real4 &v1, const Model::real4 &vt)               { return (Model::real4(1,1,1,1) - vt) * v0 + vt * v1;                   }
 
 //--------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------
@@ -4046,71 +4121,6 @@ inline Model::real4 Model::real4::normalized( void ) const
     return *this / length();
 }
 
-inline Model::real4 Model::real4::operator + ( const Model::real4& v2 ) const
-{
-    real4 r;
-    r.c[0] = c[0] + v2.c[0];
-    r.c[1] = c[1] + v2.c[1];
-    r.c[2] = c[2] + v2.c[2];
-    r.c[3] = c[3] + v2.c[3];
-    return r;
-}
-
-inline Model::real4 Model::real4::operator - ( const Model::real4& v2 ) const
-{
-    real4 r;
-    r.c[0] = c[0] - v2.c[0];
-    r.c[1] = c[1] - v2.c[1];
-    r.c[2] = c[2] - v2.c[2];
-    r.c[3] = c[3] - v2.c[3];
-    return r;
-}
-
-inline Model::real4 Model::real4::operator * ( const Model::real4& v2 ) const
-{
-    real4 r;
-    r.c[0] = c[0] * v2.c[0];
-    r.c[1] = c[1] * v2.c[1];
-    r.c[2] = c[2] * v2.c[2];
-    r.c[3] = c[3] * v2.c[3];
-    return r;
-}
-
-inline Model::real4 operator * ( Model::real s, const Model::real4& v ) 
-{
-    return Model::real4( s*v.c[0], s*v.c[1], s*v.c[2], s*v.c[3] );
-}
-
-inline Model::real4 Model::real4::operator * ( Model::real s ) const
-{
-    real4 r;
-    r.c[0] = c[0] * s;
-    r.c[1] = c[1] * s;
-    r.c[2] = c[2] * s;
-    r.c[3] = c[3] * s;
-    return r;
-}
-
-inline Model::real4 Model::real4::operator / ( const Model::real4& v2 ) const
-{
-    real4 r;
-    r.c[0] = c[0] / v2.c[0];
-    r.c[1] = c[1] / v2.c[1];
-    r.c[2] = c[2] / v2.c[2];
-    r.c[3] = c[3] / v2.c[3];
-    return r;
-}
-
-inline Model::real4 Model::real4::operator / ( Model::real s ) const
-{
-    real4 r;
-    r.c[0] = c[0] / s;
-    r.c[1] = c[1] / s;
-    r.c[2] = c[2] / s;
-    r.c[3] = c[3] / s;
-    return r;
-}
-
 inline bool Model::real4::operator == ( const Model::real4 &v2 ) const
 {
     return c[0] == v2.c[0] && c[1] == v2.c[1] && c[2] == v2.c[2] && c[3] == v2.c[3];
@@ -4203,65 +4213,6 @@ inline Model::real3 Model::real3::normalized( void ) const
     return *this / length();
 }
 
-inline Model::real3 Model::real3::operator + ( const Model::real3& v2 ) const
-{
-    real3 r;
-    r.c[0] = c[0] + v2.c[0];
-    r.c[1] = c[1] + v2.c[1];
-    r.c[2] = c[2] + v2.c[2];
-    return r;
-}
-
-inline Model::real3 Model::real3::operator - ( const Model::real3& v2 ) const
-{
-    real3 r;
-    r.c[0] = c[0] - v2.c[0];
-    r.c[1] = c[1] - v2.c[1];
-    r.c[2] = c[2] - v2.c[2];
-    return r;
-}
-
-inline Model::real3 Model::real3::operator * ( const Model::real3& v2 ) const
-{
-    real3 r;
-    r.c[0] = c[0] * v2.c[0];
-    r.c[1] = c[1] * v2.c[1];
-    r.c[2] = c[2] * v2.c[2];
-    return r;
-}
-
-inline Model::real3 operator * ( Model::real s, const Model::real3& v ) 
-{
-    return Model::real3( s*v.c[0], s*v.c[1], s*v.c[2] );
-}
-
-inline Model::real3 Model::real3::operator * ( Model::real s ) const
-{
-    real3 r;
-    r.c[0] = c[0] * s;
-    r.c[1] = c[1] * s;
-    r.c[2] = c[2] * s;
-    return r;
-}
-
-inline Model::real3 Model::real3::operator / ( const Model::real3& v2 ) const
-{
-    real3 r;
-    r.c[0] = c[0] / v2.c[0];
-    r.c[1] = c[1] / v2.c[1];
-    r.c[2] = c[2] / v2.c[2];
-    return r;
-}
-
-inline Model::real3 Model::real3::operator / ( Model::real s ) const
-{
-    real3 r;
-    r.c[0] = c[0] / s;
-    r.c[1] = c[1] / s;
-    r.c[2] = c[2] / s;
-    return r;
-}
-
 inline bool Model::real3::operator == ( const Model::real3 &v2 ) const
 {
     return c[0] == v2.c[0] && c[1] == v2.c[1] && c[2] == v2.c[2];
@@ -4348,65 +4299,6 @@ inline Model::real3d Model::real3d::normalized( void ) const
     return *this / length();
 }
 
-inline Model::real3d Model::real3d::operator + ( const Model::real3d& v2 ) const
-{
-    real3d r;
-    r.c[0] = c[0] + v2.c[0];
-    r.c[1] = c[1] + v2.c[1];
-    r.c[2] = c[2] + v2.c[2];
-    return r;
-}
-
-inline Model::real3d Model::real3d::operator - ( const Model::real3d& v2 ) const
-{
-    real3d r;
-    r.c[0] = c[0] - v2.c[0];
-    r.c[1] = c[1] - v2.c[1];
-    r.c[2] = c[2] - v2.c[2];
-    return r;
-}
-
-inline Model::real3d Model::real3d::operator * ( const Model::real3d& v2 ) const
-{
-    real3d r;
-    r.c[0] = c[0] * v2.c[0];
-    r.c[1] = c[1] * v2.c[1];
-    r.c[2] = c[2] * v2.c[2];
-    return r;
-}
-
-inline Model::real3d operator * ( Model::real64 s, const Model::real3d& v ) 
-{
-    return Model::real3d( s*v.c[0], s*v.c[1], s*v.c[2] );
-}
-
-inline Model::real3d Model::real3d::operator * ( Model::real64 s ) const
-{
-    real3d r;
-    r.c[0] = c[0] * s;
-    r.c[1] = c[1] * s;
-    r.c[2] = c[2] * s;
-    return r;
-}
-
-inline Model::real3d Model::real3d::operator / ( const Model::real3d& v2 ) const
-{
-    real3d r;
-    r.c[0] = c[0] / v2.c[0];
-    r.c[1] = c[1] / v2.c[1];
-    r.c[2] = c[2] / v2.c[2];
-    return r;
-}
-
-inline Model::real3d Model::real3d::operator / ( Model::real64 s ) const
-{
-    real3d r;
-    r.c[0] = c[0] / s;
-    r.c[1] = c[1] / s;
-    r.c[2] = c[2] / s;
-    return r;
-}
-
 inline bool Model::real3d::operator == ( const Model::real3d &v2 ) const
 {
     return c[0] == v2.c[0] && c[1] == v2.c[1] && c[2] == v2.c[2];
@@ -4484,54 +4376,6 @@ inline Model::real2& Model::real2::normalize( void )
 inline Model::real2 Model::real2::normalized( void ) const
 {
     return *this / length();
-}
-
-inline Model::real2 Model::real2::operator + ( const Model::real2& v2 ) const
-{
-    real2 r;
-    r.c[0] = c[0] + v2.c[0];
-    r.c[1] = c[1] + v2.c[1];
-    return r;
-}
-
-inline Model::real2 Model::real2::operator - ( const Model::real2& v2 ) const
-{
-    real2 r;
-    r.c[0] = c[0] - v2.c[0];
-    r.c[1] = c[1] - v2.c[1];
-    return r;
-}
-
-inline Model::real2 Model::real2::operator * ( const Model::real2& v2 ) const
-{
-    real2 r;
-    r.c[0] = c[0] * v2.c[0];
-    r.c[1] = c[1] * v2.c[1];
-    return r;
-}
-
-inline Model::real2 Model::real2::operator * ( Model::real s ) const
-{
-    real2 r;
-    r.c[0] = c[0] * s;
-    r.c[1] = c[1] * s;
-    return r;
-}
-
-inline Model::real2 Model::real2::operator / ( const Model::real2& v2 ) const
-{
-    real2 r;
-    r.c[0] = c[0] / v2.c[0];
-    r.c[1] = c[1] / v2.c[1];
-    return r;
-}
-
-inline Model::real2 Model::real2::operator / ( Model::real s ) const
-{
-    real2 r;
-    r.c[0] = c[0] / s;
-    r.c[1] = c[1] / s;
-    return r;
 }
 
 inline Model::real2& Model::real2::operator += ( const Model::real2 &v2 )

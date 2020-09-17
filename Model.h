@@ -462,7 +462,10 @@ public:
         uint64      volume_grid_cnt;        // in volume_grids[] array
         uint64      voxel_cnt;              // in voxels[] array  
 
-        uint64_t    unused[5];              // leave room for temporary hacks
+        bool        force_tone_none;        // force using no tone-mapping?
+        bool        force_tone_avg_luminance; // force the use of tone_avg_luminance above?
+        bool        unused1[6];
+        uint64_t    unused2[4];             // leave room for temporary hacks
     };
 
     class Object
@@ -2430,6 +2433,8 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
     hdr->tone_key = 0.2;
     hdr->tone_white = 3.0;
     hdr->tone_avg_luminance = 0.0;
+    hdr->force_tone_none = false;
+    hdr->force_tone_avg_luminance = false;
     hdr->tex_specular_is_orm = false;
     if ( !expect_char( '{', fsc, fsc_end, true ) ) goto error;
     for( ;; )
@@ -2523,6 +2528,12 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
 
                 } else if ( strcmp( field, "tone_avg_luminance" ) == 0 ) {
                     if ( !parse_real( hdr->tone_avg_luminance, fsc, fsc_end, true ) ) goto error;
+
+                } else if ( strcmp( field, "force_tone_none" ) == 0 ) {
+                    if ( !parse_bool( hdr->force_tone_none, fsc, fsc_end ) ) goto error;
+
+                } else if ( strcmp( field, "force_tone_avg_luminance" ) == 0 ) {
+                    if ( !parse_bool( hdr->force_tone_avg_luminance, fsc, fsc_end ) ) goto error;
 
                 } else if ( strcmp( field, "tex_specular_is_orm" ) == 0 ) {
                     if ( !parse_bool( hdr->tex_specular_is_orm, fsc, fsc_end ) ) goto error;

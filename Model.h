@@ -476,7 +476,7 @@ public:
         uint        poly_i;                 // index of first polygon in polygons array
     };
 
-    class HitInfo
+    class HitRecord
     {
     public:
         // input state that may affect hit decisions:
@@ -624,11 +624,12 @@ public:
         uint        vtx_cnt;                // number of vertices
         uint        vtx_i;                  // index into vertexes array of first vertex
         real3       normal;                 // surface normal
-        real        area;                   // surface area };
+        real        area;                   // surface area
         
         bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
+        bool vertex_info( const Model * model, uint vtx_cnt, real3 p[], real3 n[], real2 uv[] ) const;
         bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
-                  real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const;
+                  real solid_angle, real t_min, real t_max, HitRecord& rec ) const;
     };
 
     class Vertex
@@ -759,7 +760,7 @@ public:
 
         bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
         bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
-                  real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const;
+                  real solid_angle, real t_min, real t_max, HitRecord& rec ) const;
         uint voxel_class_grid_i( const Model * model, VolumeVoxelClass c ) const;
         bool rand_emissive_xyz( const Model * model, _int& x, _int& y, _int& z ) const;  // returns true and xyz of some emissive voxel, else false if none found
 
@@ -932,7 +933,7 @@ public:
 
         bool bounding_box( const Model * model, AABB& b ) const;
         bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
-                  real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const;
+                  real solid_angle, real t_min, real t_max, HitRecord& rec ) const;
     };
 
     class Matrix                            // 4x4 transformation matrix used by Instance
@@ -993,7 +994,7 @@ public:
 
         bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
         bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
-                  real solid_angle, real t_min, real t_max, HitInfo& hit_info );
+                  real solid_angle, real t_min, real t_max, HitRecord& rec );
     };
 
     enum class LIGHT_KIND
@@ -1039,7 +1040,12 @@ public:
         bool            is_looped;          // whether the animation sequence should be looped (default: false)
     };
 
-    uint string_alloc( std::string s );     // returns index in strings[] array
+    // useful methods for allocating above structures in this Model's arrays with proper resizing, etc.
+    // most of these return a pointer, and you can get the index into the array by subtracting the ptr from the array starts
+    inline uint         make_string( std::string s );     // returns index in strings[] array
+    inline Vertex *     make_vertex( const real3& p, const real3& n, const real2& uv );                                         // position, normal, and texcoord
+    inline Polygon *    make_polygon( uint vtx_cnt, const real3 p[], const real3 n[], const real2 uv[], uint mtl_i=uint(-1) );  // positions, normals, texcoords
+    inline Polygon *    make_polygon( uint vtx_cnt, const real3 p[], uint mtl_i=uint(-1) );                                     // position, use surface normal, fudge texcoords
 
     // srgb<->linear conversion utilities
     static real srgb_to_linear_gamma( real srgb );
@@ -2284,6 +2290,72 @@ inline void Model::perhaps_realloc( T *& array, const Model::uint64& hdr_cnt, Mo
         delete array;
         array = reinterpret_cast<T *>( mem );
     }
+}
+
+inline uint Model::make_string( std::string s )
+{
+    uint s_len = s.length();
+    perhaps_realloc( strings, hdr->char_cnt, max->char_cnt, s_len+1 );
+    uint s_i = hdr->char_cnt;
+    char * to_s = &strings[hdr->char_cnt];
+    hdr->char_cnt += s_len + 1;
+    memcpy( to_s, s.c_str(), s_len+1 );
+    return s_i;
+}
+
+inline Model::Vertex * Model::make_vertex( const real3& p, const real3& n, const real2& uv ) 
+{
+    perhaps_realloc<real3>( positions, hdr->pos_cnt, max->pos_cnt, 1 );
+    perhaps_realloc<real3>( normals, hdr->norm_cnt, max->norm_cnt, 1 );
+    perhaps_realloc<real2>( texcoords, hdr->texcoord_cnt, max->texcoord_cnt, 1 );
+    perhaps_realloc<Vertex>( vertexes, hdr->vtx_cnt, max->vtx_cnt, 1 );
+    Vertex * vertex = &vertexes[ hdr->vtx_cnt++ ];
+    vertex->v_i = hdr->pos_cnt;
+    vertex->vn_i = hdr->norm_cnt;
+    vertex->vt_i = hdr->texcoord_cnt;
+    positions[hdr->pos_cnt++] = p;
+    normals[hdr->norm_cnt++] = n;
+    texcoords[hdr->texcoord_cnt++] = uv;
+    return vertex;
+}
+
+inline Model::Polygon * Model::make_polygon( uint vtx_cnt, const real3 p[], const real3 n[], const real2 uv[], uint mtl_i )
+{
+    perhaps_realloc<Polygon>( polygons, hdr->poly_cnt, max->poly_cnt, 1 );
+    Polygon * poly = &polygons[ hdr->poly_cnt++ ];
+    poly->vtx_cnt = vtx_cnt;
+    poly->vtx_i = hdr->vtx_cnt;
+    poly->mtl_i = mtl_i;
+    poly->normal = (p[1] - p[0]).cross( p[2] - p[0] );
+    real len = poly->normal.length();
+    poly->area = ::divby2(len);                       // correct only for triangles
+    poly->normal /= len;
+    for( uint i = 0; i < vtx_cnt; i++ )
+    {
+        make_vertex( p[i], n[i], uv[i] );
+    }
+    return poly;
+}
+
+inline Model::Polygon * Model::make_polygon( uint vtx_cnt, const real3 p[], uint mtl_i )
+{
+    perhaps_realloc<Polygon>( polygons, hdr->poly_cnt, max->poly_cnt, 1 );
+    Polygon * poly = &polygons[ hdr->poly_cnt++ ];
+    poly->vtx_cnt = vtx_cnt;
+    poly->vtx_i = hdr->vtx_cnt;
+    poly->mtl_i = mtl_i;
+    poly->normal = (p[1] - p[0]).cross( p[2] - p[0] );
+    real len = poly->normal.length();
+    poly->area = ::divby2(len);                       // correct only for triangles
+    poly->normal /= len;
+    for( uint i = 0; i < vtx_cnt; i++ )
+    {
+        real u = (i == 1) ? 1.0 : 0.0;
+        real v = (i == 2) ? 1.0 : 0.0;
+        real2 uv( u, v );
+        make_vertex( p[i], poly->normal, uv );
+    }
+    return poly;
 }
 
 bool Model::write_uncompressed( std::string model_path ) 
@@ -4038,7 +4110,7 @@ bool Model::load_nvdb( std::string nvdb_file, std::string dir_name, std::string 
             die_assert( meta.name_size > 0, "name_size=0 in GridMetaData in .nvdb file" );
             std::string name( nvdb );
             nvdb += meta.name_size;
-            uint name_i = string_alloc( name );
+            uint name_i = make_string( name );
 
             //------------------------------------------------------------
             // Allocate new VolumeGrid and fill in header information.
@@ -5291,8 +5363,21 @@ bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real p
     return true;
 }
 
+bool Model::Polygon::vertex_info( const Model * model, uint _vtx_cnt, real3 p[], real3 n[], real2 uv[] ) const
+{
+    if (_vtx_cnt != vtx_cnt) return false;
+    for( uint i = 0; i < vtx_cnt; i++ ) 
+    {
+        const Vertex * vertex = &model->vertexes[vtx_i+i];
+        p[i] = model->positions[vertex->v_i];
+        n[i] = model->normals[vertex->vn_i];
+        uv[i] = model->texcoords[vertex->vt_i];
+    }
+    return true;
+}
+
 bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
-        real solid_angle, real t_min, real t_max, HitInfo& hit_info ) const
+        real solid_angle, real t_min, real t_max, HitRecord& rec ) const
 {
     (void)direction_inv;
     if ( vtx_cnt == 3 ) {
@@ -5350,30 +5435,30 @@ bool Model::Polygon::hit( const Model * model, const real3& origin, const real3&
                     v1 = 0.0;
                     v2 = 0.0;
                 }
-                hit_info.poly_i = poly_i;
-                hit_info.grid_i = uint(-1);
-                hit_info.t = t;
+                rec.poly_i = poly_i;
+                rec.grid_i = uint(-1);
+                rec.t = t;
 
-                 hit_info.normal = normal;
+                 rec.normal = normal;
                 if ( vertexes[0].vn_i != uint(-1) ) {
-                    hit_info.shading_normal = n0*alpha + n1*gamma + n2*beta;
-                    hit_info.shading_normal.normalize();
+                    rec.shading_normal = n0*alpha + n1*gamma + n2*beta;
+                    rec.shading_normal.normalize();
                 } else {
-                    hit_info.shading_normal = normal;
+                    rec.shading_normal = normal;
                 }
                 // epsilon to get it off the polygon
                 // may cause trouble in two-sided... move to shader?
-            //    hit_info.p = p + 0.01*hit_info.normal;;
-                hit_info.p = p;
+            //    rec.p = p + 0.01*rec.normal;;
+                rec.p = p;
 
                 real distance_squared = t*t / direction.length_sqr();
                 real ray_footprint_area_on_triangle = solid_angle*distance_squared;
                 real twice_uv_area_of_triangle = std::abs(0.5*(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1));
-                hit_info.frac_uv_cov = ray_footprint_area_on_triangle * twice_uv_area_of_triangle / (2.0*area);
+                rec.frac_uv_cov = ray_footprint_area_on_triangle * twice_uv_area_of_triangle / (2.0*area);
 
 
-                hit_info.u = alpha*u0 + gamma*u1 + beta*u2 ;
-                hit_info.v = alpha*v0 + gamma*v1 + beta*v2 ;
+                rec.u = alpha*u0 + gamma*u1 + beta*u2 ;
+                rec.v = alpha*v0 + gamma*v1 + beta*v2 ;
 
                 real3 deltaPos1 = p1-p0;
                 real3 deltaPos2 = p2-p0;
@@ -5384,9 +5469,9 @@ bool Model::Polygon::hit( const Model * model, const real3& origin, const real3&
                 real deltaV2 = v2-v0;
 
                 real r = 1.0 / (deltaU1 * deltaV2 - deltaV1 * deltaU2);
-                hit_info.tangent = (deltaPos1 * deltaV2   - deltaPos2 * deltaV1)*r;
-                hit_info.tangent_normalized = hit_info.tangent.normalize();
-                hit_info.bitangent = (deltaPos2 * deltaU1   - deltaPos1 * deltaU2)*r;
+                rec.tangent = (deltaPos1 * deltaV2   - deltaPos2 * deltaV1)*r;
+                rec.tangent_normalized = rec.tangent.normalize();
+                rec.bitangent = (deltaPos2 * deltaU1   - deltaPos1 * deltaU2)*r;
 
                 if (mtl_i != uint(-1) && model->materials[mtl_i].map_d_i != uint(-1)) {
                     // code slightly modified from texture.h   We only need one compoent
@@ -5398,10 +5483,10 @@ bool Model::Polygon::hit( const Model * model, const real3& origin, const real3&
                     int ny = model->textures[model->materials[mtl_i].map_d_i].height;
                     int mx = nx;
                     int my = ny;
-                    real u = hit_info.u;
-                    real v = hit_info.v;
+                    real u = rec.u;
+                    real v = rec.v;
                     real sqrt_nx_ny = std::sqrt(nx*ny);
-                    real width_of_footprint = std::sqrt(hit_info.frac_uv_cov) * sqrt_nx_ny;
+                    real width_of_footprint = std::sqrt(rec.frac_uv_cov) * sqrt_nx_ny;
                     real mip_level = std::log2( width_of_footprint );
                     int nchan = model->textures->nchan;
                     for (int imip_level = mip_level; imip_level > 0 && !(mx == 1 && my == 1); imip_level--)
@@ -5449,12 +5534,12 @@ bool Model::Polygon::hit( const Model * model, const real3& origin, const real3&
                     }
                 }
 
-                hit_info.model = model;
+                rec.model = model;
 
-                mdout << "Model::Polygon::hit: poly_i=" << poly_i << " HIT t=" << hit_info.t << 
-                         " p=" << hit_info.p << " normal=" << hit_info.normal << 
-                         " frac_uv_cov=" << hit_info.frac_uv_cov << 
-                         " u=" << hit_info.u << " v=" << hit_info.v << " mtl_i=" << mtl_i << "\n";
+                mdout << "Model::Polygon::hit: poly_i=" << poly_i << " HIT t=" << rec.t << 
+                         " p=" << rec.p << " normal=" << rec.normal << 
+                         " frac_uv_cov=" << rec.frac_uv_cov << 
+                         " u=" << rec.u << " v=" << rec.v << " mtl_i=" << mtl_i << "\n";
                 return true;
             }
         }
@@ -6026,7 +6111,7 @@ Model::real3 Model::VolumeGrid::real3_value( const Model * model, _int x, _int y
 }
 
 bool Model::Volume::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
-                         real /*solid_angle*/, real tmin, real tmax, HitInfo& hit_info ) const
+                         real /*solid_angle*/, real tmin, real tmax, HitRecord& rec ) const
 {
     //-------------------------------------------------------------------
     // Clip ray (origin -> direction with t_min,t_max) to our bounding box.
@@ -6074,7 +6159,7 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
                                 " world_box=" << grid->world_box << " world_voxel_size=" << grid->world_voxel_size << " world_voxel_size_inv=" << grid->world_voxel_size_inv <<
                                 " max_length_within_voxel_inv=" << max_length_within_voxel_inv <<
                                 " index_box=" << grid->index_box << " tmin=" << tmin << " tmax=" << tmax << "\n";
-    hit_info.grid_i = grid_i;   // for now
+    rec.grid_i = grid_i;   // for now
     _int x;
     _int y;
     _int z;
@@ -6140,17 +6225,17 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
             if ( grid_F0_i != uint(-1) || grid_IOR_i != uint(-1) ) {
                 real3 F0;
                 if ( grid_F0_i != uint(-1) ) {
-                    hit_info.grid_i = grid_F0_i;
+                    rec.grid_i = grid_F0_i;
                     grid = &model->volume_grids[grid_F0_i];
                     F0 = grid->real3_value( model, x, y, z );
                 } else {
-                    hit_info.grid_i = grid_IOR_i;
+                    rec.grid_i = grid_IOR_i;
                     grid = &model->volume_grids[grid_IOR_i];
                     real IOR = grid->real_value( model, x, y, z );
                     real a = ((IOR-1.0)*(IOR-1.0)) / ((IOR+1.0)*(IOR+1.0));
                     F0 = real3( a, a, a );
                 }
-                if ( hit_info.F0.c[0] < 0.0 || hit_info.F0.c[0] != F0.c[0] || hit_info.F0.c[1] != F0.c[1] || hit_info.F0.c[2] != F0.c[2] ) {
+                if ( rec.F0.c[0] < 0.0 || rec.F0.c[0] != F0.c[0] || rec.F0.c[1] != F0.c[1] || rec.F0.c[2] != F0.c[2] ) {
                     mdout << "Model::Volume::hit: p=" << p << " xyz=[" << x << "," << y << "," << z << "] F0 changed to " << F0 << "\n";
                     break;
                 }
@@ -6165,7 +6250,7 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
                 mdout << "Model::Volume::hit: mfpl=" << mfpl << "\n";
                 if ( mfpl > 0.0 ) {
                     if ( MODEL_UNIFORM_FN() < (ray_length_within_voxel*max_length_within_voxel_inv*mfpl*density) ) {
-                        hit_info.grid_i = grid_density_i;
+                        rec.grid_i = grid_density_i;
                         break;
                     }
                 }
@@ -6203,10 +6288,10 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
     p = origin + t*direction;
     
     //-------------------------------------------------------------------
-    // Fill in rest of hit_info.
+    // Fill in rest of rec.
     //-------------------------------------------------------------------
-    hit_info.model = model;
-    hit_info.p = real3( p.c[0], p.c[1], p.c[2] );
+    rec.model = model;
+    rec.p = real3( p.c[0], p.c[1], p.c[2] );
     int c;
     for( int i=0; i < 3; i++ )
     {
@@ -6214,33 +6299,33 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
             c = i;
         }
     }
-    hit_info.t = (p.c[c] - origin.c[c]) * direction_inv.c[c];
-    hit_info.poly_i = uint(-1);
-    hit_info.volume_i = this - model->volumes;
-    hit_info.voxel_xyz[0] = x;
-    hit_info.voxel_xyz[1] = y;
-    hit_info.voxel_xyz[2] = z;
-    grid = &model->volume_grids[hit_info.grid_i];
+    rec.t = (p.c[c] - origin.c[c]) * direction_inv.c[c];
+    rec.poly_i = uint(-1);
+    rec.volume_i = this - model->volumes;
+    rec.voxel_xyz[0] = x;
+    rec.voxel_xyz[1] = y;
+    rec.voxel_xyz[2] = z;
+    grid = &model->volume_grids[rec.grid_i];
     switch( grid->voxel_type )
     {
-        case VolumeVoxelType::INT16:            hit_info.voxel_value.i   = grid->int_value( model, x, y, z );           break;
-        case VolumeVoxelType::INT32:            hit_info.voxel_value.i   = grid->int_value( model, x, y, z );           break;
-        case VolumeVoxelType::INT64:            hit_info.voxel_value.i64 = grid->int64_value( model, x, y, z );         break;
-        case VolumeVoxelType::FP16:             hit_info.voxel_value.r   = grid->real_value( model, x, y, z );          break;
-        case VolumeVoxelType::FLOAT:            hit_info.voxel_value.r   = grid->real_value( model, x, y, z );          break;
-        case VolumeVoxelType::DOUBLE:           hit_info.voxel_value.r64 = grid->real64_value( model, x, y, z );        break;
-        case VolumeVoxelType::VEC3F:            hit_info.voxel_value.r3  = grid->real3_value( model, x, y, z );         break;
-        case VolumeVoxelType::VEC3D:            hit_info.voxel_value.r3d = grid->real3d_value( model, x, y, z );        break;
+        case VolumeVoxelType::INT16:            rec.voxel_value.i   = grid->int_value( model, x, y, z );           break;
+        case VolumeVoxelType::INT32:            rec.voxel_value.i   = grid->int_value( model, x, y, z );           break;
+        case VolumeVoxelType::INT64:            rec.voxel_value.i64 = grid->int64_value( model, x, y, z );         break;
+        case VolumeVoxelType::FP16:             rec.voxel_value.r   = grid->real_value( model, x, y, z );          break;
+        case VolumeVoxelType::FLOAT:            rec.voxel_value.r   = grid->real_value( model, x, y, z );          break;
+        case VolumeVoxelType::DOUBLE:           rec.voxel_value.r64 = grid->real64_value( model, x, y, z );        break;
+        case VolumeVoxelType::VEC3F:            rec.voxel_value.r3  = grid->real3_value( model, x, y, z );         break;
+        case VolumeVoxelType::VEC3D:            rec.voxel_value.r3d = grid->real3d_value( model, x, y, z );        break;
         default:                                                                                                        break;
     }
     if ( grid_normal_i != uint(-1) ) {
-        hit_info.normal = model->volume_grids[grid_normal_i].real3_value( model, x, y, z );
+        rec.normal = model->volume_grids[grid_normal_i].real3_value( model, x, y, z );
     } else {
-        hit_info.normal = real3(0,1,0);
+        rec.normal = real3(0,1,0);
     }
-    hit_info.shading_normal = hit_info.normal;
+    rec.shading_normal = rec.normal;
     mdout << "Model::Volume::hit: success origin=" << origin << " direction=" << direction << " direction_inv=" << direction_inv << 
-             " p=" << p << " c=" << c << " t=" << hit_info.t << "\n";
+             " p=" << p << " c=" << c << " t=" << rec.t << "\n";
     return true;  // success
 }
 
@@ -6253,7 +6338,7 @@ bool Model::Instance::bounding_box( const Model * model, AABB& b, real padding )
 }
 
 bool Model::Instance::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
-                           real solid_angle, real t_min, real t_max, HitInfo& hit_info )
+                           real solid_angle, real t_min, real t_max, HitRecord& rec )
 {
     die_assert( sizeof(real) == 4, "real is not float" );
     die_assert( kind == INSTANCE_KIND::MODEL_PTR, "did not get model_ptr instance" );
@@ -6273,18 +6358,18 @@ bool Model::Instance::hit( const Model * model, const real3& origin, const real3
                                   " t_origin=" << t_origin << " t_direction=" << t_direction << " t_direction_inv=" << t_direction_inv << "\n";
 
     BVH_Node * t_bvh = &t_model->bvh_nodes[t_model->hdr->bvh_root_i];
-    if ( !t_bvh->hit( t_model, t_origin, t_direction, t_direction_inv, solid_angle, t_min, t_max, hit_info ) ) return false;
+    if ( !t_bvh->hit( t_model, t_origin, t_direction, t_direction_inv, solid_angle, t_min, t_max, rec ) ) return false;
 
     //-----------------------------------------------------------
-    // Use matrix to transform hit_info.p back to global world space.
-    // Use transposed inverse matrix to transform hit_info.normal correctly (ask Pete Shirley).
+    // Use matrix to transform rec.p back to global world space.
+    // Use transposed inverse matrix to transform rec.normal correctly (ask Pete Shirley).
     //-----------------------------------------------------------
     Matrix * M           = &model->matrixes[matrix_i];
     Matrix * M_inv_trans = &model->matrixes[matrix_inv_trans_i];
-    real3 p = hit_info.p;
-    real3 normal = hit_info.normal;
-    M->transform( p, hit_info.p );
-    M_inv_trans->transform( normal, hit_info.normal );
+    real3 p = rec.p;
+    real3 normal = rec.normal;
+    M->transform( p, rec.p );
+    M_inv_trans->transform( normal, rec.normal );
     return true;
 }
 
@@ -6459,7 +6544,7 @@ Model::uint Model::bvh_node( BVH_NODE_KIND kind, Model::uint first, Model::uint 
 
 inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origin, 
                                   const Model::real3& direction, const Model::real3& direction_inv,
-                                  Model::real solid_angle, Model::real t_min, Model::real t_max, Model::HitInfo& hit_info ) const
+                                  Model::real solid_angle, Model::real t_min, Model::real t_max, Model::HitRecord& rec ) const
 {
     bool r = false;
     uint bvh_i = this - model->bvh_nodes;
@@ -6467,30 +6552,30 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
     real tmin = t_min;
     real tmax = t_max;
     if ( box.hit( origin, direction, direction_inv, tmin, tmax ) ) {
-        HitInfo left_hit_info;
-        HitInfo right_hit_info;
+        HitRecord left_rec;
+        HitRecord right_rec;
         bool hit_left  = (left_kind == BVH_NODE_KIND::POLYGON)      ? model->polygons[left_i].hit(      model, origin, direction, direction_inv,   
-                                                                                                        solid_angle, t_min, t_max, left_hit_info  ) :
+                                                                                                        solid_angle, t_min, t_max, left_rec  ) :
                          (left_kind == BVH_NODE_KIND::VOLUME)       ? model->volumes[left_i].hit(       model, origin, direction, direction_inv, 
-                                                                                                        solid_angle, t_min, t_max, left_hit_info  ) :
+                                                                                                        solid_angle, t_min, t_max, left_rec  ) :
                          (left_kind == BVH_NODE_KIND::INSTANCE)     ? model->instances[left_i].hit(     model, origin, direction, direction_inv, 
-                                                                                                        solid_angle, t_min, t_max, left_hit_info  ) :
+                                                                                                        solid_angle, t_min, t_max, left_rec  ) :
                                                                       model->bvh_nodes[left_i].hit(     model, origin, direction, direction_inv, 
-                                                                                                        solid_angle, t_min, t_max, left_hit_info  );
+                                                                                                        solid_angle, t_min, t_max, left_rec  );
         bool hit_right = (left_i == right_i)                        ? false :   // lone leaf
                          (right_kind == BVH_NODE_KIND::POLYGON)     ? model->polygons[right_i].hit(     model, origin, direction, direction_inv, 
-                                                                                                        solid_angle, t_min, t_max, right_hit_info ) :
+                                                                                                        solid_angle, t_min, t_max, right_rec ) :
                          (right_kind == BVH_NODE_KIND::VOLUME)      ? model->volumes[right_i].hit(      model, origin, direction, direction_inv, 
-                                                                                                        solid_angle, t_min, t_max, right_hit_info ) :
+                                                                                                        solid_angle, t_min, t_max, right_rec ) :
                          (right_kind == BVH_NODE_KIND::INSTANCE)    ? model->instances[right_i].hit(    model, origin, direction, direction_inv, 
-                                                                                                        solid_angle, t_min, t_max, right_hit_info ) :
+                                                                                                        solid_angle, t_min, t_max, right_rec ) :
                                                                       model->bvh_nodes[right_i].hit(    model, origin, direction, direction_inv, 
-                                                                                                        solid_angle, t_min, t_max, right_hit_info );
-        if ( hit_left && (!hit_right || left_hit_info.t < right_hit_info.t) ) {
-            hit_info = left_hit_info;
+                                                                                                        solid_angle, t_min, t_max, right_rec );
+        if ( hit_left && (!hit_right || left_rec.t < right_rec.t) ) {
+            rec = left_rec;
             r = true;
         } else if ( hit_right ) {
-            hit_info = right_hit_info;
+            rec = right_rec;
             r = true;
         }
     }
@@ -6645,23 +6730,12 @@ inline bool Model::parse_string( std::string& s, char *& xxx, char *& xxx_end )
     }
 }
 
-inline uint Model::string_alloc( std::string s )
-{
-    uint s_len = s.length();
-    perhaps_realloc( strings, hdr->char_cnt, max->char_cnt, s_len+1 );
-    uint s_i = hdr->char_cnt;
-    char * to_s = &strings[hdr->char_cnt];
-    hdr->char_cnt += s_len + 1;
-    memcpy( to_s, s.c_str(), s_len+1 );
-    return s_i;
-}
-
 inline bool Model::parse_string_i( uint& s_i, char *& xxx, char *& xxx_end )
 {
     std::string s;
     if ( !parse_string( s, xxx, xxx_end ) ) return false;
 
-    s_i = string_alloc( s );
+    s_i = make_string( s );
     return true;
 }
 

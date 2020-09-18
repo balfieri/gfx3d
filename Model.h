@@ -217,7 +217,7 @@ public:
         BINARY,                             // generate binary BVH tree
     };
 
-    Model( std::string top_file, 
+    Model( std::string          top_file="",
            MIPMAP_FILTER        mipmap_filter=MIPMAP_FILTER::NONE, 
            TEXTURE_COMPRESSION  texture_compression=TEXTURE_COMPRESSION::NONE,
            BVH_TREE             bvh_tree=BVH_TREE::NONE, 
@@ -1048,6 +1048,11 @@ public:
     inline Vertex *     make_vertex( const real3& p, const real3& n, const real2& uv );                                         // position, normal, and texcoord
     inline Polygon *    make_polygon( uint vtx_cnt, const real3 p[], const real3 n[], const real2 uv[], uint mtl_i=uint(-1) );  // positions, normals, texcoords
     inline Polygon *    make_polygon( uint vtx_cnt, const real3 p[], uint mtl_i=uint(-1) );                                     // position, use surface normal, fudge texcoords
+    inline Matrix *     make_matrix( void );                                                                                    // returns an identity matrix for starters
+    inline Instance *   make_instance( std::string name, Model * model, Matrix * matrix=nullptr, std::string file_name="" );    // MODEL_PTR instance 
+
+    // call this to rebuild the BVH after adding all primitives dynamically
+    void                bvh_build( BVH_TREE bvh_tree=BVH_TREE::BINARY );
 
     // srgb<->linear conversion utilities
     static real srgb_to_linear_gamma( real srgb );
@@ -1226,7 +1231,6 @@ private:
     bool parse_gph_expr( uint& expr_i, char *& gph, char *& gph_end, uint curr_prec=0 );
 
     // BVH builder
-    void bvh_build( BVH_TREE bvh_tree );
     uint bvh_qsplit( BVH_NODE_KIND kind, uint poly_i, uint n, real pivot, uint axis );
     uint bvh_node( BVH_NODE_KIND kind, uint i, uint n, uint axis );
 
@@ -1883,6 +1887,14 @@ Model::Model( std::string                top_file,
     frames            = aligned_alloc<Frame>(    max->frame_cnt );
     animations        = aligned_alloc<Animation>(max->animation_cnt );
 
+    if ( top_file == "" ) {
+        //------------------------------------------------------------
+        // New model.
+        //------------------------------------------------------------
+        is_good = true;
+        return;
+    }
+
     //------------------------------------------------------------
     // Load .fscene or .obj depending on file ext_name
     //------------------------------------------------------------
@@ -2358,6 +2370,37 @@ inline Model::Polygon * Model::make_polygon( uint vtx_cnt, const real3 p[], uint
         make_vertex( p[i], poly->normal, uv );
     }
     return poly;
+}
+
+inline Model::Matrix * Model::make_matrix( void )
+{
+    perhaps_realloc<Matrix>( matrixes, hdr->matrix_cnt, max->matrix_cnt, 1 );
+    Matrix * matrix = &matrixes[ hdr->matrix_cnt++ ];
+    return matrix;
+}
+
+inline Model::Instance * Model::make_instance( std::string name, Model * model, Model::Matrix * matrix, std::string file_name )
+{
+    perhaps_realloc<Instance>( instances, hdr->inst_cnt, max->inst_cnt, 1 );
+    Instance * instance = &instances[ hdr->inst_cnt++ ];
+    instance->kind = INSTANCE_KIND::MODEL_PTR;
+    instance->model_name_i = make_string( name );
+    instance->model_file_name_i = make_string( file_name );
+    instance->u.model_ptr = model;
+    if ( matrix == nullptr ) matrix = make_matrix();
+    instance->matrix_i = matrixes - matrix;
+    Matrix * matrix_inv = make_matrix();
+    instance->matrix_inv_i = matrix_inv - matrixes;
+    Matrix * matrix_inv_trans = make_matrix();
+    instance->matrix_inv_trans_i = matrix_inv_trans - matrixes;
+    matrix->invert( *matrix_inv );
+    matrix_inv->transpose( *matrix_inv_trans );
+    if ( model->hdr->bvh_root_i != uint(-1) ) {
+        AABB * t_box = &model->bvh_nodes[model->hdr->bvh_root_i].box;
+        matrix->transform( t_box->_min, instance->box._min );
+        matrix->transform( t_box->_max, instance->box._max );
+    }
+    return instance;
 }
 
 bool Model::write_uncompressed( std::string model_path ) 
@@ -6366,12 +6409,17 @@ bool Model::Instance::hit( const Model * model, const real3& origin, const real3
     die_assert( kind == INSTANCE_KIND::MODEL_PTR, "did not get model_ptr instance" );
 
     //-----------------------------------------------------------
+    // If the instance is empty, it can have a null BVH.
+    //-----------------------------------------------------------
+    Model* t_model = u.model_ptr;
+    if ( t_model->hdr->bvh_root_i == uint(-1) ) return false;
+
+    //-----------------------------------------------------------
     // Use inverse matrix to transform origin, direction, and direction_inv into target model's space.
     // Then call model's root BVH hit node.
     //-----------------------------------------------------------
-    Model  *   t_model         = u.model_ptr;
-    Matrix *   M_inv           = &model->matrixes[matrix_inv_i];
-    real3      t_origin, t_direction, t_direction_inv;
+    Matrix * M_inv = &model->matrixes[matrix_inv_i];
+    real3    t_origin, t_direction, t_direction_inv;
     M_inv->transform( origin, t_origin );
     M_inv->transform( direction, t_direction );
     M_inv->transform( direction_inv, t_direction_inv );
@@ -6404,7 +6452,13 @@ inline bool Model::BVH_Node::bounding_box( const Model * model, Model::AABB& b )
 
 void Model::bvh_build( Model::BVH_TREE bvh_tree )
 {
-    (void)bvh_tree;
+    //--------------------------------------------------
+    // Clear out any prior BVH.
+    //--------------------------------------------------
+    hdr->bvh_node_cnt = 0;
+    hdr->bvh_root_i = uint(-1);
+    if ( bvh_tree == BVH_TREE::NONE ) return;
+
     if ( hdr->poly_cnt != 0 ) {
         //--------------------------------------------------
         // Build a proper BVH with polygons at the leaves
@@ -6437,11 +6491,10 @@ void Model::bvh_build( Model::BVH_TREE bvh_tree )
         die_assert( hdr->inst_cnt == 0, "inst_cnt should be 0 when volume_cnt is not 0" );
         hdr->bvh_root_i = bvh_node( BVH_NODE_KIND::VOLUME, 0, hdr->volume_cnt, 1 );
 
-    } else {
+    } else if ( hdr->inst_cnt != 0 ) {
         //--------------------------------------------------
         // For instances.
         //--------------------------------------------------
-        die_assert( hdr->inst_cnt != 0, "inst_cnt should be non-zero if poly_cnt and volume_cnt are both 0" );
         hdr->bvh_root_i = bvh_node( BVH_NODE_KIND::INSTANCE, 0, hdr->inst_cnt, 1 );
     }
 }
@@ -6537,7 +6590,7 @@ Model::uint Model::bvh_node( BVH_NODE_KIND kind, Model::uint first, Model::uint 
             switch( kind )
             {
                 case BVH_NODE_KIND::POLYGON:                polygons[first+1].bounding_box( this, new_box );        break;
-                case BVH_NODE_KIND::VOLUME:                 volumes[first+1].bounding_box( this, new_box );     break;
+                case BVH_NODE_KIND::VOLUME:                 volumes[first+1].bounding_box( this, new_box );         break;
                 case BVH_NODE_KIND::INSTANCE:               instances[first+1].bounding_box( this, new_box );       break;
                 default:                                    die_assert( false, "unexpected BVH_NODE_KIND" );        break;
             }

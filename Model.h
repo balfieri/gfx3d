@@ -628,6 +628,7 @@ public:
         
         bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
         bool vertex_info( const Model * model, uint vtx_cnt, real3 p[], real3 n[], real2 uv[] ) const;
+        bool vertex_info( const Model * model, uint vtx_cnt, real3 p[] ) const;
         bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
                   real solid_angle, real t_min, real t_max, HitRecord& rec ) const;
     };
@@ -762,6 +763,7 @@ public:
         bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
                   real solid_angle, real t_min, real t_max, HitRecord& rec ) const;
         uint voxel_class_grid_i( const Model * model, VolumeVoxelClass c ) const;
+        bool is_emissive( const Model * model ) const;
         bool rand_emissive_xyz( const Model * model, _int& x, _int& y, _int& z ) const;  // returns true and xyz of some emissive voxel, else false if none found
 
         std::string str( const Model * model, std::string indent="" ) const;       // recursive
@@ -5376,6 +5378,17 @@ bool Model::Polygon::vertex_info( const Model * model, uint _vtx_cnt, real3 p[],
     return true;
 }
 
+bool Model::Polygon::vertex_info( const Model * model, uint _vtx_cnt, real3 p[] ) const
+{
+    if (_vtx_cnt != vtx_cnt) return false;
+    for( uint i = 0; i < vtx_cnt; i++ ) 
+    {
+        const Vertex * vertex = &model->vertexes[vtx_i+i];
+        p[i] = model->positions[vertex->v_i];
+    }
+    return true;
+}
+
 bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
         real solid_angle, real t_min, real t_max, HitRecord& rec ) const
 {
@@ -5968,6 +5981,15 @@ uint Model::Volume::voxel_class_grid_i( const Model * model, Model::VolumeVoxelC
         if ( model->volume_grids[i].voxel_class == c ) return i;
     }
     return uint(-1);
+}
+
+bool Model::Volume::is_emissive( const Model * model ) const
+{
+    //--------------------------------------------------------------------------
+    // Bit masks have been precomputed if this truly is an emissive volume.
+    //--------------------------------------------------------------------------
+    const uint64_t * super_voxels = model->volume_to_emissive[this - model->volumes];
+    return super_voxels != nullptr;
 }
 
 bool Model::Volume::rand_emissive_xyz( const Model * model, _int& x, _int& y, _int& z ) const

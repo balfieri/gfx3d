@@ -137,6 +137,7 @@
 #include <math.h>
 #include <string.h>
 #include <zlib.h>
+#include <float.h>
 
 // forward decls for stb_image (some used by Model methods)
 typedef unsigned char stbi_uc;
@@ -564,8 +565,8 @@ public:
     {
     public: 
         inline Ray() { top = -1;}
-        inline Ray( const real3& a, const real3& b, RAY_KIND kind, real solid_angle=0 );
-        inline void init_normalized( const real3& a, const real3& b, RAY_KIND kind, real32 solid_angle=0 ); 
+        inline Ray( const real3& a, const real3& b, RAY_KIND kind, real32 solid_angle=0, real32 cone_angle=0 );
+        inline void init_normalized( const real3& a, const real3& b, RAY_KIND kind, real32 solid_angle=0, real32 cone_angle=0 ); 
 
         inline const real3& origin() const            { return A; }
         inline const real3& direction() const         { return B; }
@@ -577,19 +578,26 @@ public:
         inline real3 endpoint() const                 { return point_at_parameter(1.0); }
         inline real32 length() const                  { return direction().length(); }
 
+        inline real32 cone_angle() const              { return CONE_ANGLE; }
+        inline real32 cone_radius(real t=1.0) const   { return (CONE_ANGLE <= 0.0 || t <= 0.0) ? 0.0 : (t*length() * std::tan(CONE_ANGLE)); }
+        inline real32 cone_radius_sqr(real t=1.0) const { real32 r = cone_radius(t); return r*r; }
+        inline const real3 cone_base_dir_x( void ) const;
+        inline const real3 cone_base_dir_y( void ) const { return -direction(); }  // from endpoint() to origin()
+
         real3 A;
         real3 B;
         real3 B_inv;
         real3 B_norm;
         RAY_KIND KIND;
         real32 SOLID_ANGLE;
+        real32 CONE_ANGLE;  
         int top;
     };
 
     class Camera 
     {
     public:
-        Camera(real3 lookfrom, real3 lookat, real3 vup, real vfov, real aspect, real aperture, real focus_dist, int nx, int ny, int spp, uint name_i=uint(-1));
+        Camera(real3 lookfrom, real3 lookat, real3 vup, real vfov, real near, real far, real aspect, real aperture, real focus_dist, int nx, int ny, int spp, uint name_i=uint(-1));
 
         Ray get_ray(real s_pixel, real t_pixel, real s_lens, real t_lens) const;  // simple thin lens camera by default
 
@@ -1043,13 +1051,13 @@ public:
     };
 
     // useful methods for allocating above structures in this Model's arrays with proper resizing, etc.
-    // most of these return a pointer, and you can get the index into the array by subtracting the ptr from the array starts
-    inline uint         make_string( std::string s );     // returns index in strings[] array
-    inline Vertex *     make_vertex( const real3& p, const real3& n, const real2& uv );                                         // position, normal, and texcoord
-    inline Polygon *    make_polygon( uint vtx_cnt, const real3 p[], const real3 n[], const real2 uv[], uint mtl_i=uint(-1) );  // positions, normals, texcoords
-    inline Polygon *    make_polygon( uint vtx_cnt, const real3 p[], uint mtl_i=uint(-1) );                                     // position, use surface normal, fudge texcoords
-    inline Matrix *     make_matrix( void );                                                                                    // returns an identity matrix for starters
-    inline Instance *   make_instance( std::string name, Model * model, Matrix * matrix=nullptr, std::string file_name="" );    // MODEL_PTR instance 
+    // these all return indexes, which is what the user should store as pointers can change as arrays are resized later
+    inline uint make_string( std::string s );     // returns index in strings[] array
+    inline uint make_vertex( const real3& p, const real3& n, const real2& uv );                                         // position, normal, and texcoord
+    inline uint make_polygon( uint vtx_cnt, const real3 p[], const real3 n[], const real2 uv[], uint mtl_i=uint(-1) );  // positions, normals, texcoords
+    inline uint make_polygon( uint vtx_cnt, const real3 p[], uint mtl_i=uint(-1) );                                     // position, use surface normal, fudge texcoords
+    inline uint make_matrix( void );                                                                                    // returns an identity matrix for starters
+    inline uint make_instance( std::string name, std::string model_name, Model * model, uint matrix=uint(-1), std::string file_name="" ); // MODEL_PTR instance 
 
     // call this to rebuild the BVH after adding all primitives dynamically
     void                bvh_build( BVH_TREE bvh_tree=BVH_TREE::BINARY );
@@ -2317,26 +2325,28 @@ inline uint Model::make_string( std::string s )
     return s_i;
 }
 
-inline Model::Vertex * Model::make_vertex( const real3& p, const real3& n, const real2& uv ) 
+inline uint Model::make_vertex( const real3& p, const real3& n, const real2& uv ) 
 {
     perhaps_realloc<real3>( positions, hdr->pos_cnt, max->pos_cnt, 1 );
     perhaps_realloc<real3>( normals, hdr->norm_cnt, max->norm_cnt, 1 );
     perhaps_realloc<real2>( texcoords, hdr->texcoord_cnt, max->texcoord_cnt, 1 );
     perhaps_realloc<Vertex>( vertexes, hdr->vtx_cnt, max->vtx_cnt, 1 );
-    Vertex * vertex = &vertexes[ hdr->vtx_cnt++ ];
+    uint vtx_i = hdr->vtx_cnt++;
+    Vertex * vertex = &vertexes[vtx_i];
     vertex->v_i = hdr->pos_cnt;
     vertex->vn_i = hdr->norm_cnt;
     vertex->vt_i = hdr->texcoord_cnt;
     positions[hdr->pos_cnt++] = p;
     normals[hdr->norm_cnt++] = n;
     texcoords[hdr->texcoord_cnt++] = uv;
-    return vertex;
+    return vtx_i;
 }
 
-inline Model::Polygon * Model::make_polygon( uint vtx_cnt, const real3 p[], const real3 n[], const real2 uv[], uint mtl_i )
+inline uint Model::make_polygon( uint vtx_cnt, const real3 p[], const real3 n[], const real2 uv[], uint mtl_i )
 {
     perhaps_realloc<Polygon>( polygons, hdr->poly_cnt, max->poly_cnt, 1 );
-    Polygon * poly = &polygons[ hdr->poly_cnt++ ];
+    uint poly_i = hdr->poly_cnt++;
+    Polygon * poly = &polygons[poly_i];
     poly->vtx_cnt = vtx_cnt;
     poly->vtx_i = hdr->vtx_cnt;
     poly->mtl_i = mtl_i;
@@ -2348,13 +2358,14 @@ inline Model::Polygon * Model::make_polygon( uint vtx_cnt, const real3 p[], cons
     {
         make_vertex( p[i], n[i], uv[i] );
     }
-    return poly;
+    return poly_i;
 }
 
-inline Model::Polygon * Model::make_polygon( uint vtx_cnt, const real3 p[], uint mtl_i )
+inline uint Model::make_polygon( uint vtx_cnt, const real3 p[], uint mtl_i )
 {
     perhaps_realloc<Polygon>( polygons, hdr->poly_cnt, max->poly_cnt, 1 );
-    Polygon * poly = &polygons[ hdr->poly_cnt++ ];
+    uint poly_i = hdr->poly_cnt++;
+    Polygon * poly = &polygons[poly_i];
     poly->vtx_cnt = vtx_cnt;
     poly->vtx_i = hdr->vtx_cnt;
     poly->mtl_i = mtl_i;
@@ -2369,38 +2380,39 @@ inline Model::Polygon * Model::make_polygon( uint vtx_cnt, const real3 p[], uint
         real2 uv( u, v );
         make_vertex( p[i], poly->normal, uv );
     }
-    return poly;
+    return poly_i;
 }
 
-inline Model::Matrix * Model::make_matrix( void )
+inline uint Model::make_matrix( void )
 {
     perhaps_realloc<Matrix>( matrixes, hdr->matrix_cnt, max->matrix_cnt, 1 );
-    Matrix * matrix = &matrixes[ hdr->matrix_cnt++ ];
-    return matrix;
+    uint matrix_i = hdr->matrix_cnt++;
+    matrixes[matrix_i].identity();
+    return matrix_i;
 }
 
-inline Model::Instance * Model::make_instance( std::string name, Model * model, Model::Matrix * matrix, std::string file_name )
+inline uint Model::make_instance( std::string name, std::string model_name, Model * model, uint matrix_i, std::string file_name )
 {
     perhaps_realloc<Instance>( instances, hdr->inst_cnt, max->inst_cnt, 1 );
-    Instance * instance = &instances[ hdr->inst_cnt++ ];
+    uint inst_i = hdr->inst_cnt++;
+    Instance * instance = &instances[inst_i];
     instance->kind = INSTANCE_KIND::MODEL_PTR;
-    instance->model_name_i = make_string( name );
+    instance->name_i = make_string( name );
+    instance->model_name_i = make_string( model_name );
     instance->model_file_name_i = make_string( file_name );
     instance->u.model_ptr = model;
-    if ( matrix == nullptr ) matrix = make_matrix();
-    instance->matrix_i = matrixes - matrix;
-    Matrix * matrix_inv = make_matrix();
-    instance->matrix_inv_i = matrix_inv - matrixes;
-    Matrix * matrix_inv_trans = make_matrix();
-    instance->matrix_inv_trans_i = matrix_inv_trans - matrixes;
-    matrix->invert( *matrix_inv );
-    matrix_inv->transpose( *matrix_inv_trans );
+    if ( matrix_i == uint(-1) ) matrix_i = make_matrix();
+    instance->matrix_i = matrix_i;
+    instance->matrix_inv_i = make_matrix();
+    instance->matrix_inv_trans_i = make_matrix();
+    matrixes[instance->matrix_i].invert( matrixes[instance->matrix_inv_i] );
+    matrixes[instance->matrix_inv_i].transpose( matrixes[instance->matrix_inv_trans_i] );
     if ( model->hdr->bvh_root_i != uint(-1) ) {
         AABB * t_box = &model->bvh_nodes[model->hdr->bvh_root_i].box;
-        matrix->transform( t_box->_min, instance->box._min );
-        matrix->transform( t_box->_max, instance->box._max );
+        matrixes[instance->matrix_i].transform( t_box->_min, instance->box._min );
+        matrixes[instance->matrix_i].transform( t_box->_max, instance->box._max );
     }
-    return instance;
+    return inst_i;
 }
 
 bool Model::write_uncompressed( std::string model_path ) 
@@ -5301,7 +5313,8 @@ inline bool Model::AABBI::encloses( _int x, _int y, _int z ) const
            _max[2] >= z;
 }
 
-inline Model::Ray::Ray( const Model::real3& a, const Model::real3& b, Model::RAY_KIND kind, Model::real solid_angle ) : A(a), B(b), KIND(kind), SOLID_ANGLE(solid_angle) 
+inline Model::Ray::Ray( const Model::real3& a, const Model::real3& b, Model::RAY_KIND kind, Model::real32 solid_angle, Model::real32 cone_angle ) 
+        : A(a), B(b), KIND(kind), SOLID_ANGLE(solid_angle), CONE_ANGLE(cone_angle) 
 {
     B_norm = B; 
     B_norm.normalize(); 
@@ -5310,11 +5323,12 @@ inline Model::Ray::Ray( const Model::real3& a, const Model::real3& b, Model::RAY
     top = -1;
 }
 
-inline void Model::Ray::init_normalized( const Model::real3& a, const Model::real3& b, RAY_KIND kind, Model::real32 solid_angle ) 
+inline void Model::Ray::init_normalized( const Model::real3& a, const Model::real3& b, RAY_KIND kind, Model::real32 solid_angle, Model::real32 cone_angle ) 
 {
     A = a; 
     B = b; 
     SOLID_ANGLE = solid_angle;
+    CONE_ANGLE = cone_angle;
     B_norm = b; 
     B_inv = Model::real3(1,1,1); 
     B_inv /= B; 
@@ -5332,8 +5346,24 @@ inline Model::real3 Model::Ray::normalized_point_at_parameter( Model::real t ) c
     return A + t*B_norm; 
 }
 
-Model::Camera::Camera( real3 lookfrom, real3 lookat, real3 vup, real vfov, real aspect, real aperture, real focus_dist, int nx, int ny, int spp, uint name_i ) 
-    : lookfrom(lookfrom), lookat(lookat), vup(vup), vfov(vfov), aspect(aspect), aperture(aperture), focus_dist(focus_dist), name_i(name_i)
+inline const Model::real3 Model::Ray::cone_base_dir_x( void ) const 
+{ 
+    // Get the cone edge vector in 2D by rotating direction by CONE_ANGLE.
+    //
+    real32 sin, cos;
+    sincos(CONE_ANGLE, sin, cos);
+    real32 x = direction()[0];
+    real32 y = direction()[1];
+    real32 rx = x*cos - y*sin;
+    real32 ry = x*sin + y*cos;
+
+    // base_dir_x = edge - direction
+    //
+    return real3(rx-x, ry-y, 0);
+}
+
+Model::Camera::Camera( real3 lookfrom, real3 lookat, real3 vup, real vfov, real near, real far, real aspect, real aperture, real focus_dist, int nx, int ny, int spp, uint name_i )
+    : lookfrom(lookfrom), lookat(lookat), vup(vup), aperture(aperture), focus_dist(focus_dist), near(near), far(far), vfov(vfov), aspect(aspect), name_i(name_i)
 { 
     lens_radius = divby2(aperture);
     real theta = vfov*PI_DIV_180;
@@ -5415,8 +5445,16 @@ bool Model::Polygon::vertex_info( const Model * model, uint _vtx_cnt, real3 p[],
     {
         const Vertex * vertex = &model->vertexes[vtx_i+i];
         p[i] = model->positions[vertex->v_i];
-        n[i] = model->normals[vertex->vn_i];
-        uv[i] = model->texcoords[vertex->vt_i];
+        if ( vertex->vn_i != uint(-1) ) {
+            n[i] = model->normals[vertex->vn_i];
+        } else {
+            n[i] = normal;
+        }
+        if ( vertex->vt_i != uint(-1) ) {
+            uv[i] = model->texcoords[vertex->vt_i];
+        } else {
+            uv[i] = real2(0,0);
+        }
     }
     return true;
 }
@@ -5509,8 +5547,8 @@ bool Model::Polygon::hit( const Model * model, const real3& origin, const real3&
 
                 real distance_squared = t*t / direction.length_sqr();
                 real ray_footprint_area_on_triangle = solid_angle*distance_squared;
-                real twice_uv_area_of_triangle = std::abs(0.5*(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1));
-                rec.frac_uv_cov = ray_footprint_area_on_triangle * twice_uv_area_of_triangle / (2.0*area);
+                real uv_area_of_triangle = divby4(std::abs(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1));
+                rec.frac_uv_cov = ray_footprint_area_on_triangle * uv_area_of_triangle / area;
 
 
                 rec.u = alpha*u0 + gamma*u1 + beta*u2 ;

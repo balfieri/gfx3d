@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2020 Robert A. Alfieri
+// Copyright (c) 2017-2021 Robert A. Alfieri
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -241,8 +241,8 @@ public:
     public:
         real c[4];
         
-        real4( void )                               { c[0] = 0;  c[1] = 0;  c[2] = 0;  c[3] = 0;  }
-        real4( real c0, real c1, real c2, real c3 ) { c[0] = c0; c[1] = c1; c[2] = c2; c[3] = c3; }
+        inline real4( void )                               { c[0] = 0;  c[1] = 0;  c[2] = 0;  c[3] = 0;  }
+        inline real4( real c0, real c1, real c2, real c3 ) { c[0] = c0; c[1] = c1; c[2] = c2; c[3] = c3; }
 
         inline real x() const { return c[0]; }
         inline real y() const { return c[1]; }
@@ -283,8 +283,8 @@ public:
     public:
         real64 c[3];
 
-        real3d( void )                            { c[0] = 0;  c[1] = 0;  c[2] = 0;  }
-        real3d( real64 c0, real64 c1, real64 c2 ) { c[0] = c0; c[1] = c1; c[2] = c2; }
+        inline real3d( void )                            { c[0] = 0;  c[1] = 0;  c[2] = 0;  }
+        inline real3d( real64 c0, real64 c1, real64 c2 ) { c[0] = c0; c[1] = c1; c[2] = c2; }
 
         inline real64 x() const { return c[0]; }
         inline real64 y() const { return c[1]; }
@@ -330,10 +330,10 @@ public:
     public:
         real c[3];
         
-        real3( void )                      { c[0] = 0;  c[1] = 0;  c[2] = 0;  }
-        real3( real c0, real c1, real c2 ) { c[0] = c0; c[1] = c1; c[2] = c2; }
-        real3( const real3d& v )           { c[0] = v.c[0]; c[1] = v.c[1]; c[2] = v.c[2]; }
-        real3( const real4& v4 )           { c[0] = v4.c[0]; c[1] = v4.c[1]; c[2] = v4.c[2]; }
+        inline real3( void )                      { c[0] = 0;  c[1] = 0;  c[2] = 0;  }
+        inline real3( real c0, real c1, real c2 ) { c[0] = c0; c[1] = c1; c[2] = c2; }
+        inline real3( const real3d& v )           { c[0] = v.c[0]; c[1] = v.c[1]; c[2] = v.c[2]; }
+        inline real3( const real4& v4 )           { c[0] = v4.c[0]; c[1] = v4.c[1]; c[2] = v4.c[2]; }
 
         inline real x() const { return c[0]; }
         inline real y() const { return c[1]; }
@@ -353,6 +353,7 @@ public:
         inline real3&   operator *= ( const real s );
         inline real3&   operator /= ( const real3 &v2 );
         inline real3&   operator /= ( const real s );
+        inline real3d   to_real3d( void ) const { return real3d(c[0], c[1], c[2]); }
     
         inline real     dot( const real3 &v2 ) const;
         inline real3    cross( const real3 &v2 ) const;
@@ -379,8 +380,8 @@ public:
     public:
         real c[2];
 
-        real2( void )             { c[0] = 0;  c[1] = 0;  }
-        real2( real c0, real c1 ) { c[0] = c0; c[1] = c1; }
+        inline real2( void )             { c[0] = 0;  c[1] = 0;  }
+        inline real2( real c0, real c1 ) { c[0] = c0; c[1] = c1; }
 
         inline real x() const { return c[0]; }
         inline real y() const { return c[1]; }
@@ -528,10 +529,10 @@ public:
         real3           _min;               // bounding box min
         real3           _max;               // bounding box max
 
-        AABB( void ) {}
-        AABB( const real3& p );             // init with one point
-        AABB( const real3& p0, const real3& p1 );
-        AABB( const real3& p0, const real3& p1, const real3& p2 );
+        inline AABB( void ) {}
+        inline AABB( const real3& p );             // init with one point
+        inline AABB( const real3& p0, const real3& p1 );
+        inline AABB( const real3& p0, const real3& p1, const real3& p2 );
 
         inline real3 min() const { return _min; }
         inline real3 max() const { return _max; }
@@ -539,10 +540,35 @@ public:
         void pad( real p );
         void expand( const AABB& other );
         void expand( const real3& p );
-        real volume(void) const         { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
+        inline real volume(void) const         { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
         bool encloses( const real3& p ) const;
         bool encloses( const AABB& other ) const;
         bool hit( const real3& origin, const real3& direction, const real3& direction_inv, real& tmin, real& tmax ) const; 
+    };
+
+    class AABBD                              // axis aligned bounding box
+    {
+    public:
+        real3d           _min;               // bounding box min
+        real3d           _max;               // bounding box max
+
+        inline AABBD( void ) {}
+        AABBD( const real3d& p );             // init with one point
+        AABBD( const real3d& p0, const real3d& p1 );
+        AABBD( const real3d& p0, const real3d& p1, const real3d& p2 );
+        AABBD( const AABB& aabb );
+
+        inline real3d min() const { return _min; }
+        inline real3d max() const { return _max; }
+
+        void pad( real64 p );
+        void expand( const AABBD& other );
+        void expand( const real3d& p );
+        inline real64 volume(void) const         { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
+        bool encloses( const real3d& p ) const;
+        bool encloses( const AABBD& other ) const;
+        bool hit( const real3d& origin, const real3d& direction, const real3d& direction_inv, real64& tmin, real64& tmax ) const; 
+        bool overlaps_triangle( const Model::real3d &v0, const Model::real3d &v1, const Model::real3d &v2 ) const;
     };
 
     class AABBI                             // axis aligned bounding box with integers
@@ -551,7 +577,30 @@ public:
         _int            _min[3];            // bounding box min
         _int            _max[3];            // bounding box max
 
+        inline AABBI( void ) {}
+        inline AABBI( const _int p[] );             // init with one point
+        inline AABBI( const _int p0[], const _int p1[] );
+        inline AABBI( const _int p0[], const _int p1[], const _int p2[] );
+        void expand( const _int p[] );
+        inline uint64 volume(void) const         { return uint64(_max[2]-_min[2]+1)*uint64(_max[1]-_min[1]+1)*uint64(_max[0]-_min[0]+1); }
+        bool encloses( const _int p[] ) const;
         bool encloses( _int x, _int y, _int z ) const;
+    };
+
+    class AABBU64                           // axis aligned bounding box with uint64
+    {
+    public:
+        uint64          _min[3];            // bounding box min
+        uint64          _max[3];            // bounding box max
+
+        inline AABBU64( void ) {}
+        AABBU64( const uint64 p[] );             // init with one point
+        AABBU64( const uint64 p0[], const uint64 p1[] );
+        AABBU64( const uint64 p0[], const uint64 p1[], const uint64 p2[] );
+        void expand( const uint64 p[] );
+        inline uint64 volume(void) const         { return (_max[2]-_min[2]+1)*(_max[1]-_min[1]+1)*(_max[0]-_min[0]+1); }
+        bool encloses( const uint64 p[] ) const;
+        bool encloses( uint64 x, uint64 y, uint64 z ) const;
     };
 
     enum class RAY_KIND 
@@ -951,8 +1000,9 @@ public:
     public:
         real            m[4][4];
 
-        Matrix( void )          { identity(); }
+        inline Matrix( void )          { identity(); }
 
+        bool   is_identity( void ) const;               // returns true if this is the identity matrix (can speed up transform, etc.)
         void   identity(  void );                       // make this the identity matrix
         void   translate( const real3& translation );   // translate this matrix by a real3
         void   scale(     const real3& scaling );       // scale this matrix by a real3
@@ -1294,6 +1344,17 @@ inline Model::real hypoth1( const Model::real& y )                              
 inline void sincos( const Model::real& x, Model::real& si, Model::real& co )         { si = std::sin( x ); co = std::cos( x ); }
 inline void sincos( const Model::real& x, Model::real& si, Model::real& co, const Model::real& r ) { si = r*std::sin( x ); co = r*std::cos( x ); }
 
+inline static void minmax( const Model::real x0, const Model::real x1, const Model::real x2, Model::real &min, Model::real &max )
+{
+    min = std::min(std::min(x0, x1), x2);
+    max = std::max(std::max(x0, x1), x2);
+}
+inline static void minmax( const Model::real64 x0, const Model::real64 x1, const Model::real64 x2, Model::real64 &min, Model::real64 &max )
+{
+    min = std::min(std::min(x0, x1), x2);
+    max = std::max(std::max(x0, x1), x2);
+}
+
 //--------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------
 //
@@ -1461,7 +1522,20 @@ inline std::ostream& operator << ( std::ostream& os, const Model::AABB& box )
     return os;
 }
 
+inline std::ostream& operator << ( std::ostream& os, const Model::AABBD& box ) 
+{
+    os << box._min << ".." << box._max;
+    return os;
+}
+
 inline std::ostream& operator << ( std::ostream& os, const Model::AABBI& box ) 
+{
+    os << "[" << box._min[0] << "," << box._min[1] << "," << box._min[2] << "] .. [" <<
+                 box._max[0] << "," << box._max[1] << "," << box._max[2] << "]";
+    return os;
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::AABBU64& box ) 
 {
     os << "[" << box._min[0] << "," << box._min[1] << "," << box._min[2] << "] .. [" <<
                  box._max[0] << "," << box._max[1] << "," << box._max[2] << "]";
@@ -1609,9 +1683,9 @@ inline std::ostream& operator << ( std::ostream& os, const Model::Texture& tex )
 
 inline std::ostream& operator << ( std::ostream& os, const Model::Texture::ASTC_Header& hdr ) 
 {
-    uint w = (hdr.xsize[0] << 0) | (hdr.xsize[1] << 8) | (hdr.xsize[2] << 16);
-    uint h = (hdr.ysize[0] << 0) | (hdr.ysize[1] << 8) | (hdr.ysize[2] << 16);
-    uint d = (hdr.zsize[0] << 0) | (hdr.zsize[1] << 8) | (hdr.zsize[2] << 16);
+    Model::uint w = (hdr.xsize[0] << 0) | (hdr.xsize[1] << 8) | (hdr.xsize[2] << 16);
+    Model::uint h = (hdr.ysize[0] << 0) | (hdr.ysize[1] << 8) | (hdr.ysize[2] << 16);
+    Model::uint d = (hdr.zsize[0] << 0) | (hdr.zsize[1] << 8) | (hdr.zsize[2] << 16);
     os << "blockdim=[" << int(hdr.blockdim_x) << "," << int(hdr.blockdim_y) << "," << int(hdr.blockdim_z) << "] size=[" << 
                           w << "," << h << "," << d << "]";
     return os;
@@ -1971,7 +2045,7 @@ Model::Model( std::string                top_file,
                         {
                             uint poly_i = *pit;
                             if ( poly_i < model->hdr->poly_cnt ) {
-                                std::cout << "Ignoring poly_i=" << poly_i << " in " << file_name << "\n";
+                                mdout << "Ignoring poly_i=" << poly_i << " in " << file_name << "\n";
                                 model->polygons[poly_i].vtx_cnt = 0;  // makes it invisible to hit()
                             } else {
                                 error_msg = "ignored poly is out of range in " + file_name;
@@ -4846,6 +4920,18 @@ inline Model::real2& Model::real2::operator /= ( const Model::real s )
     return *this;
 }
 
+inline bool Model::Matrix::is_identity( void ) const
+{
+    for( uint i = 0; i < 4; i++ )
+    {
+        for( uint j = 0; j < 4; j++ )
+        {
+            if (m[i][j] != ((i == j) ? 1 : 0)) return false;
+        }
+    }
+    return true;
+}
+
 inline void Model::Matrix::identity( void )
 {
     for( uint i = 0; i < 4; i++ )
@@ -4988,19 +5074,23 @@ Model::real4 Model::Matrix::column( uint c ) const
     return v;
 }
 
-void Model::Matrix::transform( const real4& v, real4& r ) const
+inline void Model::Matrix::transform( const real4& v, real4& r ) const
 {
-    // order: r = *this * v
-    for( uint i = 0; i < 4; i++ )
-    {
-        double sum = 0.0;               // use higher-precision here
-        for( uint j = 0; j < 4; j++ )
+    if (is_identity()) {
+        r = v;
+    } else {
+        // order: r = *this * v
+        for( uint i = 0; i < 4; i++ )
         {
-            double partial = m[i][j];
-            partial *= v.c[j];
-            sum += partial;
+            double sum = 0.0;               // use higher-precision here
+            for( uint j = 0; j < 4; j++ )
+            {
+                double partial = m[i][j];
+                partial *= v.c[j];
+                sum += partial;
+            }
+            r.c[i] = sum;
         }
-        r.c[i] = sum;
     }
 }
 
@@ -5303,14 +5393,508 @@ inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& di
     return r;
 }
 
-inline bool Model::AABBI::encloses( _int x, _int y, _int z ) const
+inline Model::AABBD::AABBD( const Model::real3d& p )
 {
-    return _min[0] <= x &&
-           _min[1] <= y &&
-           _min[2] <= z &&
-           _max[0] >= x &&
-           _max[1] >= y && 
-           _max[2] >= z;
+    _min = p;
+    _max = p;
+}  
+
+inline Model::AABBD::AABBD( const Model::real3d& p0, const Model::real3d& p1 )
+{
+    _min = p0;
+    _max = p0;
+    expand( p1 );
+}  
+
+inline Model::AABBD::AABBD( const Model::real3d& p0, const Model::real3d& p1, const Model::real3d& p2 ) 
+{
+    _min = p0;
+    _max = p0;
+    expand( p1 );
+    expand( p2 );
+}  
+
+inline Model::AABBD::AABBD( const Model::AABB& box )
+{
+    _min = box._min.to_real3d();
+    _max = box._max.to_real3d();
+}  
+
+inline void Model::AABBD::pad( Model::real64 p ) 
+{
+    _min -= real3d( p, p, p );
+    _max += real3d( p, p, p );
+}
+
+inline void Model::AABBD::expand( const Model::AABBD& other )
+{
+    for( uint i = 0; i < 3; i++ )
+    {
+        if ( other._min.c[i] < _min.c[i] ) _min.c[i] = other._min.c[i];
+        if ( other._max.c[i] > _max.c[i] ) _max.c[i] = other._max.c[i];
+    }
+}
+
+inline void Model::AABBD::expand( const Model::real3d& p ) 
+{
+    if ( p.c[0] < _min.c[0] ) _min.c[0] = p.c[0];
+    if ( p.c[1] < _min.c[1] ) _min.c[1] = p.c[1];
+    if ( p.c[2] < _min.c[2] ) _min.c[2] = p.c[2];
+    if ( p.c[0] > _max.c[0] ) _max.c[0] = p.c[0];
+    if ( p.c[1] > _max.c[1] ) _max.c[1] = p.c[1];
+    if ( p.c[2] > _max.c[2] ) _max.c[2] = p.c[2];
+}
+
+inline bool Model::AABBD::encloses( const real3d& p ) const
+{
+    return _min.c[0] <= p.c[0] &&
+           _min.c[1] <= p.c[1] &&
+           _min.c[2] <= p.c[2] &&
+           _max.c[0] >= p.c[0] &&
+           _max.c[1] >= p.c[1] &&
+           _max.c[2] >= p.c[2];
+}
+
+inline bool Model::AABBD::encloses( const AABBD& other ) const
+{
+    return _min.c[0] <= other._min.c[0] &&
+           _min.c[1] <= other._min.c[1] &&
+           _min.c[2] <= other._min.c[2] &&
+           _max.c[0] >= other._max.c[0] &&
+           _max.c[1] >= other._max.c[1] &&
+           _max.c[2] >= other._max.c[2];
+}
+
+inline bool Model::AABBD::hit( const Model::real3d& origin, const Model::real3d& direction, const Model::real3d& direction_inv, 
+                               Model::real64& t_min, Model::real64& t_max ) const 
+{
+    mdout << "Model::AABBD::hit: " << *this << " t_min=" << t_min << " t_max=" << t_max << "\n";
+    (void)direction;
+    for( uint a = 0; a < 3; a++ ) 
+    {
+        real64 dir_inv = direction_inv.c[a];
+        real64 v0 = (_min.c[a] - origin.c[a]) * dir_inv;
+        real64 v1 = (_max.c[a] - origin.c[a]) * dir_inv;
+        t_min = std::fmax( t_min, std::fmin( v0, v1 ) );
+        t_max = std::fmin( t_max, std::fmax( v0, v1 ) );
+        mdout << "Model::AABBD::hit:     " << a << ": _min=" << _min.c[a] << " _max=" << _max.c[a] << 
+                                   " dir_inv=" << dir_inv << " origin=" << origin.c[a] << 
+                                   " v0=" << v0 << " v1=" << v1 << " t_min=" << t_min << " t_max=" << t_max << "\n";
+    }
+    bool r = t_max >= std::fmax( t_min, real64(0.0) );
+    mdout << "Model::AABBD::hit: return=" << r << "\n";
+    return r;
+}
+
+// Moeller code for fast triangle-box overlap test
+// Taken from: https://github.com/3YOURMIND/3YDMoeller
+//
+inline bool axisTestX01(const Model::real3d &v0, const Model::real3d &v2, const Model::real3d &boxhalfsize,
+                        const Model::real64 a, const Model::real64 b, const Model::real64 fa, const Model::real64 fb,
+                        Model::real64 &min, Model::real64 &max, Model::real64 &rad)
+{
+    Model::real64 p0 = a * v0[1] - b * v0[2];
+    Model::real64 p2 = a * v2[1] - b * v2[2];
+    if (p0 < p2)
+    {
+        min = p0;
+        max = p2;
+    }
+    else
+    {
+        min = p2;
+        max = p0;
+    }
+    rad = fa * boxhalfsize[1] + fb * boxhalfsize[2];
+    if (min > rad || max < -rad)
+    {
+        return false;
+    }
+    return true;
+}
+
+inline bool axisTestX2(const Model::real3d &v0, const Model::real3d &v1, const Model::real3d &boxhalfsize,
+                              const Model::real64 a, const Model::real64 b, const Model::real64 fa, const Model::real64 fb,
+                              Model::real64 &min, Model::real64 &max, Model::real64 &rad)
+{
+    Model::real64 p0 = a * v0[1] - b * v0[2];
+    Model::real64 p1 = a * v1[1] - b * v1[2];
+    if (p0 < p1)
+    {
+        min = p0;
+        max = p1;
+    }
+    else
+    {
+        min = p1;
+        max = p0;
+    }
+    rad = fa * boxhalfsize[1] + fb * boxhalfsize[2];
+    if (min > rad || max < -rad)
+    {
+        return false;
+    }
+    return true;
+}
+
+inline bool axisTestY02(const Model::real3d &v0, const Model::real3d &v2, const Model::real3d &boxhalfsize,
+                               const Model::real64 a, const Model::real64 b, const Model::real64 fa, const Model::real64 fb,
+                               Model::real64 &min, Model::real64 &max, Model::real64 &rad)
+{
+    Model::real64 p0 = -a * v0[0] + b * v0[2];
+    Model::real64 p2 = -a * v2[0] + b * v2[2];
+    if (p0 < p2)
+    {
+        min = p0;
+        max = p2;
+    }
+    else
+    {
+        min = p2;
+        max = p0;
+    }
+    rad = fa * boxhalfsize[0] + fb * boxhalfsize[2];
+    if (min > rad || max < -rad)
+    {
+        return false;
+    }
+    return true;
+}
+
+inline bool axisTestY1(const Model::real3d &v0, const Model::real3d &v1, const Model::real3d &boxhalfsize,
+                              const Model::real64 a, const Model::real64 b, const Model::real64 fa, const Model::real64 fb,
+                              Model::real64 &min, Model::real64 &max, Model::real64 &rad)
+{
+    Model::real64 p0 = -a * v0[0] + b * v0[2];
+    Model::real64 p1 = -a * v1[0] + b * v1[2];
+    if (p0 < p1)
+    {
+        min = p0;
+        max = p1;
+    }
+    else
+    {
+        min = p1;
+        max = p0;
+    }
+    rad = fa * boxhalfsize[0] + fb * boxhalfsize[2];
+    if (min > rad || max < -rad)
+    {
+        return false;
+    }
+    return true;
+}
+
+inline bool axisTestZ12(const Model::real3d &v1, const Model::real3d &v2, const Model::real3d &boxhalfsize,
+                               const Model::real64 a, const Model::real64 b, const Model::real64 fa, const Model::real64 fb,
+                               Model::real64 &min, Model::real64 &max, Model::real64 &rad)
+{
+    Model::real64 p1 = a * v1[0] - b * v1[1];
+    Model::real64 p2 = a * v2[0] - b * v2[1];
+    if (p2 < p1)
+    {
+        min = p2;
+        max = p1;
+    }
+    else
+    {
+        min = p1;
+        max = p2;
+    }
+    rad = fa * boxhalfsize[0] + fb * boxhalfsize[1];
+    if (min > rad || max < -rad)
+    {
+        return false;
+    }
+    return true;
+}
+
+inline bool axisTestZ0(const Model::real3d &v0, const Model::real3d &v1, const Model::real3d &boxhalfsize,
+                              const Model::real64 a, const Model::real64 b, const Model::real64 fa, const Model::real64 fb,
+                              Model::real64 &min, Model::real64 &max, Model::real64 &rad)
+{
+    Model::real64 p0 = a * v0[0] - b * v0[1];
+    Model::real64 p1 = a * v1[0] - b * v1[1];
+    if (p0 < p1)
+    {
+        min = p0;
+        max = p1;
+    }
+    else
+    {
+        min = p1;
+        max = p0;
+    }
+    rad = fa * boxhalfsize[0] + fb * boxhalfsize[1];
+    if (min > rad || max < -rad)
+    {
+        return false;
+    }
+    return true;
+}
+
+inline bool planeBoxOverlap(const Model::real3d &normal, const Model::real3d &vert,
+                            const Model::real3d &maxbox)  // -NJMP-
+{
+    size_t q;
+    Model::real64 v;
+    Model::real3d vmin, vmax;
+    for (q = 0; q <= 2; q++)
+    {
+        v = vert[q];
+        if (normal[q] > 0.0f)
+        {
+            vmin[q] = -maxbox[q] - v;
+            vmax[q] = maxbox[q] - v;
+        }
+        else
+        {
+            vmin[q] = maxbox[q] - v;
+            vmax[q] = -maxbox[q] - v;
+        }
+    }
+    if (dot(normal, vmin) > 0.0f)
+    {
+        return false;
+    }
+    if (dot(normal, vmax) >= 0.0f)
+    {
+        return true;
+    }
+    return false;
+}
+
+bool triBoxOverlap(const Model::real3d &trivert0, const Model::real3d &trivert1, const Model::real3d &trivert2,
+                   const Model::real3d &boxcenter, const Model::real3d &boxhalfsize)
+{
+    /*    use separating axis theorem to test overlap between triangle and box */
+    /*    need to test for overlap in these directions: */
+    /*    1) the {x,y,z}-directions (actually, since we use the AABB of the triangle */
+    /*       we do not even need to test these) */
+    /*    2) normal of the triangle */
+    /*    3) crossproduct(edge from tri, {x,y,z}-directin) */
+    /*       this gives 3x3=9 more tests */
+
+    Model::real3d v0, v1, v2;
+    Model::real64 min, max, rad, fex, fey, fez;
+    Model::real3d normal, e0, e1, e2;
+    /* This is the fastest branch on Sun */
+    /* move everything so that the boxcenter is in (0,0,0) */
+    v0 = trivert0 - boxcenter;
+    v1 = trivert1 - boxcenter;
+    v2 = trivert2 - boxcenter;
+    /* compute triangle edges */
+    e0 = v1 - v0; /* tri edge 0 */
+    e1 = v2 - v1; /* tri edge 1 */
+    e2 = v0 - v2; /* tri edge 2 */
+
+    /* Bullet 3:  */
+    /*  test the 9 tests first (this was faster) */
+    fex = std::fabs(e0[0]);
+    fey = std::fabs(e0[1]);
+    fez = std::fabs(e0[2]);
+
+    if (!axisTestX01(v0, v2, boxhalfsize, e0[2], e0[1], fez, fey, min, max, rad))
+    {
+        return false;
+    }
+    if (!axisTestY02(v0, v2, boxhalfsize, e0[2], e0[0], fez, fex, min, max, rad))
+    {
+        return false;
+    }
+    if (!axisTestZ12(v1, v2, boxhalfsize, e0[1], e0[0], fey, fex, min, max, rad))
+    {
+        return false;
+    }
+
+    fex = std::fabs(e1[0]);
+    fey = std::fabs(e1[1]);
+    fez = std::fabs(e1[2]);
+
+    if (!axisTestX01(v0, v2, boxhalfsize, e1[2], e1[1], fez, fey, min, max, rad))
+    {
+        return false;
+    }
+    if (!axisTestY02(v0, v2, boxhalfsize, e1[2], e1[0], fez, fex, min, max, rad))
+    {
+        return false;
+    }
+    if (!axisTestZ0(v0, v1, boxhalfsize, e1[1], e1[0], fey, fex, min, max, rad))
+    {
+        return false;
+    }
+
+    fex = std::fabs(e2[0]);
+    fey = std::fabs(e2[1]);
+    fez = std::fabs(e2[2]);
+
+    if (!axisTestX2(v0, v1, boxhalfsize, e2[2], e2[1], fez, fey, min, max, rad))
+    {
+        return false;
+    }
+    if (!axisTestY1(v0, v1, boxhalfsize, e2[2], e2[0], fez, fex, min, max, rad))
+    {
+        return false;
+    }
+    if (!axisTestZ12(v1, v2, boxhalfsize, e2[1], e2[0], fey, fex, min, max, rad))
+    {
+        return false;
+    }
+
+    /* Bullet 1: */
+    /*  first test overlap in the {x,y,z}-directions */
+    /*  find min, max of the triangle each direction, and test for overlap in */
+    /*  that direction -- this is equivalent to testing a minimal AABB around */
+    /*  the triangle against the AABB */
+    /* test in X-direction */
+
+    minmax(v0[0], v1[0], v2[0], min, max);
+    if (min > boxhalfsize[0] || max < -boxhalfsize[0])
+    {
+        return false;
+    }
+    /* test in Y-direction */
+    minmax(v0[1], v1[1], v2[1], min, max);
+    if (min > boxhalfsize[1] || max < -boxhalfsize[1])
+    {
+        return false;
+    }
+    /* test in Z-direction */
+    minmax(v0[2], v1[2], v2[2], min, max);
+    if (min > boxhalfsize[2] || max < -boxhalfsize[2])
+    {
+        return false;
+    }
+
+    /* Bullet 2: */
+    /*  test if the box intersects the plane of the triangle */
+    /*  compute plane equation of triangle: normal*x+d=0 */
+    normal = cross(e0, e1);
+
+    if (!planeBoxOverlap(normal, v0, boxhalfsize))
+    {
+        return false;
+    }
+    return true; /* box and triangle overlaps */
+}
+
+inline bool Model::AABBD::overlaps_triangle( const Model::real3d &v0, const Model::real3d &v1, const Model::real3d &v2 ) const
+{
+    real3d boxcenter   = (_min + _max) * 0.5;  
+    real3d boxhalfsize = (_max - _min) * 0.5;
+    return triBoxOverlap( v0, v1, v2, boxcenter, boxhalfsize );
+}
+
+inline Model::AABBI::AABBI( const Model::_int p[] )
+{
+    for( uint32_t i = 0; i < 3; i++ ) 
+    {
+        _min[i] = p[i];
+        _max[i] = p[i];
+    }
+}  
+
+inline Model::AABBI::AABBI( const Model::_int p0[], const _int p1[] )
+{
+    for( uint32_t i = 0; i < 3; i++ ) 
+    {
+        _min[i] = p0[i];
+        _max[i] = p0[i];
+    }
+    expand( p1 );
+}  
+
+inline Model::AABBI::AABBI( const Model::_int p0[], const _int p1[], const _int p2[] )
+{
+    for( uint32_t i = 0; i < 3; i++ ) 
+    {
+        _min[i] = p0[i];
+        _max[i] = p0[i];
+    }
+    expand( p1 );
+    expand( p2 );
+}  
+
+inline void Model::AABBI::expand( const Model::_int p[] ) 
+{
+    if ( p[0] < _min[0] ) _min[0] = p[0];
+    if ( p[1] < _min[1] ) _min[1] = p[1];
+    if ( p[2] < _min[2] ) _min[2] = p[2];
+    if ( p[0] > _max[0] ) _max[0] = p[0];
+    if ( p[1] > _max[1] ) _max[1] = p[1];
+    if ( p[2] > _max[2] ) _max[2] = p[2];
+}
+
+inline bool Model::AABBI::encloses( const Model::_int p[] ) const
+{
+    return _min[0] <= p[0] &&
+           _min[1] <= p[1] &&
+           _min[2] <= p[2] &&
+           _max[0] >= p[0] &&
+           _max[1] >= p[1] && 
+           _max[2] >= p[2];
+}
+
+inline bool Model::AABBI::encloses( Model::_int x, Model::_int y, Model::_int z ) const
+{
+    const _int p[3] = { x, y, z };
+    return encloses( p );
+}
+
+inline Model::AABBU64::AABBU64( const Model::uint64 p[] )
+{
+    for( uint32_t i = 0; i < 3; i++ ) 
+    {
+        _min[i] = p[i];
+        _max[i] = p[i];
+    }
+}  
+
+inline Model::AABBU64::AABBU64( const Model::uint64 p0[], const uint64 p1[] )
+{
+    for( uint32_t i = 0; i < 3; i++ ) 
+    {
+        _min[i] = p0[i];
+        _max[i] = p0[i];
+    }
+    expand( p1 );
+}  
+
+inline Model::AABBU64::AABBU64( const Model::uint64 p0[], const uint64 p1[], const uint64 p2[] )
+{
+    for( uint32_t i = 0; i < 3; i++ ) 
+    {
+        _min[i] = p0[i];
+        _max[i] = p0[i];
+    }
+    expand( p1 );
+    expand( p2 );
+}  
+
+inline void Model::AABBU64::expand( const Model::uint64 p[] ) 
+{
+    if ( p[0] < _min[0] ) _min[0] = p[0];
+    if ( p[1] < _min[1] ) _min[1] = p[1];
+    if ( p[2] < _min[2] ) _min[2] = p[2];
+    if ( p[0] > _max[0] ) _max[0] = p[0];
+    if ( p[1] > _max[1] ) _max[1] = p[1];
+    if ( p[2] > _max[2] ) _max[2] = p[2];
+}
+
+inline bool Model::AABBU64::encloses( const Model::uint64 p[] ) const
+{
+    return _min[0] <= p[0] &&
+           _min[1] <= p[1] &&
+           _min[2] <= p[2] &&
+           _max[0] >= p[0] &&
+           _max[1] >= p[1] && 
+           _max[2] >= p[2];
+}
+
+inline bool Model::AABBU64::encloses( Model::uint64 x, Model::uint64 y, Model::uint64 z ) const
+{
+    const uint64 p[3] = { x, y, z };
+    return encloses( p );
 }
 
 inline Model::Ray::Ray( const Model::real3& a, const Model::real3& b, Model::RAY_KIND kind, Model::real32 solid_angle, Model::real32 cone_angle ) 
@@ -5583,7 +6167,7 @@ bool Model::Polygon::hit( const Model * model, const real3& origin, const real3&
                     real width_of_footprint = std::sqrt(rec.frac_uv_cov) * sqrt_nx_ny;
                     real mip_level = std::log2( width_of_footprint );
                     int nchan = model->textures->nchan;
-                    for (int imip_level = mip_level; imip_level > 0 && !(mx == 1 && my == 1); imip_level--)
+                    for (int imip_level = mip_level; imip_level > 0 && !(mx <= 1 && my <= 1); imip_level--)
                     {
                         // find the proper mip texture
                         mdata += nchan * mx * my;
@@ -5614,12 +6198,8 @@ bool Model::Polygon::hit( const Model * model, const real3& origin, const real3&
                     }
                     int i = (    u)*real(mx);
                     int j = (1.0-v)*real(my);
-                    /*
-                    if (i >= mx) i -= mx;
-                    if (j >= my) j -= my;
-                    */
-                    while (i >= mx) i -= mx;
-                    while (j >= my) j -= my;
+                    while (i >= mx && mx != 0) i -= mx;
+                    while (j >= my && my != 0) j -= my;
 
                     float opacity = float(mdata[nchan*i + nchan*mx*j+3]) / 255.0;
 
@@ -6568,6 +7148,7 @@ inline Model::uint Model::bvh_qsplit( BVH_NODE_KIND kind, Model::uint first, Mod
                     Instance temp = instances[i];
                     instances[i]  = instances[m];
                     instances[m]  = temp;
+                    break;
                 }
                 default:
                 {

@@ -148,6 +148,7 @@ STBIDEF int      stbi_write_bmp(char const *filename, int w, int h, int comp, co
 STBIDEF int      stbi_write_tga(char const *filename, int w, int h, int comp, const void  *data);
 STBIDEF int      stbi_write_hdr(char const *filename, int w, int h, int comp, const float *data);
 STBIDEF void     stbi_image_free(void *retval_from_stbi_load);  
+STBIDEF const char *stbi_failure_reason(void);
 
 // default scalar types used throughout
 #ifndef MODEL_INT_TYPE
@@ -688,6 +689,7 @@ public:
         bool vertex_info( const Model * model, uint vtx_cnt, real3 p[] ) const;
         bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
                   real solid_angle, real t_min, real t_max, HitRecord& rec ) const;
+        inline bool is_emissive( const Model * model ) const;
     };
 
     class Vertex
@@ -725,7 +727,7 @@ public:
         uint            map_refl_i;         // reflection map
         uint64_t        unused[8];          // leave room for temporary hacks
 
-        inline bool is_emissive( void ) { return Ke.c[0] != 0.0 || Ke.c[1] != 0.0 || Ke.c[2] != 0.0; }
+        inline bool is_emissive( void ) const { return Ke.c[0] != 0.0 || Ke.c[1] != 0.0 || Ke.c[2] != 0.0; }
     };
 
     // Graphs will replace simple Materials
@@ -1103,9 +1105,19 @@ public:
     // useful methods for allocating above structures in this Model's arrays with proper resizing, etc.
     // these all return indexes, which is what the user should store as pointers can change as arrays are resized later
     inline uint make_string( std::string s );     // returns index in strings[] array
+    inline uint make_texture( std::string name, std::string dir );                                                      // from file 
+    inline uint make_texture( std::string name, const unsigned char * data, uint w, uint h, uint nchan );               // from w * h * nchan bytes already in memory
+    inline uint make_constant_texture( std::string name, const real4& value );                                          // from one RGBA value 
+    inline uint make_constant_texture( std::string name, const real3& value );                                          // from one RGB  value 
+    inline uint make_material( std::string name, real3 Ka, real3 Kd, real3 Ke, real3 Ks, real3 Tf, real Tr, real Ns, real Ni, real d, real illum,
+                               uint map_Ka_i, uint map_Kd_i, uint map_Ke_i, uint map_Ks_i, uint map_Ns_i, uint map_d_i, uint map_Bump_i, uint map_refl_i );
+    inline uint make_emissive_material( std::string name, real3 Ke, uint map_Ke_i=uint(-1), real d=1.0 );                        
+
     inline uint make_vertex( const real3& p, const real3& n, const real2& uv );                                         // position, normal, and texcoord
     inline uint make_polygon( uint vtx_cnt, const real3 p[], const real3 n[], const real2 uv[], uint mtl_i=uint(-1) );  // positions, normals, texcoords
     inline uint make_polygon( uint vtx_cnt, const real3 p[], uint mtl_i=uint(-1) );                                     // position, use surface normal, fudge texcoords
+    inline uint make_sphere( const real3& center, real radius, uint nlong, uint nlat, uint mtl_i=uint(-1) );            // center, radius, long+lat divisions
+    inline uint make_skybox( const real3& center, real radius, const real3& up, uint nlong, uint nlat, uint mtl_i=uint(-1) ); // center, radius, up vector, long+lat divisions
     inline uint make_matrix( void );                                                                                    // returns an identity matrix for starters
     inline uint make_instance( std::string name, std::string model_name, Model * model, uint matrix=uint(-1), std::string file_name="" ); // MODEL_PTR instance 
 
@@ -1273,7 +1285,7 @@ private:
     bool load_fsc( std::string fsc_file, std::string dir_name );        // .fscene 
     bool load_obj( std::string obj_file, std::string dir_name );        // .obj
     bool load_mtl( std::string mtl_file, std::string dir_name, bool replacing=false );
-    bool load_tex( const char * tex_name, std::string dir_name, Texture *& texture );
+    bool load_tex( const char * tex_name, std::string dir_name, Texture *& texture, const unsigned char * data=nullptr, uint w=0, uint h=0, uint nchan=0 );
     bool load_gph( std::string gph_file, std::string dir_name, std::string base_name, std::string ext_name );
     bool load_nvdb( std::string nvdb_file, std::string dir_name, std::string base_name, std::string ext_name );
 
@@ -1355,6 +1367,19 @@ inline static void minmax( const Model::real64 x0, const Model::real64 x1, const
     max = std::max(std::max(x0, x1), x2);
 }
 
+inline Model::real length_2D_line(Model::real x0, Model::real y0, Model::real x1, Model::real y1) {
+    return std::sqrt( (x0-x1)*(x0-x1) + (y0-y1)*(y0-y1) );
+}
+
+inline Model::real area_2D_triangle(Model::real x0, Model::real y0, Model::real x1, Model::real y1, Model::real x2, Model::real y2) {
+    Model::real A = length_2D_line(x0,y0,x1,y1);
+    Model::real B = length_2D_line(x0,y0,x2,y2);
+    Model::real C = length_2D_line(x2,y2,x1,y1);
+    Model::real S = 0.5*(A+B+C);
+    return std::sqrt(S*(S-A)*(S-B)*(S-C));
+}
+
+
 //--------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------
 //
@@ -1389,6 +1414,91 @@ inline Model::real3 cross( const Model::real3& v0, const Model::real3& v1 )     
 inline Model::real3 lerp( const Model::real3& v0, const Model::real3& v1, Model::real t )                       { return (Model::real(1.0) - t) * v0 + t * v1;                          }
 inline Model::real3 lerp( const Model::real3 &v0, const Model::real3 &v1, const Model::real3 &vt)               { return (Model::real3(1,1,1) - vt) * v0 + vt * v1;                     }
 
+inline Model::real3 spherical_to_cartesian( const Model::real3& center, Model::real radius, Model::real theta, Model::real phi ) 
+{
+    Model::real x = std::cos(phi)*std::sin(theta);
+    Model::real y = std::sin(phi)*std::sin(theta);
+    Model::real z = std::cos(theta);
+    return center + radius*Model::real3(x,y,z);
+}
+
+// find texture coordinates for a point p on a unit sphere centered at origin
+// u and v both shifted to have minimum at 0 and then scaled to 0,1
+// u replacerd with 1-u to ensure proper glones from standard maps
+void get_sphere_uv( const Model::real3& p, Model::real& u, Model::real& v) {
+    Model::real phi = std::atan2(p.z(), p.x());
+    Model::real y = p.y();
+    if ( y >  1.0 ) y =  1.0;
+    if ( y < -1.0 ) y = -1.0;
+    Model::real theta = std::asin(y);
+    u = 1.0 - (phi + PI) * ONE_OVER_PI2;
+    v = (theta + PI_DIV_2) * ONE_OVER_PI;
+}
+
+// more complex than polar, but according to 
+// A Realistic Camera Model for Computer Graphics (Kolb et al)
+// has 15% improvement in error over polar for camera lens sampling
+// possibly similar improvement for sampling cones?
+inline void concentric_point_on_unit_disk(Model::real s, Model::real t, Model::real& x, Model::real& y) {
+    Model::real a = mulby2(s) - 1.0;
+    Model::real b = mulby2(t) - 1.0;
+    Model::real rad, theta;
+
+    if (std::abs(a) > std::abs(b)) {
+        rad = a;
+        theta = PI_DIV_4*(b/a);
+    }
+    else {
+        rad = b;
+        theta = PI_DIV_2 - PI_DIV_4*(a/b);
+    }
+    sincos(theta, y, x, rad);
+}
+
+// mapping from square to disk then to cartesian
+// Shirley/Chiu JGT concentric mapping
+inline void concentric_square_disk(Model::real x, Model::real y, Model::real& u, Model::real& v) {
+    Model::real  a = 2.0*x-1.0;
+    Model::real  b = 2.0*y-1.0;
+    Model::real r, phi;
+    if (a > -b) {
+        if (a > b) {
+            r = a;
+            phi = (PI_DIV_4)*(b/a) ;
+        }
+        else {
+            r = b;
+            phi = (PI_DIV_4)*(2.0-(a/b));
+        }
+    }
+    else {
+        if (a < b) {
+            r = -a;
+            phi = (PI_DIV_4)*(4.0 + (b/a));
+        }
+        else {
+            r = -b;
+            if (b != 0.0)
+                phi = (PI_DIV_4)*(6.0 - (a/b));
+            else
+                phi = 0.0;
+        }
+    }
+    u = r*std::cos(phi);
+    v = r*std::sin(phi);
+}
+
+// Pixar's JGT paper.   Produces two tangent vectors that
+// are an orthonormal basis b1, b2, n
+inline void branchlessONB(const Model::real3 &n, Model::real3 &b1, Model::real3 &b2)
+{
+    Model::real sign = std::copysign(Model::real(1), n[2]);
+    const Model::real a = -rcp(sign + n[2]);
+    const Model::real b = n[0] * n[1] * a;
+    b1 = Model::real3(1.0 + sign * sqr(n[0]) * a, sign * b, -sign * n[0]);
+    b2 = Model::real3(b, sign + sqr(n[1]) * a, -n[1]);
+}
+        
 inline Model::real3d operator +( const Model::real3d& v1, const Model::real3d& v2 )                             { return Model::real3d(v1.c[0] + v2.c[0], v1.c[1] + v2.c[1], v1.c[2] + v2.c[2]); }
 inline Model::real3d operator -( const Model::real3d& v1, const Model::real3d& v2 )                             { return Model::real3d(v1.c[0] - v2.c[0], v1.c[1] - v2.c[1], v1.c[2] - v2.c[2]); }
 inline Model::real3d operator *( const Model::real3d& v1, const Model::real3d& v2 )                             { return Model::real3d(v1.c[0] * v2.c[0], v1.c[1] * v2.c[1], v1.c[2] * v2.c[2]); }
@@ -1402,6 +1512,14 @@ inline Model::real   dot( const Model::real3d& v0, const Model::real3d& v1 )    
 inline Model::real3d cross( const Model::real3d& v0, const Model::real3d& v1 )                                  { return v0.cross( v1 );                                                }
 inline Model::real3d lerp( const Model::real3d& v0, const Model::real3d& v1, Model::real64 t )                  { return (Model::real64(1.0) - t) * v0 + t * v1;                        }
 inline Model::real3d lerp( const Model::real3d &v0, const Model::real3d &v1, const Model::real3d &vt)           { return (Model::real3d(1,1,1) - vt) * v0 + vt * v1;                    }
+
+inline Model::real3d spherical_to_cartesian( const Model::real3d& center, Model::real64 radius, Model::real64 theta, Model::real64 phi ) 
+{
+    Model::real64 x = std::cos(phi)*std::sin(theta);
+    Model::real64 y = std::sin(phi)*std::sin(theta);
+    Model::real64 z = std::cos(theta);
+    return center + radius*Model::real3d(x,y,z);
+}
 
 inline Model::real4 operator +( const Model::real4& v1, const Model::real4& v2 )                                { return Model::real4(v1.c[0] + v2.c[0], v1.c[1] + v2.c[1], v1.c[2] + v2.c[2], v1.c[3] + v2.c[3] ); }
 inline Model::real4 operator -( const Model::real4& v1, const Model::real4& v2 )                                { return Model::real4(v1.c[0] - v2.c[0], v1.c[1] - v2.c[1], v1.c[2] - v2.c[2], v1.c[3] - v2.c[3] ); }
@@ -2399,6 +2517,71 @@ inline uint Model::make_string( std::string s )
     return s_i;
 }
 
+inline uint Model::make_texture( std::string name, std::string dir )
+{
+    Texture * texture;
+    if ( !load_tex( name.c_str(), dir, texture ) ) return uint(-1);
+    return texture - textures;
+}
+
+inline uint Model::make_texture( std::string name, const unsigned char * data, uint nx, uint ny, uint nchan )
+{
+    Texture * texture;
+    if ( !load_tex( name.c_str(), "", texture, data, nx, ny, nchan ) ) return uint(-1);
+    return texture - textures;
+}
+
+inline uint Model::make_constant_texture( std::string name, const real4& value )
+{
+    unsigned char data[4];
+    for( uint c = 0; c < 4; c++ )
+    {
+        real rgba = value[c];
+        data[c] = (rgba >= 1.0) ? 255 : (rgba < 0.0) ? 0 : uint(rgba*255);
+    }
+    return make_texture( name.c_str(), data, 1, 1, 4 );
+}
+
+inline uint Model::make_constant_texture( std::string name, const real3& value )
+{
+    return make_constant_texture( name, Model::real4(value[0], value[1], value[2], 1.0) ); 
+}
+
+inline uint Model::make_material( std::string name, real3 Ka, real3 Kd, real3 Ke, real3 Ks, real3 Tf, real Tr, real Ns, real Ni, real d, real illum,
+                                  uint map_Ka_i, uint map_Kd_i, uint map_Ke_i, uint map_Ks_i, uint map_Ns_i, uint map_d_i, uint map_Bump_i, uint map_refl_i )
+{
+    perhaps_realloc<Material>( materials, hdr->mtl_cnt, max->mtl_cnt, 1 );
+    uint mtl_i = hdr->mtl_cnt++;
+    Material * material = &materials[mtl_i];
+    material->name_i = make_string( name );
+    material->Ka = Ka;
+    material->Kd = Kd;
+    material->Ke = Ke;
+    material->Ks = Ks;
+    material->Tf = Tf;
+    material->Tr = Tr;
+    material->Ns = Ns;
+    material->Ni = Ni;
+    material->d = d;
+    material->illum = illum;
+    material->map_Ka_i = map_Ka_i;
+    material->map_Kd_i = map_Kd_i;
+    material->map_Ke_i = map_Ke_i;
+    material->map_Ks_i = map_Ks_i;
+    material->map_Ns_i = map_Ns_i;
+    material->map_d_i = map_d_i;
+    material->map_Bump_i = map_Bump_i;
+    material->map_refl_i = map_refl_i;
+    return mtl_i;
+}
+
+inline uint Model::make_emissive_material( std::string name, real3 Ke, uint map_Ke_i, real d )
+{
+    real3 zero3( 0.0, 0.0, 0.0 );
+    uint  no_map = uint(-1);
+    return make_material( name, zero3, zero3, Ke, zero3, zero3, 0.0, 0.0, 0.0, d, 0.0, no_map, no_map, map_Ke_i, no_map, no_map, no_map, no_map, no_map );                         
+}
+
 inline uint Model::make_vertex( const real3& p, const real3& n, const real2& uv ) 
 {
     perhaps_realloc<real3>( positions, hdr->pos_cnt, max->pos_cnt, 1 );
@@ -2413,6 +2596,7 @@ inline uint Model::make_vertex( const real3& p, const real3& n, const real2& uv 
     positions[hdr->pos_cnt++] = p;
     normals[hdr->norm_cnt++] = n;
     texcoords[hdr->texcoord_cnt++] = uv;
+    mdout << "Model::make_vertex:     vtx_i =" << vtx_i << " p=" << p << " n=" << n << " uv=" << uv << "\n";
     return vtx_i;
 }
 
@@ -2428,9 +2612,14 @@ inline uint Model::make_polygon( uint vtx_cnt, const real3 p[], const real3 n[],
     real len = poly->normal.length();
     poly->area = ::divby2(len);                       // correct only for triangles
     poly->normal /= len;
+    mdout << "Model::make_polygon: poly_i=" << poly_i << " mtl_i=" << mtl_i << " normal=" << poly->normal << " area=" << poly->area << "\n";
     for( uint i = 0; i < vtx_cnt; i++ )
     {
         make_vertex( p[i], n[i], uv[i] );
+    }
+    if ( mtl_i != uint(-1) && materials[mtl_i].is_emissive() ) {
+        perhaps_realloc<uint>( emissive_polygons, hdr->emissive_poly_cnt, max->emissive_poly_cnt, 1 );
+        emissive_polygons[hdr->emissive_poly_cnt++] = poly_i;
     }
     return poly_i;
 }
@@ -2454,7 +2643,169 @@ inline uint Model::make_polygon( uint vtx_cnt, const real3 p[], uint mtl_i )
         real2 uv( u, v );
         make_vertex( p[i], poly->normal, uv );
     }
+    if ( mtl_i != uint(-1) && materials[mtl_i].is_emissive() ) {
+        perhaps_realloc<uint>( emissive_polygons, hdr->emissive_poly_cnt, max->emissive_poly_cnt, 1 );
+        emissive_polygons[hdr->emissive_poly_cnt++] = poly_i;
+    }
     return poly_i;
+}
+
+inline uint Model::make_sphere( const real3& center, real radius, uint nlong, uint nlat, uint mtl_i ) 
+{
+    real delta_u = rcp(real(nlong-1));
+    real delta_v = rcp(real(nlat-1));
+    uint first_poly_i = hdr->poly_cnt;
+    for ( uint i = 0; i < nlong; i++ ) {
+        for ( uint j = 0; j < nlat; j++ ) {
+            real u = real(i)/real(nlong-1);
+            real v = real(j)/real(nlat-1);
+            real phi = PI2*u;
+            real theta = PI*v;
+            real next_phi = phi + PI2*delta_u;
+            real next_theta = theta + PI*delta_v;
+            real3 p00 = spherical_to_cartesian( center, radius, theta, phi );
+            real3 p01 = spherical_to_cartesian( center, radius, next_theta, phi );
+            real3 p10 = spherical_to_cartesian( center, radius, theta, next_phi );
+            real3 p11 = spherical_to_cartesian( center, radius, next_theta, next_phi );
+            real3 n00 = (p00-center).normalized();
+            real3 n01 = (p01-center).normalized();
+            real3 n10 = (p10-center).normalized();
+            real3 n11 = (p11-center).normalized();
+            real3 p1[3]  = { p00, p10, p01 };
+            real3 p2[3]  = { p11, p10, p01 };
+            real3 n1[3]  = { n00, n10, n01 };
+            real3 n2[3]  = { n11, n10, n01 };
+            real2 uv00   = real2(u, v);
+            real2 uv01   = real2(u, v+delta_v);
+            real2 uv10   = real2(u+delta_u, v);
+            real2 uv11   = real2(u+delta_u, v+delta_v);
+            real2 uv1[3] = { uv00, uv10, uv01 }; 
+            real2 uv2[3] = { uv11, uv10, uv01 };
+            make_polygon( 3, p1, n1, uv1, mtl_i );
+            make_polygon( 3, p2, n2, uv2, mtl_i );
+        }
+    }
+    return first_poly_i;
+}
+
+inline uint Model::make_skybox( const real3& center, real radius, const real3& up, uint nlong, uint nlat, uint mtl_i ) 
+{
+    assert(center == real3(0,0,0)); // temporary requirement until this code gets merged with previous routine
+
+    float x0, x1, x2, x3;
+    float y0, y1, y2, y3;
+
+    real3 b1, b0;
+    branchlessONB(up, b1, b0) ;
+
+    uint first_poly_i = hdr->poly_cnt;
+    for ( uint i = 0; i < nlong; i++ ) {
+        for ( uint j = 0; j < nlat; j++ ) {
+            real x0, x1, x2, x3;
+            real y0, y1, y2, y3;
+            real z0, z1, z2, z3;
+            real A1, A2, A3, A4;
+            real u0, v0, u1, v1;
+            u0 = real(i) / real(nlong);
+            v0 = real(j) / real(nlat);
+            u1 = real(i + 1) / real(nlong);
+            v1 = real(j + 1) / real(nlat);
+            concentric_square_disk(u0, v0, x0, y0);
+            concentric_square_disk(u1, v0, x1, y1);
+            concentric_square_disk(u1, v1, x2, y2);
+            concentric_square_disk(u0, v1, x3, y3);
+
+            A1 = area_2D_triangle(x0, y0, x1, y1, x2, y2);
+            A2 = area_2D_triangle(x0, y0, x2, y2, x3, y3);
+            A3 = area_2D_triangle(x0, y0, x1, y1, x3, y3);
+            A4 = area_2D_triangle(x1, y1, x2, y2, x3, y3);
+            z0 = x0*x0 + y0*y0;
+            z1 = x1*x1 + y1*y1;
+            z2 = x2*x2 + y2*y2;
+            z3 = x3*x3 + y3*y3;
+            if (z0 >= 0.99)
+                z0 = 0.0;
+            else
+                z0 = std::sqrt(1.0-z0);
+            if (z1 >= 0.99)
+                z1 = 0.0;
+            else
+                z1 = std::sqrt(1.0-z1);
+            if (z2 >= 0.99)
+                z2 = 0.0;
+            else
+                z2 = std::sqrt(1.0-z2);
+            if (z3 >= 0.99)
+                z3 = 0.0;
+            else
+                z3 = std::sqrt(1.0-z3);
+            real3 p0(x0,  y0, z0);
+            real3 p1(x1,  y1, z1);
+            real3 p2(x2,  y2, z2);
+            real3 p3(x3,  y3, z3);
+            p0 = p0[0]*b0 + p0[1]*b1 + p0[2]*up;
+            p1 = p1[0]*b0 + p1[1]*b1 + p1[2]*up;
+            p2 = p2[0]*b0 + p2[1]*b1 + p2[2]*up;
+            p3 = p3[0]*b0 + p3[1]*b1 + p3[2]*up;
+            p0 *= radius;
+            p1 *= radius;
+            p2 *= radius;
+            p3 *= radius;
+            real3 n0 = (center-p0).normalized();
+            real3 n1 = (center-p1).normalized();
+            real3 n2 = (center-p2).normalized();
+            real3 n3 = (center-p3).normalized();
+            real2 uv0 = real2(u0, v0);
+            real2 uv1 = real2(u1, v0);
+            real2 uv2 = real2(u1, v1);
+            real2 uv3 = real2(u0, v1);
+            real3 p[3];
+            real3 n[3];
+            real2 uv[3];
+            if ( A1/A2 + A2/A1 < A3/A4 + A4/A3 ) {
+                p[0]  = p0;  p[1]  = p1;  p[2]  = p2; 
+                n[0]  = n0;  n[1]  = n1;  n[2]  = n2; 
+                uv[0] = uv0; uv[1] = uv1; uv[2] = uv2;
+                make_polygon( 3, p, n, uv, mtl_i );
+
+                p[0]  = p0;  p[1]  = p2;  p[2]  = p3; 
+                n[0]  = n0;  n[1]  = n2;  n[2]  = n3; 
+                uv[0] = uv0; uv[1] = uv2; uv[2] = uv3;
+                make_polygon( 3, p, n, uv, mtl_i );
+
+                p[0]  = -p0;  p[1] = -p2; p[2]  = -p1; 
+                n[0]  = -n0;  n[1] = -n2; n[2]  = -n1; 
+                uv[0] = uv0; uv[1] = uv2; uv[2] = uv1;
+                make_polygon( 3, p, n, uv, mtl_i );
+
+                p[0]  = -p0;  p[1] = -p3; p[2]  = -p2; 
+                n[0]  = -n0;  n[1] = -n3; n[2]  = -n2; 
+                uv[0] = uv0; uv[1] = uv3; uv[2] = uv2;
+                make_polygon( 3, p, n, uv, mtl_i );
+            } else {
+                p[0]  = p0;  p[1]  = p1;  p[2]  = p3; 
+                n[0]  = n0;  n[1]  = n1;  n[2]  = n3; 
+                uv[0] = uv0; uv[1] = uv1; uv[2] = uv3;
+                make_polygon( 3, p, n, uv, mtl_i );
+
+                p[0]  = p1;  p[1]  = p2;  p[2]  = p3; 
+                n[0]  = n1;  n[1]  = n2;  n[2]  = n3; 
+                uv[0] = uv1; uv[1] = uv2; uv[2] = uv3;
+                make_polygon( 3, p, n, uv, mtl_i );
+
+                p[0]  = -p0;  p[1] = -p3; p[2]  = -p1; 
+                n[0]  = -n0;  n[1] = -n3; n[2]  = -n1; 
+                uv[0] = uv0; uv[1] = uv3; uv[2] = uv1;
+                make_polygon( 3, p, n, uv, mtl_i );
+
+                p[0]  = -p1;  p[1] = -p3; p[2]  = -p2; 
+                n[0]  = -n1;  n[1] = -n3; n[2]  = -n2; 
+                uv[0] = uv1; uv[1] = uv3; uv[2] = uv2;
+                make_polygon( 3, p, n, uv, mtl_i );
+            }
+        }
+    }
+    return first_poly_i;
 }
 
 inline uint Model::make_matrix( void )
@@ -3837,7 +4188,7 @@ bool Model::load_mtl( std::string mtl_file, std::string dir_name, bool replacing
 
 uint Model::debug_tex_i = 1; // uint(-1);
 
-bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Texture *& texture )
+bool Model::load_tex( const char * tex_name, std::string dir_name, Texture *& texture, const unsigned char * data, uint w, uint h, uint nchan )
 {
     //---------------------------------------------
     // Allocate Texture structure
@@ -3864,6 +4215,7 @@ bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Textur
     //---------------------------------------------
     // Dissect the path so we can replace the extension.
     //---------------------------------------------
+    bool from_file = data == nullptr;
     std::string base_name;
     std::string ext_name;
     dissect_path( file_name, dir_name, base_name, ext_name );
@@ -3893,7 +4245,6 @@ bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Textur
     }
     texture->texel_i = hdr->texel_cnt;  // always
 
-    unsigned char * data = nullptr;
     uint width = 0;
     uint height = 0;
     uint byte_width = 0;
@@ -3905,11 +4256,16 @@ bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Textur
                 //---------------------------------------------
                 // READ NON-ASTC FILE FOR MIP 0
                 //---------------------------------------------
-                int    w;
-                int    h;
-                int    nchan;
-                data = stbi_load( file_name, &w, &h, &nchan, 0 );
-                rtn_assert( data != nullptr, "unable to read in texture file " + std::string( file_name ) );
+                if ( data == nullptr ) {
+                    int ww, hh, nnchan;
+                    data = stbi_load( file_name, &ww, &hh, &nnchan, 0 );
+                    rtn_assert( data != nullptr, "unable to read in texture file " + std::string( file_name ) + ", error reason: " + std::string(stbi_failure_reason()) );
+                    w = ww;
+                    h = hh;
+                    nchan = nnchan;
+                } else {
+                    assert( w > 0 && h > 0 && nchan > 0 );
+                }
                 texture->width  = w;
                 texture->height = h;
                 texture->nchan  = nchan;
@@ -3948,7 +4304,7 @@ bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Textur
                             {
                                 uint fjj = tj*2 + fj;
                                 if ( fjj >= width ) continue;
-                                unsigned char * frgb = data + fii*byte_width + fjj*texture->nchan;
+                                const unsigned char * frgb = data + fii*byte_width + fjj*texture->nchan;
                                 for( uint c = 0; c < texture->nchan; c++ )
                                 {
                                     sum[c] += frgb[c];
@@ -4078,7 +4434,7 @@ bool Model::load_tex( const char * tex_name, std::string dir_name, Model::Textur
         //---------------------------------------------
         if ( hdr->mipmap_filter == MIPMAP_FILTER::NONE || (width == 1 && height == 1) ) break;
     } 
-    if ( data != nullptr ) delete data;
+    if ( from_file && data != nullptr ) delete data;
     return true;
 }
 
@@ -6071,7 +6427,7 @@ bool Model::Polygon::hit( const Model * model, const real3& origin, const real3&
         real d = direction.dot( normal );
         real t = (p0 - origin).dot( normal ) / d;
         uint poly_i = this - model->polygons;
-        mdout << "Model::Polygon::hit: poly_i=" << poly_i << " origin=" << origin << 
+        mdout << "Model::Polygon::hit: model=" << model << " poly_i=" << poly_i << " origin=" << origin << 
                                      " direction=" << direction << " direction_inv=" << direction_inv << " solid_angle=" << solid_angle <<
                                      " d=" << d << " t=" << t << " t_min=" << t_min << " t_max=" << t_max << "\n";
         if ( t > t_min && t < t_max ) {
@@ -6088,7 +6444,7 @@ bool Model::Polygon::hit( const Model * model, const real3& origin, const real3&
             real area_2x = area * 2.0;
             real beta    = area1/area_2x;
             real gamma   = area2/area_2x;
-            mdout << "Model::Polygon::hit: poly_i=" << poly_i << " beta=" << beta << " gamma=" << gamma << "\n";
+            mdout << "Model::Polygon::hit: poly_i=" << poly_i << " p0=" << p0 << " p1=" << p1 << " p2=" << p2 << " beta=" << beta << " gamma=" << gamma << "\n";
             if ( beta >= 0.0 && gamma >= 0.0 && (beta + gamma) <= 1.0 ) {
                 real alpha = 1.0 - beta - gamma;
 
@@ -6204,13 +6560,14 @@ bool Model::Polygon::hit( const Model * model, const real3& origin, const real3&
                     float opacity = float(mdata[nchan*i + nchan*mx*j+3]) / 255.0;
 
                     if (float(MODEL_UNIFORM_FN()) > opacity) {
+                        mdout << "Model::Polygon::hit: NOT HIT poly_i=" << poly_i << " uniform() > opacity=" << opacity << "\n";
                         return false;
                     }
                 }
 
                 rec.model = model;
 
-                mdout << "Model::Polygon::hit: poly_i=" << poly_i << " HIT t=" << rec.t << 
+                mdout << "Model::Polygon::hit: HIT poly_i=" << poly_i << " t=" << rec.t << 
                          " p=" << rec.p << " normal=" << rec.normal << 
                          " frac_uv_cov=" << rec.frac_uv_cov << 
                          " u=" << rec.u << " v=" << rec.v << " mtl_i=" << mtl_i << "\n";
@@ -6220,6 +6577,11 @@ bool Model::Polygon::hit( const Model * model, const real3& origin, const real3&
     }
     mdout << "Model::Polygon::hit: NOT a hit, poly_i=" << (this - model->polygons) << "\n";
     return false;
+}
+
+bool Model::Polygon::is_emissive( const Model * model ) const
+{
+    return mtl_i != uint(-1) && model->materials[mtl_i].is_emissive();
 }
 
 bool Model::Volume::bounding_box( const Model * model, AABB& box, real padding ) const
@@ -6836,7 +7198,7 @@ bool Model::Volume::hit( const Model * model, const real3& origin, const real3& 
     // We use this "alpha" as the probability of stopping at that voxel.
     //-------------------------------------------------------------------
     real64 max_length_within_voxel_inv = 1.0 / grid->world_voxel_size.length();
-    mdout << "Model::Volume::hit: origin=" << origin << " direction=" << direction << 
+    mdout << "Model::Volume::hit: model=" << model << " origin=" << origin << " direction=" << direction << 
                                 " grid_i=" << grid_i << " grid_density_i=" << grid_density_i << " grid_normal_i=" << grid_normal_i << 
                                 " grid_IOR_i=" << grid_IOR_i << " grid_F0_i=" << grid_F0_i << 
                                 " world_box=" << grid->world_box << " world_voxel_size=" << grid->world_voxel_size << " world_voxel_size_inv=" << grid->world_voxel_size_inv <<
@@ -7041,9 +7403,9 @@ bool Model::Instance::hit( const Model * model, const real3& origin, const real3
     M_inv->transform( origin, t_origin );
     M_inv->transform( direction, t_direction );
     M_inv->transform( direction_inv, t_direction_inv );
-    mdout << "Model::Instance::hit: M_inv=" << *M_inv << 
+    mdout << "Model::Instance::hit: model=" << model << " M_inv=" << *M_inv << 
                                   " origin="   << origin   << " direction="   << direction   << " direction_inv="   << direction_inv << 
-                                  " t_origin=" << t_origin << " t_direction=" << t_direction << " t_direction_inv=" << t_direction_inv << "\n";
+                                  " t_model=" << t_model << " t_origin=" << t_origin << " t_direction=" << t_direction << " t_direction_inv=" << t_direction_inv << "\n";
 
     BVH_Node * t_bvh = &t_model->bvh_nodes[t_model->hdr->bvh_root_i];
     if ( !t_bvh->hit( t_model, t_origin, t_direction, t_direction_inv, solid_angle, t_min, t_max, rec ) ) return false;
@@ -7242,7 +7604,7 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
 {
     bool r = false;
     uint bvh_i = this - model->bvh_nodes;
-    mdout << "Model::BVH_Node::hit: bvh_i=" << bvh_i << "\n";
+    mdout << "Model::BVH_Node::hit: model=" << model << " bvh_i=" << bvh_i << "\n";
     real tmin = t_min;
     real tmax = t_max;
     if ( box.hit( origin, direction, direction_inv, tmin, tmax ) ) {

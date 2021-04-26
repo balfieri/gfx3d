@@ -10763,10 +10763,6 @@ STBIDEF int      stbi_is_hdr_from_file(FILE *f);
 #endif // STBI_NO_STDIO
 
 
-// get a VERY brief reason for failure
-// NOT THREADSAFE
-STBIDEF const char *stbi_failure_reason  (void);
-
 // get image dimensions & components without fully decoding
 STBIDEF int      stbi_info_from_memory(stbi_uc *buffer, int len, int *x, int *y, int *comp);
 STBIDEF int      stbi_info_from_callbacks(stbi_io_callbacks *clbk, void *user, int *x, int *y, int *comp);

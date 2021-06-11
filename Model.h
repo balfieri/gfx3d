@@ -269,6 +269,8 @@ public:
         inline real     dot( const real4 &v2 ) const;
         inline real     length( void ) const;
         inline real     length_sqr( void ) const ;
+        inline real     distance( const real4& other ) const;
+        inline real     distance_sqr( const real4& other ) const;
         inline real4&   normalize( void );
         inline real4    normalized( void ) const;
         inline void     clamp( real min=0.0, real max=1.0 );
@@ -310,6 +312,8 @@ public:
         inline real3d   cross( const real3d &v2 ) const;
         inline real64   length( void ) const;
         inline real64   length_sqr( void ) const ;
+        inline real64   distance( const real3d& other ) const;
+        inline real64   distance_sqr( const real3d& other ) const;
         inline real3d&  normalize( void );
         inline real3d   normalized( void ) const;
         inline void     clamp( real64 min=0.0, real64 max=1.0 );
@@ -359,7 +363,9 @@ public:
         inline real     dot( const real3 &v2 ) const;
         inline real3    cross( const real3 &v2 ) const;
         inline real     length( void ) const;
-        inline real     length_sqr( void ) const ;
+        inline real     length_sqr( void ) const;
+        inline real     distance( const real3& other ) const;
+        inline real     distance_sqr( const real3& other ) const;
         inline real3&   normalize( void );
         inline real3    normalized( void ) const;
         inline void     clamp( real min=0.0, real max=1.0 );
@@ -403,6 +409,8 @@ public:
         inline real     dot( const real2 &v2 ) const;
         inline real     length( void ) const;
         inline real     length_sqr( void ) const ;
+        inline real     distance( const real2& other ) const;
+        inline real     distance_sqr( const real2& other ) const;
         inline real2&   normalize( void );
         inline real2    normalized( void ) const;
         inline void     clamp( real min=0.0, real max=1.0 );
@@ -467,8 +475,10 @@ public:
 
         bool        force_tone_none;        // force using no tone-mapping?
         bool        force_tone_avg_luminance; // force the use of tone_avg_luminance above?
-        bool        unused1[6];
-        uint64_t    unused2[4];             // leave room for temporary hacks
+        bool        unused1[6];             // leave room for temporary hacks
+        real        sky_radius;             // radius of background or sky box
+        real        unused2[1];             // leave room for temporary hacks
+        uint64_t    unused3[3];             // leave room for temporary hacks
     };
 
     class Object
@@ -544,6 +554,7 @@ public:
         inline real volume(void) const         { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
         bool encloses( const real3& p ) const;
         bool encloses( const AABB& other ) const;
+        bool overlaps( const AABB& other ) const;
         bool hit( const real3& origin, const real3& direction, const real3& direction_inv, real& tmin, real& tmax ) const; 
     };
 
@@ -554,10 +565,12 @@ public:
         real3d           _max;               // bounding box max
 
         inline AABBD( void ) {}
-        AABBD( const real3d& p );             // init with one point
+        AABBD( const real3d& p );            // init with one point
         AABBD( const real3d& p0, const real3d& p1 );
         AABBD( const real3d& p0, const real3d& p1, const real3d& p2 );
         AABBD( const AABB& aabb );
+
+        inline AABB to_aabb( void ) const        { AABB aabb; aabb._min[0] = _min[0]; aabb._min[1] = _min[1]; aabb._min[2] = _min[2]; aabb._max[0] = _max[0]; aabb._max[1] = _max[1]; aabb._max[1] = _max[1]; return aabb; }
 
         inline real3d min() const { return _min; }
         inline real3d max() const { return _max; }
@@ -568,8 +581,9 @@ public:
         inline real64 volume(void) const         { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
         bool encloses( const real3d& p ) const;
         bool encloses( const AABBD& other ) const;
+        bool overlaps( const AABBD& other ) const;
+        bool overlaps_triangle( const Model::real3d &v0, const Model::real3d &v1, const Model::real3d &v2, Model::real3d * p_ptr=nullptr ) const;
         bool hit( const real3d& origin, const real3d& direction, const real3d& direction_inv, real64& tmin, real64& tmax ) const; 
-        bool overlaps_triangle( const Model::real3d &v0, const Model::real3d &v1, const Model::real3d &v2 ) const;
     };
 
     class AABBI                             // axis aligned bounding box with integers
@@ -687,6 +701,7 @@ public:
         bool bounding_box( const Model * model, AABB& box, real padding=0 ) const;
         bool vertex_info( const Model * model, uint vtx_cnt, real3 p[], real3 n[], real2 uv[] ) const;
         bool vertex_info( const Model * model, uint vtx_cnt, real3 p[] ) const;
+        bool sample( const Model * model, HitRecord& rec, real solid_angle=0.0, real dir_sqr=0.0 ) const;  // rec.p must be set on input
         bool hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv, 
                   real solid_angle, real t_min, real t_max, HitRecord& rec ) const;
         inline bool is_emissive( const Model * model ) const;
@@ -845,6 +860,7 @@ public:
         uint64           voxel_i;               // index into voxels[] of first voxel 
 
         bool   bounding_box( const Model * model, AABB& box, real padding=0 ) const;
+        bool   bounding_box( const Model * model, _int x, _int y, _int z, AABBD& box ) const;
         bool   is_active( const Model * model, _int x, _int y, _int z ) const;
         const void * value_ptr( const Model * model, _int x, _int y, _int z, bool * is_active=nullptr ) const;
         _int   int_value( const Model * model, _int x, _int y, _int z ) const;
@@ -1117,6 +1133,8 @@ public:
     inline uint make_polygon( uint vtx_cnt, const real3 p[], const real3 n[], const real2 uv[], uint mtl_i=uint(-1) );  // positions, normals, texcoords
     inline uint make_polygon( uint vtx_cnt, const real3 p[], uint mtl_i=uint(-1) );                                     // position, use surface normal, fudge texcoords
     inline uint make_sphere( const real3& center, real radius, uint nlong, uint nlat, uint mtl_i=uint(-1) );            // center, radius, long+lat divisions
+    inline uint make_box( const real3 front[4], const real3 back[4], uint mtl_i=uint(-1) );                             // front and back face vertices (CCW from bottom-left as looking from front)
+    inline uint make_aabox( const AABB& box, uint mtl_i=uint(-1) );                                                     // axis-aligned box (simpler case)
     inline uint make_skybox( const real3& center, real radius, const real3& up, uint nlong, uint nlat, uint mtl_i=uint(-1) ); // center, radius, up vector, long+lat divisions
     inline uint make_matrix( void );                                                                                    // returns an identity matrix for starters
     inline uint make_instance( std::string name, std::string model_name, Model * model, uint matrix=uint(-1), std::string file_name="" ); // MODEL_PTR instance 
@@ -1131,7 +1149,7 @@ public:
     static real linear8_to_srgb_gamma( uint8_t linear ); // more efficient, uses LUT
 
     // system utilities
-    void cmd( std::string c, std::string error="command failed");  // calls std::system and aborts if not success
+    void cmd( std::string c, std::string error="command failed", bool echo=true );  // calls std::system and aborts if not success
 
     // file utilities
     static void dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ); 
@@ -1986,9 +2004,9 @@ void Model::file_write( std::string file_path, const unsigned char * data, uint6
     cmd( "chmod +rw " + file_path );
 }
 
-void Model::cmd( std::string c, std::string error )
+void Model::cmd( std::string c, std::string error, bool echo )
 {
-    std::cout << c << "\n";
+    if ( echo ) std::cout << c << "\n";
     if ( std::system( c.c_str() ) != 0 ) die_assert( false, "ERROR: " + error + ": " + c );
 }
 
@@ -2026,6 +2044,7 @@ Model::Model( std::string                top_file,
     hdr->lighting_scale = 1.0;
     hdr->ambient_intensity = real3( 0.1, 0.1, 0.1 );
     hdr->sky_box_tex_i = uint(-1);
+    hdr->sky_radius = 0.0;
     hdr->env_map_intensity_scale = 1.0;
     hdr->opacity_scale = 1.0;
     hdr->initial_camera_i = uint(-1);
@@ -2688,6 +2707,50 @@ inline uint Model::make_sphere( const real3& center, real radius, uint nlong, ui
     return first_poly_i;
 }
 
+inline uint Model::make_box( const real3 front[4], const real3 back[4], uint mtl_i )
+{
+    //------------------------------------------------------------
+    // We assume that front[0] aligns with back[0] as the bottom-left for each (as viewed from the front).
+    // Use make_polygon() to create triangles for each face.
+    // Be careful about face vertex order to ensure faces point outward.
+    //------------------------------------------------------------
+    uint first_poly_i = hdr->poly_cnt;
+
+    const real3 tri0[3]  = { front[0], front[1], front[2] }; make_polygon( 3, tri0,  mtl_i );    // front
+    const real3 tri1[3]  = { front[0], front[2], front[3] }; make_polygon( 3, tri1,  mtl_i );    // front
+    const real3 tri2[3]  = { back[1],  back[0],  back[3]  }; make_polygon( 3, tri2,  mtl_i );    // back  
+    const real3 tri3[3]  = { back[1],  back[3],  back[2]  }; make_polygon( 3, tri3,  mtl_i );    // back  
+    const real3 tri4[3]  = { front[3], front[2], back[2]  }; make_polygon( 3, tri4,  mtl_i );    // top
+    const real3 tri5[3]  = { front[3], back[2],  back[3]  }; make_polygon( 3, tri5,  mtl_i );    // top
+    const real3 tri6[3]  = { back[0],  back[1],  front[1] }; make_polygon( 3, tri6,  mtl_i );    // bottom
+    const real3 tri7[3]  = { back[0],  front[1], front[0] }; make_polygon( 3, tri7,  mtl_i );    // bottom 
+    const real3 tri8[3]  = { back[0],  front[0], front[3] }; make_polygon( 3, tri8,  mtl_i );    // left
+    const real3 tri9[3]  = { back[0],  front[3], back[3]  }; make_polygon( 3, tri9,  mtl_i );    // left
+    const real3 tri10[3] = { front[1], back[1],  back[2]  }; make_polygon( 3, tri10, mtl_i );    // right
+    const real3 tri11[3] = { front[1], back[2],  front[2] }; make_polygon( 3, tri11, mtl_i );    // right
+
+    return first_poly_i;
+}
+
+inline uint Model::make_aabox( const AABB& box, uint mtl_i )
+{
+    //------------------------------------------------------------
+    // Use make_box() after we set up front and back faces
+    // the way it wants them.
+    //------------------------------------------------------------
+    const real3& min = box._min;
+    const real3& max = box._max;
+    real3 front[4] = { real3( min[0], min[1], min[2] ),
+                       real3( max[0], min[1], min[2] ),
+                       real3( max[0], max[1], min[2] ),
+                       real3( min[0], max[1], min[2] ) };
+    real3 back[4]  = { real3( min[0], min[1], max[2] ),
+                       real3( max[0], min[1], max[2] ),
+                       real3( max[0], max[1], max[2] ),
+                       real3( min[0], max[1], max[2] ) };
+    return make_box( front, back, mtl_i );
+}
+
 inline uint Model::make_skybox( const real3& center, real radius, const real3& up, uint nlong, uint nlat, uint mtl_i ) 
 {
     assert(center == real3(0,0,0)); // temporary requirement until this code gets merged with previous routine
@@ -3053,6 +3116,9 @@ bool Model::load_fsc( std::string fsc_file, std::string dir_name )
                     if ( !load_tex( &strings[name_i], dir_name, texture ) ) goto error;
                     hdr->sky_box_tex_i = texture - textures;
                 
+                } else if ( strcmp( field, "sky_radius" ) == 0 ) {
+                    if ( !parse_real( hdr->sky_radius, fsc, fsc_end, true ) ) goto error;
+
                 } else if ( strcmp( field, "env_map_intensity_scale" ) == 0 ) {
                     if ( !parse_real( hdr->env_map_intensity_scale, fsc, fsc_end, true ) ) goto error;
 
@@ -4838,6 +4904,18 @@ inline Model::real Model::real4::length_sqr( void ) const
     return c[0]*c[0] + c[1]*c[1] + c[2]*c[2] + c[3]*c[3];
 }
 
+inline Model::real Model::real4::distance( const Model::real4& v2 ) const 
+{ 
+    auto diff = *this - v2;
+    return diff.length();
+}
+
+inline Model::real Model::real4::distance_sqr( const Model::real4& v2 ) const 
+{ 
+    auto diff = *this - v2;
+    return diff.length_sqr();
+}
+
 inline Model::real4& Model::real4::normalize( void )
 {
     *this /= length();
@@ -4969,6 +5047,18 @@ inline Model::real64 Model::real3d::length_sqr( void ) const
     return c[0]*c[0] + c[1]*c[1] + c[2]*c[2];
 }
 
+inline Model::real64 Model::real3d::distance( const Model::real3d& v2 ) const 
+{ 
+    auto diff = *this - v2;
+    return diff.length();
+}
+
+inline Model::real64 Model::real3d::distance_sqr( const Model::real3d& v2 ) const 
+{ 
+    auto diff = *this - v2;
+    return diff.length_sqr();
+}
+
 inline Model::real3d& Model::real3d::normalize( void )
 {
     *this /= length();
@@ -5090,6 +5180,12 @@ inline Model::real Model::real3::length( void ) const
 inline Model::real Model::real3::length_sqr( void ) const 
 { 
     return c[0]*c[0] + c[1]*c[1] + c[2]*c[2];
+}
+
+inline Model::real Model::real3::distance_sqr( const Model::real3& v2 ) const 
+{ 
+    auto diff = *this - v2;
+    return diff.length_sqr();
 }
 
 inline Model::real3& Model::real3::normalize( void )
@@ -5728,6 +5824,16 @@ inline bool Model::AABB::encloses( const AABB& other ) const
            _max.c[2] >= other._max.c[2];
 }
 
+inline bool Model::AABB::overlaps( const Model::AABB& other ) const 
+{
+    return _min.c[0] <= other._max.c[0] &&
+           _min.c[1] <= other._max.c[1] &&
+           _min.c[2] <= other._max.c[2] &&
+           _max.c[0] >= other._min.c[0] &&
+           _max.c[1] >= other._min.c[1] &&
+           _max.c[2] >= other._min.c[2];
+}
+
 inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& direction, const Model::real3& direction_inv, 
                               Model::real& t_min, Model::real& t_max ) const 
 {
@@ -5821,25 +5927,14 @@ inline bool Model::AABBD::encloses( const AABBD& other ) const
            _max.c[2] >= other._max.c[2];
 }
 
-inline bool Model::AABBD::hit( const Model::real3d& origin, const Model::real3d& direction, const Model::real3d& direction_inv, 
-                               Model::real64& t_min, Model::real64& t_max ) const 
+inline bool Model::AABBD::overlaps( const Model::AABBD& other ) const 
 {
-    mdout << "Model::AABBD::hit: " << *this << " t_min=" << t_min << " t_max=" << t_max << "\n";
-    (void)direction;
-    for( uint a = 0; a < 3; a++ ) 
-    {
-        real64 dir_inv = direction_inv.c[a];
-        real64 v0 = (_min.c[a] - origin.c[a]) * dir_inv;
-        real64 v1 = (_max.c[a] - origin.c[a]) * dir_inv;
-        t_min = std::fmax( t_min, std::fmin( v0, v1 ) );
-        t_max = std::fmin( t_max, std::fmax( v0, v1 ) );
-        mdout << "Model::AABBD::hit:     " << a << ": _min=" << _min.c[a] << " _max=" << _max.c[a] << 
-                                   " dir_inv=" << dir_inv << " origin=" << origin.c[a] << 
-                                   " v0=" << v0 << " v1=" << v1 << " t_min=" << t_min << " t_max=" << t_max << "\n";
-    }
-    bool r = t_max >= std::fmax( t_min, real64(0.0) );
-    mdout << "Model::AABBD::hit: return=" << r << "\n";
-    return r;
+    return _min.c[0] <= other._max.c[0] &&
+           _min.c[1] <= other._max.c[1] &&
+           _min.c[2] <= other._max.c[2] &&
+           _max.c[0] >= other._min.c[0] &&
+           _max.c[1] >= other._min.c[1] &&
+           _max.c[2] >= other._min.c[2];
 }
 
 // Moeller code for fast triangle-box overlap test
@@ -6020,8 +6115,8 @@ inline bool planeBoxOverlap(const Model::real3d &normal, const Model::real3d &ve
     return false;
 }
 
-bool triBoxOverlap(const Model::real3d &trivert0, const Model::real3d &trivert1, const Model::real3d &trivert2,
-                   const Model::real3d &boxcenter, const Model::real3d &boxhalfsize)
+bool triBoxOverlap( const Model::real3d &trivert0, const Model::real3d &trivert1, const Model::real3d &trivert2,
+                    const Model::real3d &boxcenter, const Model::real3d &boxhalfsize )
 {
     /*    use separating axis theorem to test overlap between triangle and box */
     /*    need to test for overlap in these directions: */
@@ -6134,11 +6229,182 @@ bool triBoxOverlap(const Model::real3d &trivert0, const Model::real3d &trivert1,
     return true; /* box and triangle overlaps */
 }
 
-inline bool Model::AABBD::overlaps_triangle( const Model::real3d &v0, const Model::real3d &v1, const Model::real3d &v2 ) const
+inline void reorderTriVertices( Model::real3d& p0, Model::real3d& p1, Model::real3d& p2, Model::real3d& w0, Model::real3d& w1, Model::real3d& w2, Model::real64& d0, Model::real64& d1, Model::real64& d2, uint32_t i )
+{
+    if ( i == 0 ) return;
+    if ( i == 1 ) {
+        Model::real3d pt = p0;
+        Model::real3d wt = w0;
+        Model::real64 dt = d0;
+        p0 = p1; 
+        w0 = w1;
+        d0 = d1;
+        p1 = p2;
+        w1 = w2;
+        d1 = d2;
+        p2 = pt;
+        w2 = wt;
+        d2 = dt;
+    } else {
+        Model::real3d pt = p0;
+        Model::real3d wt = w0;
+        Model::real64 dt = d0;
+        p0 = p2; 
+        w0 = w2;
+        d0 = d2;
+        p2 = p1;
+        w2 = w1;
+        d2 = d1;
+        p1 = pt;
+        w1 = wt;
+        d1 = dt;
+    }
+}
+
+inline void applyTriWeights( const Model::real3d& v0, const Model::real3d& v1, const Model::real3d& v2, const Model::real3d& w, Model::real3d& p )
+{
+    Model::real64 w0 = w[0];
+    Model::real64 w1 = w[1];
+    Model::real64 w2 = 1.0 - w0 - w1;   // make sure they always add to 1.0
+    assert( w0 >= 0.0 && w0 <= 1.0 );
+    assert( w1 >= 0.0 && w1 <= 1.0 );
+    assert( w2 >= 0.0 && w2 <= 1.0 );
+    p = w0*v0 + w1*v1 + w2*v2;          // apply weights to original triangle coordinates
+}
+
+inline bool findTriPointInBox( const Model::real3d &v0, const Model::real3d &v1, const Model::real3d &v2, 
+                               const Model::AABBD& box, const Model::real3d& boxcenter, const Model::real3d& boxhalfsize, Model::real3d * p_ptr ) 
+{
+    //---------------------------------------------------------------------
+    // This routine is called only if the triangle intersects the box, so
+    // we can assume that. Make it so that vertex 0 is the closest to the center of the box.
+    //---------------------------------------------------------------------
+    Model::real3d p0 = v0;
+    Model::real3d p1 = v1;
+    Model::real3d p2 = v2;
+    Model::real3d w0( 1.0, 0.0, 0.0 );  // w0[0]*v0 + w0[1]*v1 + w0[2]*v2
+    Model::real3d w1( 0.0, 1.0, 0.0 );  
+    Model::real3d w2( 0.0, 0.0, 1.0 );  
+    Model::real3d tmp;
+    mdout << "box=" << box << "\n";
+    Model::real64 d0 = v0.distance_sqr( boxcenter ); 
+    Model::real64 d1 = v1.distance_sqr( boxcenter ); 
+    Model::real64 d2 = v2.distance_sqr( boxcenter ); 
+    for( uint32_t i = 0;; i++ ) 
+    {
+        //---------------------------------------------------------------------
+        // Reorder vertices by proximity to the center of the box.
+        //---------------------------------------------------------------------
+        reorderTriVertices( p0, p1, p2, w0, w1, w2, d0, d1, d2, (d0 <= d1 && d0 <= d2) ? 0 : (d1 <= d2) ? 1 : 2 );
+        mdout << "    i=" << i << " p0=" << p0 << " p1=" << p1 << " p2=" << p2 << " w0=" << w0 << " w1=" << w1 << " w2=" << w2 << " d0=" << d0 << " d1=" << d1 << " d2=" << d2 << "\n";
+
+        //---------------------------------------------------------------------
+        // See if any of the vertices are inside the box, favoring p0 which is the closest to the box center.
+        //---------------------------------------------------------------------
+        if ( box.encloses( p0 ) ) { *p_ptr = p0; mdout << "    chose p0\n"; return true; }
+        if ( box.encloses( p1 ) ) { *p_ptr = p1; mdout << "    chose p1\n"; return true; }
+        if ( box.encloses( p2 ) ) { *p_ptr = p2; mdout << "    chose p2\n"; return true; }
+
+        //---------------------------------------------------------------------
+        // Calculate midpoint of each side.
+        // We do this to the weights, then apply the weights in a way that doesn't lose precision.
+        //
+        // We can use these midpoints to form 4 new triangles.
+        // Switch to one that overlaps, favoring the p0-p01-p02 triangle, then middle triangle,
+        // then one of the other two.
+        //---------------------------------------------------------------------
+        Model::real3d p01, p02, p12;
+        Model::real3d w01 = (w0+w1).divby2(); 
+        Model::real3d w02 = (w0+w2).divby2();
+        Model::real3d w12 = (w1+w2).divby2(); 
+        applyTriWeights( v0, v1, v2, w01, p01 );
+        applyTriWeights( v0, v1, v2, w02, p02 );
+        applyTriWeights( v0, v1, v2, w12, p12 );
+        Model::real64 d01 = p01.distance_sqr( boxcenter );
+        Model::real64 d02 = p02.distance_sqr( boxcenter );
+        Model::real64 d12 = p12.distance_sqr( boxcenter );
+        if ( triBoxOverlap( p0, p01, p02, boxcenter, boxhalfsize ) ) {
+            mdout << "    switching to p0, p01, p02\n";
+            p1 = p01;
+            w1 = w01;
+            d1 = d01;
+            p2 = p02;
+            w2 = w02;
+            d2 = d02;
+            continue;
+        }
+        if ( triBoxOverlap( p01, p12, p02, boxcenter, boxhalfsize ) ) {
+            mdout << "    switching to p01, p12, p02\n";
+            p0 = p01;
+            w0 = w01;
+            d0 = d01;
+            p1 = p12;
+            w1 = w12;
+            d1 = d12;
+            p2 = p02;
+            w2 = w02;
+            d2 = d02;
+            continue;
+        }
+        if ( triBoxOverlap( p01, p1, p12, boxcenter, boxhalfsize ) ) {
+            mdout << "    switching to p01, p1, p12\n";
+            p0 = p01;
+            w0 = w01;
+            d0 = d01;
+            p2 = p12;
+            w2 = w12;
+            d2 = d12;
+            continue;
+        }
+        if ( triBoxOverlap( p02, p12, p2, boxcenter, boxhalfsize ) ) {
+            mdout << "    switching to p02, p12, p2\n";
+            p0 = p02;
+            w0 = w02;
+            d0 = d02;
+            p1 = p12;
+            w1 = w12;
+            d1 = d12;
+            continue;
+        }
+        std::cout << "ERROR: no subdivided triangle overlaps the box\n";
+        assert( false );
+    }
+}
+
+inline bool Model::AABBD::overlaps_triangle( const Model::real3d &v0, const Model::real3d &v1, const Model::real3d &v2, Model::real3d * p_ptr ) const
 {
     real3d boxcenter   = (_min + _max) * 0.5;  
     real3d boxhalfsize = (_max - _min) * 0.5;
-    return triBoxOverlap( v0, v1, v2, boxcenter, boxhalfsize );
+    if ( !triBoxOverlap( v0, v1, v2, boxcenter, boxhalfsize ) ) return false;
+    if ( p_ptr != nullptr ) {
+        //---------------------------------------------------------------------
+        // For now, use recursive triangle subdivision to find any (sub)triangle center point
+        // that is inside this box.
+        //---------------------------------------------------------------------
+        assert( findTriPointInBox( v0, v1, v2, *this, boxcenter, boxhalfsize, p_ptr ) ); 
+    }
+    return true;
+}
+
+inline bool Model::AABBD::hit( const Model::real3d& origin, const Model::real3d& direction, const Model::real3d& direction_inv, 
+                               Model::real64& t_min, Model::real64& t_max ) const 
+{
+    mdout << "Model::AABBD::hit: " << *this << " t_min=" << t_min << " t_max=" << t_max << "\n";
+    (void)direction;
+    for( uint a = 0; a < 3; a++ ) 
+    {
+        real64 dir_inv = direction_inv.c[a];
+        real64 v0 = (_min.c[a] - origin.c[a]) * dir_inv;
+        real64 v1 = (_max.c[a] - origin.c[a]) * dir_inv;
+        t_min = std::fmax( t_min, std::fmin( v0, v1 ) );
+        t_max = std::fmin( t_max, std::fmax( v0, v1 ) );
+        mdout << "Model::AABBD::hit:     " << a << ": _min=" << _min.c[a] << " _max=" << _max.c[a] << 
+                                   " dir_inv=" << dir_inv << " origin=" << origin.c[a] << 
+                                   " v0=" << v0 << " v1=" << v1 << " t_min=" << t_min << " t_max=" << t_max << "\n";
+    }
+    bool r = t_max >= std::fmax( t_min, real64(0.0) );
+    mdout << "Model::AABBD::hit: return=" << r << "\n";
+    return r;
 }
 
 inline Model::AABBI::AABBI( const Model::_int p[] )
@@ -6410,173 +6676,189 @@ bool Model::Polygon::vertex_info( const Model * model, uint _vtx_cnt, real3 p[] 
     return true;
 }
 
+bool Model::Polygon::sample( const Model * model, HitRecord& rec, real solid_angle, real dir_sqr ) const
+{
+    if ( vtx_cnt != 3 ) return false;
+
+    uint poly_i = this - model->polygons;
+    const Vertex * vertexes = &model->vertexes[vtx_i];
+    const real3 * positions = model->positions;
+    const real3& p0 = positions[vertexes[0].v_i];
+    const real3& p1 = positions[vertexes[1].v_i];
+    const real3& p2 = positions[vertexes[2].v_i];
+    const real3 p_m_p0  = rec.p - p0;
+    const real3 p1_m_p0 = p1    - p0;
+    const real3 p2_m_p0 = p2    - p0;
+    real area1 = p1_m_p0.cross( p_m_p0 ).dot( normal );
+    real area2 = p_m_p0.cross( p2_m_p0 ).dot( normal );
+    real area_2x = area * 2.0;
+    real beta    = area1/area_2x;
+    real gamma   = area2/area_2x;
+    mdout << "Model::Polygon::sample: poly_i=" << poly_i << " p0=" << p0 << " p1=" << p1 << " p2=" << p2 << " beta=" << beta << " gamma=" << gamma << "\n";
+    if ( beta < 0.0 || gamma < 0.0 || (beta + gamma) > 1.0 ) {
+        mdout << "Model::Polygon::sample: poly_i=" << poly_i << " beta=" << beta << " gamma=" << gamma << ", so REJECTED\n";
+        return false;
+    }
+    real alpha = 1.0 - beta - gamma;
+
+    const real3 * normals   = model->normals;
+    const real2 * texcoords = model->texcoords;
+    const real3& n0 = normals[vertexes[0].vn_i];
+    const real3& n1 = normals[vertexes[1].vn_i];
+    const real3& n2 = normals[vertexes[2].vn_i];
+    real u0, u1, u2, v0, v1, v2;
+    if ( vertexes[0].vt_i != uint(-1) ) {
+        u0 = texcoords[vertexes[0].vt_i].c[0];
+        u1 = texcoords[vertexes[1].vt_i].c[0];
+        u2 = texcoords[vertexes[2].vt_i].c[0];
+        v0 = texcoords[vertexes[0].vt_i].c[1];
+        v1 = texcoords[vertexes[1].vt_i].c[1];
+        v2 = texcoords[vertexes[2].vt_i].c[1];
+    } else {
+        u0 = 0.0;
+        u1 = 0.0;
+        u2 = 0.0;
+        v0 = 0.0;
+        v1 = 0.0;
+        v2 = 0.0;
+    }
+
+    if ( solid_angle != 0.0 ) {
+        real distance_squared = rec.t*rec.t / dir_sqr;
+        real ray_footprint_area_on_triangle = solid_angle*distance_squared;
+        real uv_area_of_triangle = divby4(std::abs(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1));
+        rec.frac_uv_cov = ray_footprint_area_on_triangle * uv_area_of_triangle / area;
+    } else {
+        rec.frac_uv_cov = 0.0;
+    }
+
+    rec.poly_i = poly_i;
+    rec.grid_i = uint(-1);
+    rec.normal = (std::isnan(normal[0]) || std::isnan(normal[1]) || std::isnan(normal[2])) ? real3(0,1,0) : normal;
+    if ( vertexes[0].vn_i != uint(-1) ) {
+        rec.shading_normal = n0*alpha + n1*gamma + n2*beta;
+        rec.shading_normal.normalize();
+        if (std::isnan(rec.shading_normal[0]) || std::isnan(rec.shading_normal[1]) || std::isnan(rec.shading_normal[2])) rec.shading_normal = rec.normal;
+    } else {
+        rec.shading_normal = normal;
+    }
+
+    rec.u = alpha*u0 + gamma*u1 + beta*u2 ;
+    rec.v = alpha*v0 + gamma*v1 + beta*v2 ;
+
+    real3 deltaPos1 = p1-p0;
+    real3 deltaPos2 = p2-p0;
+
+    real deltaU1 = u1-u0;
+    real deltaU2 = u2-u0;
+    real deltaV1 = v1-v0;
+    real deltaV2 = v2-v0;
+
+    real r = 1.0 / (deltaU1 * deltaV2 - deltaV1 * deltaU2);
+    rec.tangent = (deltaPos1 * deltaV2 - deltaPos2 * deltaV1)*r;
+    rec.tangent_normalized = rec.tangent.normalize();
+    rec.bitangent = (deltaPos2 * deltaU1 - deltaPos1 * deltaU2)*r;
+
+    rec.model = model;
+    return true;
+}
+
 bool Model::Polygon::hit( const Model * model, const real3& origin, const real3& direction, const real3& direction_inv,
         real solid_angle, real t_min, real t_max, HitRecord& rec ) const
 {
     (void)direction_inv;
-    if ( vtx_cnt == 3 ) {
-        // triangle - this code comes originally from Peter Shirley
-        const Vertex * vertexes = &model->vertexes[vtx_i];
-        const real3 * positions = model->positions;
-        const real3& p0 = positions[vertexes[0].v_i];
+    if ( vtx_cnt != 3 ) return false;
 
-        // plane equation (p - corner) dot N = 0
-        // (o + t*v - corner) dot N = 0
-        // t*dot(v,N) = (corner-o) dot N
-        // t = dot(corner - o, N) / dot(v,N)
-        real d = direction.dot( normal );
-        real t = (p0 - origin).dot( normal ) / d;
-        uint poly_i = this - model->polygons;
-        mdout << "Model::Polygon::hit: model=" << model << " poly_i=" << poly_i << " origin=" << origin << 
-                                     " direction=" << direction << " direction_inv=" << direction_inv << " solid_angle=" << solid_angle <<
-                                     " d=" << d << " t=" << t << " t_min=" << t_min << " t_max=" << t_max << "\n";
-        if ( t > t_min && t < t_max ) {
-            // compute barycentrics, see if it's in triangle
-            const real3& p1 = positions[vertexes[1].v_i];
-            const real3& p2 = positions[vertexes[2].v_i];
-            const real3 p = origin + direction*t;
-            // careful about order!
-            const real3 p_m_p0  = p  - p0;
-            const real3 p1_m_p0 = p1 - p0;
-            const real3 p2_m_p0 = p2 - p0;
-            real area1 = p1_m_p0.cross( p_m_p0 ).dot( normal );
-            real area2 = p_m_p0.cross( p2_m_p0 ).dot( normal );
-            real area_2x = area * 2.0;
-            real beta    = area1/area_2x;
-            real gamma   = area2/area_2x;
-            mdout << "Model::Polygon::hit: poly_i=" << poly_i << " p0=" << p0 << " p1=" << p1 << " p2=" << p2 << " beta=" << beta << " gamma=" << gamma << "\n";
-            if ( beta >= 0.0 && gamma >= 0.0 && (beta + gamma) <= 1.0 ) {
-                real alpha = 1.0 - beta - gamma;
+    // triangle - this code comes originally from Peter Shirley
+    const Vertex * vertexes = &model->vertexes[vtx_i];
+    const real3 * positions = model->positions;
+    const real3& p0 = positions[vertexes[0].v_i];
 
-                const real3 * normals   = model->normals;
-                const real2 * texcoords = model->texcoords;
-                const real3& n0 = normals[vertexes[0].vn_i];
-                const real3& n1 = normals[vertexes[1].vn_i];
-                const real3& n2 = normals[vertexes[2].vn_i];
-                real u0, u1, u2, v0, v1, v2;
-                if ( vertexes[0].vt_i != uint(-1) ) {
-                    u0 = texcoords[vertexes[0].vt_i].c[0];
-                    u1 = texcoords[vertexes[1].vt_i].c[0];
-                    u2 = texcoords[vertexes[2].vt_i].c[0];
-                    v0 = texcoords[vertexes[0].vt_i].c[1];
-                    v1 = texcoords[vertexes[1].vt_i].c[1];
-                    v2 = texcoords[vertexes[2].vt_i].c[1];
-                } else {
-                    u0 = 0.0;
-                    u1 = 0.0;
-                    u2 = 0.0;
-                    v0 = 0.0;
-                    v1 = 0.0;
-                    v2 = 0.0;
-                }
-                rec.poly_i = poly_i;
-                rec.grid_i = uint(-1);
-                rec.t = t;
+    // plane equation (p - corner) dot N = 0
+    // (o + t*v - corner) dot N = 0
+    // t*dot(v,N) = (corner-o) dot N
+    // t = dot(corner - o, N) / dot(v,N)
+    real d = direction.dot( normal );
+    real t = (p0 - origin).dot( normal ) / d;
+    uint poly_i = this - model->polygons;
+    mdout << "Model::Polygon::hit: model=" << model << " poly_i=" << poly_i << " origin=" << origin << 
+                                 " direction=" << direction << " direction_inv=" << direction_inv << " solid_angle=" << solid_angle <<
+                                 " d=" << d << " t=" << t << " t_min=" << t_min << " t_max=" << t_max << "\n";
+    if ( t <= t_min || t >= t_max ) {
+        mdout << "Model::Polygon::hit: NOT a hit, poly_i=" << poly_i << "\n";
+        return false;
+    }
 
-                 rec.normal = normal;
-                if ( vertexes[0].vn_i != uint(-1) ) {
-                    rec.shading_normal = n0*alpha + n1*gamma + n2*beta;
-                    rec.shading_normal.normalize();
-                } else {
-                    rec.shading_normal = normal;
-                }
-                // epsilon to get it off the polygon
-                // may cause trouble in two-sided... move to shader?
-            //    rec.p = p + 0.01*rec.normal;;
-                rec.p = p;
+    rec.t = t;
+    rec.p = origin + direction * t;
+    if ( !sample( model, rec, solid_angle, direction.length_sqr() ) ) {
+        mdout << "Model::Polygon::hit: NOT a hit, poly_i=" << poly_i << "\n";
+        return false;
+    }
 
-                real distance_squared = t*t / direction.length_sqr();
-                real ray_footprint_area_on_triangle = solid_angle*distance_squared;
-                real uv_area_of_triangle = divby4(std::abs(u0*v1 + u1*v2 + u2*v0 - u0*v2 - u1*v0 - u2*v1));
-                rec.frac_uv_cov = ray_footprint_area_on_triangle * uv_area_of_triangle / area;
+    if (mtl_i != uint(-1) && model->materials[mtl_i].map_d_i != uint(-1)) {
+        // code slightly modified from texture.h   We only need one compoent
+        // From there, the first texel will be at &texels[texel_i]. 
+        // Pull out the map_d_i.  If it's -1, there's no alpha texture.  Also use that to get to the Texture using model->textures[map_d_i].
+        uint texel_i = model->textures[model->materials[mtl_i].map_d_i].texel_i; 
+        unsigned char *mdata = &(model->texels[texel_i]);
+        int nx = model->textures[model->materials[mtl_i].map_d_i].width;
+        int ny = model->textures[model->materials[mtl_i].map_d_i].height;
+        int mx = nx;
+        int my = ny;
+        real u = rec.u;
+        real v = rec.v;
+        real sqrt_nx_ny = std::sqrt(nx*ny);
+        real width_of_footprint = std::sqrt(rec.frac_uv_cov) * sqrt_nx_ny;
+        real mip_level = std::log2( width_of_footprint );
+        int nchan = model->textures->nchan;
+        for (int imip_level = mip_level; imip_level > 0 && !(mx <= 1 && my <= 1); imip_level--)
+        {
+            // find the proper mip texture
+            mdata += nchan * mx * my;
+            if ( mx != 1 ) mx >>= 1;
+            if ( my != 1 ) my >>= 1;
+        }
+        if (std::isnan(u)) {
+            u = 0.0;
+        }
+        if (std::isnan(v)) {
+            v = 0.0;
+        }
+        if (u < 0.0) {
+            int64_t i = u;
+            u -= i-1;
+        }
+        if (v < 0.0) {
+            int64_t i = v;
+            v -= i-1;
+        }
+        if (u >= 1.0) {
+            int64_t i = u;
+            u -= i;
+        }
+        if (v >= 1.0) {
+            int64_t i = v;
+            v -= i;
+        }
+        int i = (    u)*real(mx);
+        int j = (1.0-v)*real(my);
+        while (i >= mx && mx != 0) i -= mx;
+        while (j >= my && my != 0) j -= my;
 
+        float opacity = float(mdata[nchan*i + nchan*mx*j+3]) / 255.0;
 
-                rec.u = alpha*u0 + gamma*u1 + beta*u2 ;
-                rec.v = alpha*v0 + gamma*v1 + beta*v2 ;
-
-                real3 deltaPos1 = p1-p0;
-                real3 deltaPos2 = p2-p0;
-
-                real deltaU1 = u1-u0;
-                real deltaU2 = u2-u0;
-                real deltaV1 = v1-v0;
-                real deltaV2 = v2-v0;
-
-                real r = 1.0 / (deltaU1 * deltaV2 - deltaV1 * deltaU2);
-                rec.tangent = (deltaPos1 * deltaV2   - deltaPos2 * deltaV1)*r;
-                rec.tangent_normalized = rec.tangent.normalize();
-                rec.bitangent = (deltaPos2 * deltaU1   - deltaPos1 * deltaU2)*r;
-
-                if (mtl_i != uint(-1) && model->materials[mtl_i].map_d_i != uint(-1)) {
-                    // code slightly modified from texture.h   We only need one compoent
-                    // From there, the first texel will be at &texels[texel_i]. 
-                    // Pull out the map_d_i.  If it's -1, there's no alpha texture.  Also use that to get to the Texture using model->textures[map_d_i].
-                    uint texel_i = model->textures[model->materials[mtl_i].map_d_i].texel_i; 
-                    unsigned char *mdata = &(model->texels[texel_i]);
-                    int nx = model->textures[model->materials[mtl_i].map_d_i].width;
-                    int ny = model->textures[model->materials[mtl_i].map_d_i].height;
-                    int mx = nx;
-                    int my = ny;
-                    real u = rec.u;
-                    real v = rec.v;
-                    real sqrt_nx_ny = std::sqrt(nx*ny);
-                    real width_of_footprint = std::sqrt(rec.frac_uv_cov) * sqrt_nx_ny;
-                    real mip_level = std::log2( width_of_footprint );
-                    int nchan = model->textures->nchan;
-                    for (int imip_level = mip_level; imip_level > 0 && !(mx <= 1 && my <= 1); imip_level--)
-                    {
-                        // find the proper mip texture
-                        mdata += nchan * mx * my;
-                        if ( mx != 1 ) mx >>= 1;
-                        if ( my != 1 ) my >>= 1;
-                    }
-                    if (std::isnan(u)) {
-                        u = 0.0;
-                    }
-                    if (std::isnan(v)) {
-                        v = 0.0;
-                    }
-                    if (u < 0.0) {
-                        int64_t i = u;
-                        u -= i-1;
-                    }
-                    if (v < 0.0) {
-                        int64_t i = v;
-                        v -= i-1;
-                    }
-                    if (u >= 1.0) {
-                        int64_t i = u;
-                        u -= i;
-                    }
-                    if (v >= 1.0) {
-                        int64_t i = v;
-                        v -= i;
-                    }
-                    int i = (    u)*real(mx);
-                    int j = (1.0-v)*real(my);
-                    while (i >= mx && mx != 0) i -= mx;
-                    while (j >= my && my != 0) j -= my;
-
-                    float opacity = float(mdata[nchan*i + nchan*mx*j+3]) / 255.0;
-
-                    if (float(MODEL_UNIFORM_FN()) > opacity) {
-                        mdout << "Model::Polygon::hit: NOT HIT poly_i=" << poly_i << " uniform() > opacity=" << opacity << "\n";
-                        return false;
-                    }
-                }
-
-                rec.model = model;
-
-                mdout << "Model::Polygon::hit: HIT poly_i=" << poly_i << " t=" << rec.t << 
-                         " p=" << rec.p << " normal=" << rec.normal << 
-                         " frac_uv_cov=" << rec.frac_uv_cov << 
-                         " u=" << rec.u << " v=" << rec.v << " mtl_i=" << mtl_i << "\n";
-                return true;
-            }
+        if (float(MODEL_UNIFORM_FN()) > opacity) {
+            mdout << "Model::Polygon::hit: NOT HIT poly_i=" << poly_i << " uniform() > opacity=" << opacity << "\n";
+            return false;
         }
     }
-    mdout << "Model::Polygon::hit: NOT a hit, poly_i=" << (this - model->polygons) << "\n";
-    return false;
+
+    mdout << "Model::Polygon::hit: HIT poly_i=" << poly_i << " t=" << rec.t << 
+             " p=" << rec.p << " normal=" << rec.normal << 
+             " frac_uv_cov=" << rec.frac_uv_cov << 
+             " u=" << rec.u << " v=" << rec.v << " mtl_i=" << mtl_i << "\n";
+    return true;
 }
 
 bool Model::Polygon::is_emissive( const Model * model ) const
@@ -6596,6 +6878,15 @@ bool Model::VolumeGrid::bounding_box( const Model * model, Model::AABB& box, rea
     (void)model;
     box = world_box;
     box.pad( padding );
+    return true;
+}
+
+bool Model::VolumeGrid::bounding_box( const Model * model, _int x, _int y, _int z, AABBD& box ) const
+{
+    (void)model;
+    real3d xyz_r( x, y, z );
+    box._min = xyz_r * world_voxel_size;
+    box._max = box._min + world_voxel_size;
     return true;
 }
 
@@ -7076,7 +7367,7 @@ bool Model::Volume::rand_emissive_xyz( const Model * model, _int& x, _int& y, _i
     }
 }
 
-bool Model::VolumeGrid::is_active( const Model * model, _int x, _int y, _int z ) const
+inline bool Model::VolumeGrid::is_active( const Model * model, _int x, _int y, _int z ) const
 {
     //--------------------------------------------------------------------------
     // Use value_ptr() which can fill in the boolean.

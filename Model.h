@@ -2755,9 +2755,6 @@ inline uint Model::make_skybox( const real3& center, real radius, const real3& u
 {
     assert(center == real3(0,0,0)); // temporary requirement until this code gets merged with previous routine
 
-    float x0, x1, x2, x3;
-    float y0, y1, y2, y3;
-
     real3 b1, b0;
     branchlessONB(up, b1, b0) ;
 

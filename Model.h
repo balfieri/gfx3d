@@ -658,37 +658,6 @@ public:
         int top;
     };
 
-    class Camera 
-    {
-    public:
-        Camera(real3 lookfrom, real3 lookat, real3 vup, real vfov, real near, real far, real aspect, real aperture, real focus_dist, int nx, int ny, int spp, uint name_i=uint(-1));
-
-        Ray get_ray(real s_pixel, real t_pixel, real s_lens, real t_lens) const;  // simple thin lens camera by default
-
-        // inputs
-        real3           lookfrom;           // camera location
-        real3           lookat;             // point camera is aimed at
-        real3           vup;                // camera up direction
-        real            aperture;           // lens aperture
-        real            focus_dist;         // aka focal_length
-        real            near;               // near clip plane distance (typical: 0.1)
-        real            far;                // far clip plane distance (typical: 10000)
-        real            vfov;               // vertical field of view
-        real            aspect;             // aspect ratio
-        uint            name_i;             // index in strings array (null-terminated strings)
-
-        // derived
-        real3           lower_left_corner;
-        real3           horizontal;
-        real3           vertical;
-        real3           u, v, w;
-        real32          lens_radius;
-        real32          solid_angle;
-
-    private:
-        void concentric_point_on_unit_disk(real s, real t, real& x, real& y) const;
-    };
-
     class Polygon
     {
     public:
@@ -1013,12 +982,15 @@ public:
                   real solid_angle, real t_min, real t_max, HitRecord& rec ) const;
     };
 
-    class Matrix                            // 4x4 transformation matrix used by Instance
+    class Matrix                            // 4x4 transformation matrix used by Camera and Instance
     {
     public:
         real            m[4][4];
 
         inline Matrix( void )          { identity(); }
+        static Matrix make_view( const real3& lookfrom, const real3& lookat, const real3& vup );
+        static Matrix make_frustum( real left, real right, real bottom, real top, real near, real far );
+        static Matrix make_perspective( real vfov, real aspect, real near, real far );
 
         bool   is_identity( void ) const;               // returns true if this is the identity matrix (can speed up transform, etc.)
         void   identity(  void );                       // make this the identity matrix
@@ -1045,6 +1017,45 @@ public:
         double determinant( void ) const;               // returns the determinant (as double for high-precision) 
         void   cofactor( Matrix& C ) const;             // used by adjoint() and determinant() 
         double subdeterminant( uint exclude_row, uint exclude_col ) const; // used by cofactor() 
+    };
+
+    class Camera 
+    {
+    public:
+        Camera( real3 lookfrom, real3 lookat, real3 vup, real vfov, real near, real far, real aspect, real aperture, real focus_dist, int nx, int ny, int spp, uint name_i=uint(-1) );
+
+        Ray get_ray( real s_pixel, real t_pixel, real s_lens, real t_lens ) const;  // simple thin lens camera by default
+        bool overlaps_box( const AABB& box ) const;                                 // camera-box intersection test
+
+        // inputs
+        real3           lookfrom;           // camera location
+        real3           lookat;             // point camera is aimed at
+        real3           vup;                // camera up direction
+        real            aperture;           // lens aperture
+        real            focus_dist;         // aka focal_length
+        real            near;               // near clip plane distance (typical: 0.1)
+        real            far;                // far clip plane distance (typical: 10000)
+        real            vfov;               // vertical field of view
+        real            aspect;             // aspect ratio
+        uint            name_i;             // index in strings array (null-terminated strings)
+
+        // derived
+        real3           lower_left_corner;
+        real3           horizontal;
+        real3           vertical;
+        real3           u, v, w;
+        real32          lens_radius;
+        real32          solid_angle;
+        Matrix          perspective_projection;
+
+        struct Plane {
+            real3       normal;             // [a, b, c] from standard unnormalized plane equation 
+            real        distance;           // d         from standard unnormalized plane equation
+        };
+        Plane           frustum_planes[6];  // 0=near 1=far 2=bottom 3=top left=4 right=5
+
+    private:
+        void concentric_point_on_unit_disk(real s, real t, real& x, real& y) const;
     };
 
     enum class INSTANCE_KIND
@@ -1128,6 +1139,7 @@ public:
     inline uint make_material( std::string name, real3 Ka, real3 Kd, real3 Ke, real3 Ks, real3 Tf, real Tr, real Ns, real Ni, real d, real illum,
                                uint map_Ka_i, uint map_Kd_i, uint map_Ke_i, uint map_Ks_i, uint map_Ns_i, uint map_d_i, uint map_Bump_i, uint map_refl_i );
     inline uint make_emissive_material( std::string name, real3 Ke, uint map_Ke_i=uint(-1), real d=1.0 );                        
+    inline uint make_diffuse_material( std::string name, real3 Kd, uint map_Kd_i=uint(-1), real d=1.0, uint map_d_i=uint(-1) );
 
     inline uint make_vertex( const real3& p, const real3& n, const real2& uv );                                         // position, normal, and texcoord
     inline uint make_polygon( uint vtx_cnt, const real3 p[], const real3 n[], const real2 uv[], uint mtl_i=uint(-1) );  // positions, normals, texcoords
@@ -1350,6 +1362,7 @@ constexpr Model::real32 ONE_OVER_PI4= 1.0/(4.0*M_PI);
 constexpr Model::real32 PI_DIV_2    = M_PI/2.0;
 constexpr Model::real32 PI_DIV_4    = M_PI/4.0;
 constexpr Model::real32 PI_DIV_180  = M_PI/180.0;
+constexpr Model::real32 PI_DIV_360  = M_PI/360.0;
 
 //--------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------
@@ -1612,7 +1625,9 @@ inline std::string str( Model::real r )
 
 inline std::string str( Model::real64 r ) 
 {
-    return std::to_string( r );
+    std::ostringstream s;
+    s << std::setprecision(15) << r;
+    return s.str();
 }
 
 inline std::string str( Model::real3 v ) 
@@ -2601,6 +2616,13 @@ inline uint Model::make_emissive_material( std::string name, real3 Ke, uint map_
     return make_material( name, zero3, zero3, Ke, zero3, zero3, 0.0, 0.0, 0.0, d, 0.0, no_map, no_map, map_Ke_i, no_map, no_map, no_map, no_map, no_map );                         
 }
 
+inline uint Model::make_diffuse_material( std::string name, real3 Kd, uint map_Kd_i, real d, uint map_d_i ) 
+{
+    real3 zero3( 0.0, 0.0, 0.0 );
+    uint  no_map = uint(-1);
+    return make_material( name, zero3, Kd, zero3, zero3, zero3, 0.0, 0.0, 0.0, d, 0.0, no_map, map_Kd_i, no_map, no_map, no_map, map_d_i, no_map, no_map );                         
+}
+
 inline uint Model::make_vertex( const real3& p, const real3& n, const real2& uv ) 
 {
     perhaps_realloc<real3>( positions, hdr->pos_cnt, max->pos_cnt, 1 );
@@ -2634,6 +2656,7 @@ inline uint Model::make_polygon( uint vtx_cnt, const real3 p[], const real3 n[],
     mdout << "Model::make_polygon: poly_i=" << poly_i << " mtl_i=" << mtl_i << " normal=" << poly->normal << " area=" << poly->area << "\n";
     for( uint i = 0; i < vtx_cnt; i++ )
     {
+        mdout << "    vtx" << i << " p=" << p[i] << " n=" << n[i] << " uv=" << uv[i] << "\n";
         make_vertex( p[i], n[i], uv[i] );
     }
     if ( mtl_i != uint(-1) && materials[mtl_i].is_emissive() ) {
@@ -2655,11 +2678,13 @@ inline uint Model::make_polygon( uint vtx_cnt, const real3 p[], uint mtl_i )
     real len = poly->normal.length();
     poly->area = ::divby2(len);                       // correct only for triangles
     poly->normal /= len;
+    mdout << "Model::make_polygon: poly_i=" << poly_i << " mtl_i=" << mtl_i << " normal=" << poly->normal << " area=" << poly->area << "\n";
     for( uint i = 0; i < vtx_cnt; i++ )
     {
         real u = (i == 1) ? 1.0 : 0.0;
         real v = (i == 2) ? 1.0 : 0.0;
         real2 uv( u, v );
+        mdout << "    vtx" << i << " p=" << p[i] << " uv=" << uv << "\n";
         make_vertex( p[i], poly->normal, uv );
     }
     if ( mtl_i != uint(-1) && materials[mtl_i].is_emissive() ) {
@@ -5369,6 +5394,74 @@ inline Model::real2& Model::real2::operator /= ( const Model::real s )
     return *this;
 }
 
+inline Model::Matrix Model::Matrix::make_view( const real3& lookfrom, const real3& lookat, const real3& vup )
+{
+    real3 forward = lookat - lookfrom;
+    forward.normalize();
+
+    real3 side = forward.cross( vup );
+    side.normalize();
+
+    real3 up = side.cross( forward );
+    
+    Model::Matrix M;
+    M.m[0][0] = side[0];
+    M.m[0][1] = side[1];
+    M.m[0][2] = side[2];
+    M.m[0][3] = 0.0;
+    M.m[1][0] = up[0];
+    M.m[1][1] = up[1];
+    M.m[1][2] = up[2];
+    M.m[1][3] = 0.0;
+    M.m[2][0] = -forward[0];
+    M.m[2][1] = -forward[1];
+    M.m[2][2] = -forward[2];
+    M.m[2][3] = 0.0;
+    M.m[3][0] = 0.0;
+    M.m[3][1] = 0.0;
+    M.m[3][2] = 0.0;
+    M.m[3][3] = 1.0;
+
+    M.translate( -lookfrom );
+
+    return M;
+}
+
+inline Model::Matrix Model::Matrix::make_frustum( real left, real right, real bottom, real top, real near, real far )
+{
+    real near_2x = 2.0 * near;
+    real right_m_left = right - left;
+    real top_m_bottom = top - bottom;
+    real far_m_near = far - near;  
+    Model::Matrix M;
+    M.m[0][0] = near_2x / right_m_left;
+    M.m[0][1] = 0.0;
+    M.m[0][2] = (right + left) / right_m_left;
+    M.m[0][3] = 0.0;
+    M.m[1][0] = 0.0;
+    M.m[1][1] = near_2x / top_m_bottom;
+    M.m[1][2] = (top + bottom) / top_m_bottom;
+    M.m[1][3] = 0.0;
+    M.m[2][0] = 0.0;
+    M.m[2][1] = 0.0;
+    M.m[2][2] = -(far + near) / far_m_near;
+    M.m[2][3] = -(far * near_2x) / far_m_near;
+    M.m[3][0] = 0.0;
+    M.m[3][1] = 0.0;
+    M.m[3][2] = -1.0;
+    M.m[3][3] = 0.0;
+    return M;
+}
+
+inline Model::Matrix Model::Matrix::make_perspective( real vfov, real aspect, real near, real far )
+{
+    real bottom = -near * std::tanf( vfov * PI_DIV_360 );
+    real top    = -bottom;
+    real left   = aspect * bottom;
+    real right  = -left;
+    return make_frustum( left, right, bottom, top, near, far );
+}
+
 inline bool Model::Matrix::is_identity( void ) const
 {
     for( uint i = 0; i < 4; i++ )
@@ -6582,6 +6675,53 @@ Model::Camera::Camera( real3 lookfrom, real3 lookat, real3 vup, real vfov, real 
     real3 screen_center = lower_left_corner + (horizontal + vertical).divby2();
     real32 distance_to_screen = (lookfrom - screen_center).length();
     solid_angle = area / (distance_to_screen*real32(nx*ny*spp));
+
+    //------------------------------------------------
+    // Construct the perspective projection matrix.
+    // perspective_projection = perspective * view
+    //------------------------------------------------
+    Matrix V = Matrix::make_view( lookfrom, lookat, vup );
+    Matrix P = Matrix::make_perspective( vfov, aspect, near, far );
+    P.transform( V, perspective_projection );
+
+    //------------------------------------------------
+    // Extract frustum_planes from perspective_projection matrix.
+    // https://www.gamedevs.org/uploads/fast-extraction-viewing-frustum-planes-from-world-view-projection-matrix.pdf
+    // 0=near 1=far 2=bottom 3=top left=4 right=5
+    //------------------------------------------------
+    const Matrix& pp = perspective_projection;
+    frustum_planes[0].normal   = real3( pp.m[3][0] + pp.m[2][0], pp.m[3][1] + pp.m[2][1], pp.m[3][2] + pp.m[2][2] );
+    frustum_planes[0].distance = pp.m[3][3] + pp.m[2][3];
+    frustum_planes[1].normal   = real3( pp.m[3][0] - pp.m[2][0], pp.m[3][1] - pp.m[2][1], pp.m[3][2] - pp.m[2][2] );
+    frustum_planes[1].distance = pp.m[3][3] - pp.m[2][3];
+    frustum_planes[2].normal   = real3( pp.m[3][0] + pp.m[1][0], pp.m[3][1] + pp.m[1][1], pp.m[3][2] + pp.m[1][2] );
+    frustum_planes[2].distance = pp.m[3][3] + pp.m[1][3];
+    frustum_planes[3].normal   = real3( pp.m[3][0] - pp.m[1][0], pp.m[3][1] - pp.m[1][1], pp.m[3][2] - pp.m[1][2] );
+    frustum_planes[3].distance = pp.m[3][3] - pp.m[1][3];
+    frustum_planes[4].normal   = real3( pp.m[3][0] + pp.m[0][0], pp.m[3][1] + pp.m[0][1], pp.m[3][2] + pp.m[0][2] );
+    frustum_planes[4].distance = pp.m[3][3] + pp.m[0][3];
+    frustum_planes[5].normal   = real3( pp.m[3][0] - pp.m[0][0], pp.m[3][1] - pp.m[0][1], pp.m[3][2] - pp.m[0][2] );
+    frustum_planes[5].distance = pp.m[3][3] - pp.m[0][3];
+}
+
+inline void Model::Camera::concentric_point_on_unit_disk( real s, real t, real& x, real& y ) const
+{
+    // more complex than polar, but according to 
+    // A Realistic Camera Model for Computer Graphics (Kolb et al)
+    // has 15% improvement in error over polar for camera lens sampling
+    // possibly similar improvement for sampling cones?
+    real a = mulby2(s) - 1.0;
+    real b = mulby2(t) - 1.0;
+    real rad, theta;
+
+    if (std::abs(a) > std::abs(b)) {
+        rad = a;
+        theta = PI_DIV_4*(b/a);
+    } else {
+        rad = b;
+        theta = PI_DIV_2 - PI_DIV_4*(a/b);
+    }
+    sincos(theta, y, x, rad);
 }
 
 Model::Ray Model::Camera::get_ray( real s_pixel, real t_pixel, real s_lens, real t_lens ) const 
@@ -6605,24 +6745,29 @@ Model::Ray Model::Camera::get_ray( real s_pixel, real t_pixel, real s_lens, real
     return r;
 }
 
-inline void Model::Camera::concentric_point_on_unit_disk( real s, real t, real& x, real& y ) const
+// see: "Optimized View Frustum Culling Algorithms", http://www.ce.chalmers.se/staff/uffe
+//
+bool Model::Camera::overlaps_box( const Model::AABB& box ) const 
 {
-    // more complex than polar, but according to 
-    // A Realistic Camera Model for Computer Graphics (Kolb et al)
-    // has 15% improvement in error over polar for camera lens sampling
-    // possibly similar improvement for sampling cones?
-    real a = mulby2(s) - 1.0;
-    real b = mulby2(t) - 1.0;
-    real rad, theta;
+    real3 n, p;
+    for( uint32_t i = 0; i < 6; i++ )
+    {
+        p = box._min;
+        n = box._max;
 
-    if (std::abs(a) > std::abs(b)) {
-        rad = a;
-        theta = PI_DIV_4*(b/a);
-    } else {
-        rad = b;
-        theta = PI_DIV_2 - PI_DIV_4*(a/b);
+        for( uint32_t j = 0; j < 3; j++ ) 
+        {
+            if ( frustum_planes[i].normal[j] >= 0.0 ) {
+                p[j] = box._max[j];
+                n[j] = box._min[j];
+            }
+        }
+
+        real dot = n.dot( frustum_planes[i].normal ) + frustum_planes[i].distance;
+        if ( dot > 0.0 ) return false;
     }
-    sincos(theta, y, x, rad);
+
+    return true;
 }
 
 bool Model::Polygon::bounding_box( const Model * model, Model::AABB& box, real padding ) const 

@@ -580,6 +580,7 @@ public:
         void expand( const real3d& p );
         inline real64 volume(void) const         { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
         bool encloses( const real3d& p ) const;
+        bool encloses( real64 x, real64 y, real64 z ) const { real3d p( x, y, z ); return encloses( p ); }
         bool encloses( const AABBD& other ) const;
         bool overlaps( const AABBD& other ) const;
         bool overlaps_triangle( const Model::real3d &v0, const Model::real3d &v1, const Model::real3d &v2, Model::real3d * p_ptr=nullptr ) const;
@@ -1579,12 +1580,12 @@ bool Model::debug = false;
 
 // these are done as macros to avoid evaluating msg (it makes a big difference)
 #include <assert.h>
-#define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << "ERROR: " << msg << "\n"; assert( false ); return false; }
-#define fsc_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << "ERROR: " << msg << "\n"; assert( false ); goto error;   }
-#define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << "ERROR: " << msg << "\n"; assert( false ); goto error;   }
-#define gph_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << "ERROR: " << msg << "\n"; assert( false ); goto error;   }
-#define die_assert( bool, msg ) if ( !(bool) ) {                               std::cout << "ERROR: " << msg << "\n"; assert( false );               }
-#define die( msg )                             {                               std::cout << "ERROR: " << msg << "\n"; assert( false );               }
+#define rtn_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << "ERROR: " << msg << "\n" << std::flush; exit( 1 ); return false; }
+#define fsc_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << "ERROR: " << msg << "\n" << std::flush; exit( 1 ); goto error;   }
+#define obj_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << "ERROR: " << msg << "\n" << std::flush; exit( 1 ); goto error;   }
+#define gph_assert( bool, msg ) if ( !(bool) ) { error_msg = std::string(msg); std::cout << "ERROR: " << msg << "\n" << std::flush; exit( 1 ); goto error;   }
+#define die_assert( bool, msg ) if ( !(bool) ) {                               std::cout << "ERROR: " << msg << "\n" << std::flush; exit( 1 );               }
+#define die( msg )                             {                               std::cout << "ERROR: " << msg << "\n" << std::flush; exit( 1 );               }
 
 inline std::istream& operator >> ( std::istream& is, Model::real3& v ) 
 {

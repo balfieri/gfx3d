@@ -551,6 +551,7 @@ public:
         void pad( real p );
         void expand( const AABB& other );
         void expand( const real3& p );
+        bool encloses( real x, real y, real z ) const { real3 p( x, y, z ); return encloses( p ); }
         inline real volume(void) const         { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
         bool encloses( const real3& p ) const;
         bool encloses( const AABB& other ) const;
@@ -637,6 +638,7 @@ public:
         inline const real3& direction() const         { return B; }
         inline const real3& direction_inv() const     { return B_inv; }
         inline const real3& normalized_direction() const { return B_norm; }
+        inline RAY_KIND kind() const                  { return KIND; }
         inline real32 solid_angle() const             { return SOLID_ANGLE; }
         inline real3 point_at_parameter(real t) const;
         inline real3 normalized_point_at_parameter(real t) const;
@@ -1010,6 +1012,7 @@ public:
         real4  column( uint c ) const;                  // returns column c as a vector
         void   transform( const real4& v, real4& r ) const; // r = *this * v
         void   transform( const real3& v, real3& r, bool div_by_w=true ) const; // r = *this * v (and divide by w by default)
+        void   transform( const Ray& r, Ray& r2 ) const;
         void   transform( const Matrix& M2, Matrix& M3 ) const; // M3 = *this * M2
         void   transpose( Matrix& mt ) const;           // return the transpose this matrix 
         void   invert( Matrix& minv ) const;            // return the inversion this matrix
@@ -5663,6 +5666,15 @@ void Model::Matrix::transform( const real3& v, real3& r, bool div_by_w ) const
     }
 }
 
+inline void Model::Matrix::transform( const Ray& r, Ray& r2 ) const
+{
+    real3 origin2;
+    real3 direction2;
+    transform( r.origin(), origin2 );
+    transform( r.direction(), direction2 );
+    r2 = Ray( origin2, direction2, r.kind(), r.solid_angle(), r.cone_angle() );
+}
+
 void Model::Matrix::transform( const Matrix& M2, Matrix& M3 ) const
 {
     // order: M3 = *this * M2
@@ -7002,6 +7014,22 @@ bool Model::Polygon::hit( const Model * model, const real3& origin, const real3&
              " frac_uv_cov=" << rec.frac_uv_cov << 
              " u=" << rec.u << " v=" << rec.v << " mtl_i=" << mtl_i << "\n";
     return true;
+}
+
+// simple standalone triangle hit that implements a small subset of the previous for generic usage
+//
+inline bool triangle_hit( const Model::real3& origin, const Model::real3& direction, Model::real t_min, Model::real t_max,
+                          const Model::real3& p0, const Model::real3& p1, const Model::real3& p2, Model::real& t, Model::real3& p )
+{
+    Model::real3 normal = (p1 - p0).cross( p2 - p0 );
+    Model::real d = direction.dot( normal );
+    t = (p0 - origin).dot( normal ) / d;
+    if ( t <= t_min || t >= t_max ) {
+        return false;
+    } else {
+        p = origin + direction * t;
+        return true;
+    }
 }
 
 bool Model::Polygon::is_emissive( const Model * model ) const

@@ -1167,6 +1167,10 @@ public:
     // system utilities
     void cmd( std::string c, std::string error="command failed", bool echo=true );  // calls std::system and aborts if not success
 
+    // memory allocation utilities
+    template<typename T> inline T *  aligned_alloc( uint64 cnt );
+    template<typename T> inline void perhaps_realloc( T *& array, const uint64& hdr_cnt, uint64& max_cnt, uint64 add_cnt );
+
     // file utilities
     static void dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ); 
     static bool file_exists( std::string file_name );
@@ -1178,8 +1182,10 @@ public:
     bool skip_whitespace_to_eol( char *& xxx, char *& xxx_end );  // on this line only
     bool skip_whitespace( char *& xxx, char *& xxx_end );
     bool skip_to_eol( char *& xxx, char *& xxx_end );
+    bool skip_through_eol( char *& xxx, char *& xxx_end );
     bool eol( char *& xxx, char *& xxx_end );
     bool expect_char( char ch, char *& xxx, char* xxx_end, bool skip_whitespace_first=false );
+    bool expect_eol( char *& xxx, char*& xxx_end );
     bool expect_cmd( const char * s, char *& xxx, char *& xxx_end );
     bool parse_string( std::string& s, char *& xxx, char *& xxx_end );
     bool parse_string_i( uint& s, char *& xxx, char *& xxx_end );
@@ -1192,7 +1198,9 @@ public:
     bool parse_real( real& r, char *& xxx, char *& xxx_end, bool skip_whitespace_first=false );
     bool parse_real64( real64& r, char *& xxx, char *& xxx_end, bool skip_whitespace_first=false );
     bool parse_int( _int& i, char *& xxx, char *& xxx_end );
-    bool parse_uint( uint& u, char *& xxx, char *& xxx_end );
+    bool parse_int64( _int64& i, char *& xxx, char *& xxx_end );
+    bool parse_uint( uint& u, char *& xxx, char *& xxx_end, uint base=10 );
+    bool parse_uint64( uint64& u, char *& xxx, char *& xxx_end, uint base=10 );
     bool parse_bool( bool& b, char *& xxx, char *& xxx_end );
     std::string surrounding_lines( char *& xxx, char *& xxx_end );
 
@@ -1337,14 +1345,6 @@ private:
     // BVH builder
     uint bvh_qsplit( BVH_NODE_KIND kind, uint poly_i, uint n, real pivot, uint axis );
     uint bvh_node( BVH_NODE_KIND kind, uint i, uint n, uint axis );
-
-    // allocates an array of T on a page boundary
-    template<typename T>
-    T * aligned_alloc( uint64 cnt );
-
-    // reallocate array if we are about to exceed its current size
-    template<typename T>
-    inline void perhaps_realloc( T *& array, const uint64& hdr_cnt, uint64& max_cnt, uint64 add_cnt );
 
     bool write_uncompressed( std::string file_path );
     bool read_uncompressed( std::string file_path );
@@ -5670,8 +5670,12 @@ inline void Model::Matrix::transform( const Ray& r, Ray& r2 ) const
 {
     real3 origin2;
     real3 direction2;
-    transform( r.origin(), origin2 );
-    transform( r.direction(), direction2 );
+    transform( r.origin(), origin2, false );
+    for( uint i = 0; i < 3; i++ ) 
+    {
+        origin2.c[i] += m[i][3];
+    }
+    transform( r.direction(), direction2, false );
     r2 = Ray( origin2, direction2, r.kind(), r.solid_angle(), r.cone_angle() );
 }
 
@@ -8177,6 +8181,15 @@ inline bool Model::skip_to_eol( char *& xxx, char *& xxx_end )
     return true;
 }
 
+inline bool Model::skip_through_eol( char *& xxx, char *& xxx_end )
+{
+    while( !eol( xxx, xxx_end ) ) 
+    {
+        xxx++;
+    }
+    return true;
+}
+
 inline bool Model::eol( char *& xxx, char *& xxx_end )
 {
     skip_whitespace_to_eol( xxx, xxx_end );
@@ -8200,6 +8213,15 @@ inline bool Model::expect_char( char ch, char *& xxx, char* xxx_end, bool skip_w
     rtn_assert( xxx != xxx_end, "premature end of file" );
     rtn_assert( *xxx == ch, "expected character '" + std::string(1, ch) + "' got '" + std::string( 1, *xxx ) + "' " + surrounding_lines( xxx, xxx_end ) );
     xxx++;
+    return true;
+}
+
+inline bool Model::expect_eol( char *& xxx, char *& xxx_end )
+{
+    if ( xxx != xxx_end ) {
+        rtn_assert( *xxx == '\n' || *xxx == '\r', "not at eol" );
+        xxx++;
+    }
     return true;
 }
 
@@ -8927,7 +8949,7 @@ inline bool Model::parse_real64( Model::real64& r64, char *& xxx, char *& xxx_en
     return true;
 }
 
-inline bool Model::parse_int( _int& i, char *& xxx, char *& xxx_end )
+inline bool Model::parse_int64( _int64& i, char *& xxx, char *& xxx_end )
 {
     bool vld = false;
     i = 0;
@@ -8956,13 +8978,63 @@ inline bool Model::parse_int( _int& i, char *& xxx, char *& xxx_end )
     return true;
 }
 
-inline bool Model::parse_uint( uint& u, char *& xxx, char *& xxx_end )
+inline bool Model::parse_int( _int& i, char *& xxx, char *& xxx_end )
 {
-    _int i;
-    if ( !parse_int( i, xxx, xxx_end ) ) return false;
-    rtn_assert( i >= 0, "parse_uint encountered negative integer" );
-    u = i;
+    _int64 i64;
+    bool r = parse_int64( i64, xxx, xxx_end );
+    i = i64;
+    return r;
+}
+
+inline bool Model::parse_uint64( uint64& u, char *& xxx, char *& xxx_end, uint base )
+{
+    bool vld = false;
+    u = 0;
+    while( xxx != xxx_end && (*xxx == ' ' || *xxx == '\t') ) xxx++;  // skip leading spaces
+
+    while( xxx != xxx_end )
+    {
+        char ch = *xxx;
+
+        if ( base == 10 ) {
+            if ( ch >= '0' && ch <= '9' ) {
+                u = u*10 + (ch - '0');
+            } else {
+                break;
+            }
+        } else if ( base == 16 ) {
+            if ( ch >= '0' && ch <= '9' ) {
+                u = u*16 + (ch - '0');
+            } else if ( ch >= 'a' && ch <= 'f' ) {
+                u = u*16 + (ch - 'a');
+            } else if ( ch >= 'A' && ch <= 'F' ) {
+                u = u*16 + (ch - 'A');
+            } else {
+                break;
+            }
+        } else if ( base == 8 ) {
+            if ( ch >= '0' && ch <= '7' ) {
+                u = u*8 + (ch - '0');
+            } else {
+                break;
+            }
+        } else { 
+            rtn_assert( false, "bad base, must be 8, 10, or 16; 0 not yet supported" );
+        }
+        xxx++;
+        vld = true;
+    }
+
+    rtn_assert( vld, "unable to parse uint64" + surrounding_lines( xxx, xxx_end ) );
     return true;
+}
+
+inline bool Model::parse_uint( uint& u, char *& xxx, char *& xxx_end, uint base )
+{
+    uint64 u64;
+    bool r = parse_uint64( u64, xxx, xxx_end, base );
+    u = u64;
+    return r;
 }
 
 inline bool Model::parse_bool( bool& b, char *& xxx, char *& xxx_end )

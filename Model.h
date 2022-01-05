@@ -661,6 +661,40 @@ public:
         int top;
     };
 
+    class Ray64
+    {
+    public: 
+        inline Ray64() { top = -1;}
+        inline Ray64( const real3d& a, const real3d& b, RAY_KIND kind, real64 solid_angle=0, real64 cone_angle=0 );
+        inline void init_normalized( const real3d& a, const real3d& b, RAY_KIND kind, real64 solid_angle=0, real64 cone_angle=0 ); 
+
+        inline const real3d& origin() const            { return A; }
+        inline const real3d& direction() const         { return B; }
+        inline const real3d& direction_inv() const     { return B_inv; }
+        inline const real3d& normalized_direction() const { return B_norm; }
+        inline RAY_KIND kind() const                   { return KIND; }
+        inline real64 solid_angle() const              { return SOLID_ANGLE; }
+        inline real3d point_at_parameter(real64 t) const;
+        inline real3d normalized_point_at_parameter(real64 t) const;
+        inline real3d endpoint() const                 { return point_at_parameter(1.0); }
+        inline real64 length() const                   { return direction().length(); }
+
+        inline real64 cone_angle() const               { return CONE_ANGLE; }
+        inline real64 cone_radius(real t=1.0) const    { return (CONE_ANGLE <= 0.0 || t <= 0.0) ? 0.0 : (t*length() * std::tan(CONE_ANGLE)); }
+        inline real64 cone_radius_sqr(real t=1.0) const { real64 r = cone_radius(t); return r*r; }
+        inline const real3d cone_base_dir_x( void ) const;
+        inline const real3d cone_base_dir_y( void ) const { return -direction(); }  // from endpoint() to origin()
+
+        real3d A;
+        real3d B;
+        real3d B_inv;
+        real3d B_norm;
+        RAY_KIND KIND;
+        real64 SOLID_ANGLE;
+        real64 CONE_ANGLE;  
+        int top;
+    };
+
     class Polygon
     {
     public:
@@ -1011,8 +1045,10 @@ public:
         real4  row( uint r ) const;                     // returns row r as a vector
         real4  column( uint c ) const;                  // returns column c as a vector
         void   transform( const real4& v, real4& r ) const; // r = *this * v
-        void   transform( const real3& v, real3& r, bool div_by_w=true ) const; // r = *this * v (and divide by w by default)
+        void   transform( const real3& v, real3& r, bool div_by_w=true ) const;   // r = *this * v (and divide by w by default)
+        void   transform( const real3d& v, real3d& r, bool div_by_w=true ) const; 
         void   transform( const Ray& r, Ray& r2 ) const;
+        void   transform( const Ray64& r, Ray64& r2 ) const;
         void   transform( const Matrix& M2, Matrix& M3 ) const; // M3 = *this * M2
         void   transpose( Matrix& mt ) const;           // return the transpose this matrix 
         void   invert( Matrix& minv ) const;            // return the inversion this matrix
@@ -1390,6 +1426,8 @@ inline Model::real hypoth( const Model::real& x, const Model::real& y )         
 inline Model::real hypoth1( const Model::real& y )                                   { return std::sqrt( 1.0 - y*y ); }
 inline void sincos( const Model::real& x, Model::real& si, Model::real& co )         { si = std::sin( x ); co = std::cos( x ); }
 inline void sincos( const Model::real& x, Model::real& si, Model::real& co, const Model::real& r ) { si = r*std::sin( x ); co = r*std::cos( x ); }
+inline void sincos( const Model::real64& x, Model::real64& si, Model::real64& co )         { si = std::sin( x ); co = std::cos( x ); }
+inline void sincos( const Model::real64& x, Model::real64& si, Model::real64& co, const Model::real64& r ) { si = r*std::sin( x ); co = r*std::cos( x ); }
 
 inline static void minmax( const Model::real x0, const Model::real x1, const Model::real x2, Model::real &min, Model::real &max )
 {
@@ -5666,6 +5704,26 @@ void Model::Matrix::transform( const real3& v, real3& r, bool div_by_w ) const
     }
 }
 
+void Model::Matrix::transform( const real3d& v, real3d& r, bool div_by_w ) const
+{
+    // order: r = *this * v
+    if ( div_by_w ) {
+        die( "can't transform real3d with div_by_w=true right now, can if needed" );
+    } else {
+        for( uint i = 0; i < 3; i++ )
+        {
+            double sum = 0.0;               // use higher-precision here
+            for( uint j = 0; j < 3; j++ )
+            {
+                double partial = m[i][j];
+                partial *= v.c[j];
+                sum += partial;
+            }
+            r.c[i] = sum;
+        }
+    }
+}
+
 inline void Model::Matrix::transform( const Ray& r, Ray& r2 ) const
 {
     real3 origin2;
@@ -5677,6 +5735,19 @@ inline void Model::Matrix::transform( const Ray& r, Ray& r2 ) const
     }
     transform( r.direction(), direction2, false );
     r2 = Ray( origin2, direction2, r.kind(), r.solid_angle(), r.cone_angle() );
+}
+
+inline void Model::Matrix::transform( const Ray64& r, Ray64& r2 ) const
+{
+    real3d origin2;
+    real3d direction2;
+    transform( r.origin(), origin2, false );
+    for( uint i = 0; i < 3; i++ ) 
+    {
+        origin2.c[i] += m[i][3];
+    }
+    transform( r.direction(), direction2, false );
+    r2 = Ray64( origin2, direction2, r.kind(), r.solid_angle(), r.cone_angle() );
 }
 
 void Model::Matrix::transform( const Matrix& M2, Matrix& M3 ) const
@@ -6675,6 +6746,55 @@ inline const Model::real3 Model::Ray::cone_base_dir_x( void ) const
     return real3(rx-x, ry-y, 0);
 }
 
+inline Model::Ray64::Ray64( const Model::real3d& a, const Model::real3d& b, Model::RAY_KIND kind, Model::real64 solid_angle, Model::real64 cone_angle ) 
+        : A(a), B(b), KIND(kind), SOLID_ANGLE(solid_angle), CONE_ANGLE(cone_angle) 
+{
+    B_norm = B; 
+    B_norm.normalize(); 
+    B_inv = Model::real3d(1,1,1); 
+    B_inv /= B; 
+    top = -1;
+}
+
+inline void Model::Ray64::init_normalized( const Model::real3d& a, const Model::real3d& b, RAY_KIND kind, Model::real64 solid_angle, Model::real64 cone_angle ) 
+{
+    A = a; 
+    B = b; 
+    SOLID_ANGLE = solid_angle;
+    CONE_ANGLE = cone_angle;
+    B_norm = b; 
+    B_inv = Model::real3d(1,1,1); 
+    B_inv /= B; 
+    KIND = kind;
+    top = -1;
+}
+
+inline Model::real3d Model::Ray64::point_at_parameter( Model::real64 t ) const 
+{ 
+    return A + t*B; 
+}
+
+inline Model::real3d Model::Ray64::normalized_point_at_parameter( Model::real64 t ) const 
+{ 
+    return A + t*B_norm; 
+}
+
+inline const Model::real3d Model::Ray64::cone_base_dir_x( void ) const 
+{ 
+    // Get the cone edge vector in 2D by rotating direction by CONE_ANGLE.
+    //
+    real64 sin, cos;
+    sincos(CONE_ANGLE, sin, cos);
+    real64 x = direction()[0];
+    real64 y = direction()[1];
+    real64 rx = x*cos - y*sin;
+    real64 ry = x*sin + y*cos;
+
+    // base_dir_x = edge - direction
+    //
+    return real3d(rx-x, ry-y, 0);
+}
+
 Model::Camera::Camera( real3 lookfrom, real3 lookat, real3 vup, real vfov, real near, real far, real aspect, real aperture, real focus_dist, int nx, int ny, int spp, uint name_i )
     : lookfrom(lookfrom), lookat(lookat), vup(vup), aperture(aperture), focus_dist(focus_dist), near(near), far(far), vfov(vfov), aspect(aspect), name_i(name_i)
 { 
@@ -7027,6 +7147,20 @@ inline bool triangle_hit( const Model::real3& origin, const Model::real3& direct
 {
     Model::real3 normal = (p1 - p0).cross( p2 - p0 );
     Model::real d = direction.dot( normal );
+    t = (p0 - origin).dot( normal ) / d;
+    if ( t <= t_min || t >= t_max ) {
+        return false;
+    } else {
+        p = origin + direction * t;
+        return true;
+    }
+}
+
+inline bool triangle_hit( const Model::real3d& origin, const Model::real3d& direction, Model::real64 t_min, Model::real64 t_max,
+                          const Model::real3d& p0, const Model::real3d& p1, const Model::real3d& p2, Model::real64& t, Model::real3d& p )
+{
+    Model::real3d normal = (p1 - p0).cross( p2 - p0 );
+    Model::real64 d = direction.dot( normal );
     t = (p0 - origin).dot( normal ) / d;
     if ( t <= t_min || t >= t_max ) {
         return false;
@@ -9006,9 +9140,9 @@ inline bool Model::parse_uint64( uint64& u, char *& xxx, char *& xxx_end, uint b
             if ( ch >= '0' && ch <= '9' ) {
                 u = u*16 + (ch - '0');
             } else if ( ch >= 'a' && ch <= 'f' ) {
-                u = u*16 + (ch - 'a');
+                u = u*16 + (ch - 'a' + 10);
             } else if ( ch >= 'A' && ch <= 'F' ) {
-                u = u*16 + (ch - 'A');
+                u = u*16 + (ch - 'A' + 10);
             } else {
                 break;
             }

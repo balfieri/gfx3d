@@ -552,7 +552,8 @@ public:
         void expand( const AABB& other );
         void expand( const real3& p );
         bool encloses( real x, real y, real z ) const { real3 p( x, y, z ); return encloses( p ); }
-        inline real volume(void) const         { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
+        inline bool is_empty(void) const        { return _max[0] <= _min[0] || _max[1] <= _min[1] || _max[2] <= _min[2]; }
+        inline real volume(void) const          { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
         bool encloses( const real3& p ) const;
         bool encloses( const AABB& other ) const;
         bool overlaps( const AABB& other ) const;
@@ -579,6 +580,7 @@ public:
         void pad( real64 p );
         void expand( const AABBD& other );
         void expand( const real3d& p );
+        inline bool   is_empty(void) const       { return _max[0] <= _min[0] || _max[1] <= _min[1] || _max[2] <= _min[2]; }
         inline real64 volume(void) const         { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
         bool encloses( const real3d& p ) const;
         bool encloses( real64 x, real64 y, real64 z ) const { real3d p( x, y, z ); return encloses( p ); }
@@ -599,6 +601,7 @@ public:
         inline AABBI( const _int p0[], const _int p1[] );
         inline AABBI( const _int p0[], const _int p1[], const _int p2[] );
         void expand( const _int p[] );
+        inline bool   is_empty(void) const       { return (_max[2]-_min[2]) <= 0 || (_max[1]-_min[1]) <= 0 || (_max[0]-_min[0]) <= 0; }
         inline uint64 volume(void) const         { return uint64(_max[2]-_min[2]+1)*uint64(_max[1]-_min[1]+1)*uint64(_max[0]-_min[0]+1); }
         bool encloses( const _int p[] ) const;
         bool encloses( _int x, _int y, _int z ) const;
@@ -615,6 +618,7 @@ public:
         AABBU64( const uint64 p0[], const uint64 p1[] );
         AABBU64( const uint64 p0[], const uint64 p1[], const uint64 p2[] );
         void expand( const uint64 p[] );
+        inline bool   is_empty(void) const       { return _max[0] <= _min[0] || _max[1] <= _min[1] || _max[2] <= _min[2]; }
         inline uint64 volume(void) const         { return (_max[2]-_min[2]+1)*(_max[1]-_min[1]+1)*(_max[0]-_min[0]+1); }
         bool encloses( const uint64 p[] ) const;
         bool encloses( uint64 x, uint64 y, uint64 z ) const;

@@ -544,6 +544,7 @@ public:
         inline AABB( const real3& p );             // init with one point
         inline AABB( const real3& p0, const real3& p1 );
         inline AABB( const real3& p0, const real3& p1, const real3& p2 );
+        AABB( const AABB& aabb1, const AABB& aabb2 ) { *this = aabb1; expand( aabb2 ); }
 
         inline real3 min() const { return _min; }
         inline real3 max() const { return _max; }
@@ -552,11 +553,17 @@ public:
         void expand( const AABB& other );
         void expand( const real3& p );
         bool encloses( real x, real y, real z ) const { real3 p( x, y, z ); return encloses( p ); }
-        inline bool is_empty(void) const        { return _max[0] <= _min[0] || _max[1] <= _min[1] || _max[2] <= _min[2]; }
-        inline real volume(void) const          { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
+        inline bool is_empty( void ) const      { return _max[0] <= _min[0] || _max[1] <= _min[1] || _max[2] <= _min[2]; }
+        inline real volume( void ) const        { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
+        inline real3 center( void ) const       { return real3( (_min[0]+_max[0]) * 0.5, (_min[1]+_max[1]) * 0.5, (_min[2]+_max[2]) * 0.5 ); }
+        inline real3 size( void ) const         { return real3( _max[0]-_min[0], _max[1]-_min[1], _max[2]-_min[2] ); }
+        inline real size_max_rcp( void ) const  { real3 s = size(); return 1.0f / std::max( std::max( s[0], s[1] ), s[2] ); }
+        inline real half_area( void ) const     { real3 s = size(); return s[0]*s[1] + s[1]*s[2] + s[2]*s[0]; }
+        inline real area( void ) const          { return half_area() * 2.0f; }
         bool encloses( const real3& p ) const;
         bool encloses( const AABB& other ) const;
         bool overlaps( const AABB& other ) const;
+        AABB transform_relative( const AABB& other ) const;
         bool hit( const real3& origin, const real3& direction, const real3& direction_inv, real& tmin, real& tmax ) const; 
     };
 
@@ -571,6 +578,7 @@ public:
         AABBD( const real3d& p0, const real3d& p1 );
         AABBD( const real3d& p0, const real3d& p1, const real3d& p2 );
         AABBD( const AABB& aabb );
+        AABBD( const AABBD& aabb1, const AABBD& aabb2 ) { *this = aabb1; expand( aabb2 ); }
 
         inline AABB to_aabb( void ) const        { AABB aabb; aabb._min[0] = _min[0]; aabb._min[1] = _min[1]; aabb._min[2] = _min[2]; aabb._max[0] = _max[0]; aabb._max[1] = _max[1]; aabb._max[1] = _max[1]; return aabb; }
 
@@ -582,11 +590,17 @@ public:
         void expand( const real3d& p );
         inline bool   is_empty(void) const       { return _max[0] <= _min[0] || _max[1] <= _min[1] || _max[2] <= _min[2]; }
         inline real64 volume(void) const         { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
+        inline real3d center( void ) const       { return real3d( (_min[0]+_max[0]) * 0.5, (_min[1]+_max[1]) * 0.5, (_min[2]+_max[2]) * 0.5 ); }
+        inline real3d size( void ) const         { return real3d( _max[0]-_min[0], _max[1]-_min[1], _max[2]-_min[2] ); }
+        inline real64 size_max_rcp( void ) const { real3d s = size(); return 1.0 / std::max( std::max( s[0], s[1] ), s[2] ); }
+        inline real64 half_area( void ) const    { real3d s = size(); return s[0]*s[1] + s[1]*s[2] + s[2]*s[0]; }
+        inline real64 area( void ) const         { return half_area() * 2.0; }
         bool encloses( const real3d& p ) const;
         bool encloses( real64 x, real64 y, real64 z ) const { real3d p( x, y, z ); return encloses( p ); }
         bool encloses( const AABBD& other ) const;
         bool overlaps( const AABBD& other ) const;
         bool overlaps_triangle( const Model::real3d &v0, const Model::real3d &v1, const Model::real3d &v2, Model::real3d * p_ptr=nullptr ) const;
+        AABBD transform_relative( const AABBD& other ) const;
         bool hit( const real3d& origin, const real3d& direction, const real3d& direction_inv, real64& tmin, real64& tmax ) const; 
     };
 
@@ -6016,6 +6030,20 @@ inline bool Model::AABB::overlaps( const Model::AABB& other ) const
            _max.c[2] >= other._min.c[2];
 }
 
+static inline Model::real3 __transform_relative( Model::real3 v, Model::real3 center, Model::real sizeMaxRcp ) 
+{ 
+    return Model::real3( (v[0] - center[0]) * sizeMaxRcp + 0.5f, 
+                         (v[1] - center[1]) * sizeMaxRcp + 0.5f, 
+                         (v[2] - center[2]) * sizeMaxRcp + 0.5f );
+}
+
+inline Model::AABB Model::AABB::transform_relative( const Model::AABB& other ) const
+{
+    real3 c = center(); 
+    real  rcp = size_max_rcp();
+    return AABB( __transform_relative( other._min, c, rcp ), __transform_relative( other._max, c, rcp ) );
+}
+
 inline bool Model::AABB::hit( const Model::real3& origin, const Model::real3& direction, const Model::real3& direction_inv, 
                               Model::real& t_min, Model::real& t_max ) const 
 {
@@ -6566,6 +6594,20 @@ inline bool Model::AABBD::overlaps_triangle( const Model::real3d &v0, const Mode
         assert( findTriPointInBox( v0, v1, v2, *this, boxcenter, boxhalfsize, p_ptr ) ); 
     }
     return true;
+}
+
+static inline Model::real3d __transform_relative( Model::real3d v, Model::real3d center, Model::real64 sizeMaxRcp ) 
+{ 
+    return Model::real3d( (v[0] - center[0]) * sizeMaxRcp + 0.5f, 
+                          (v[1] - center[1]) * sizeMaxRcp + 0.5f, 
+                          (v[2] - center[2]) * sizeMaxRcp + 0.5f );
+}
+
+inline Model::AABBD Model::AABBD::transform_relative( const Model::AABBD& other ) const
+{
+    real3d c = center(); 
+    real64 rcp = size_max_rcp();
+    return AABBD( __transform_relative( other._min, c, rcp ), __transform_relative( other._max, c, rcp ) );
 }
 
 inline bool Model::AABBD::hit( const Model::real3d& origin, const Model::real3d& direction, const Model::real3d& direction_inv, 

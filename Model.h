@@ -1478,32 +1478,36 @@ inline Model::real area_2D_triangle(Model::real x0, Model::real y0, Model::real 
 //
 //--------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------
-inline Model::real2 operator +( const Model::real2& v1, const Model::real2& v2 )                                { return Model::real2(v1.c[0] + v2.c[0], v1.c[1] + v2.c[1]);            }
-inline Model::real2 operator -( const Model::real2& v1, const Model::real2& v2 )                                { return Model::real2(v1.c[0] - v2.c[0], v1.c[1] - v2.c[1]);            }
-inline Model::real2 operator *( const Model::real2& v1, const Model::real2& v2 )                                { return Model::real2(v1.c[0] * v2.c[0], v1.c[1] * v2.c[1]);            }
-inline Model::real2 operator /( const Model::real2& v1, const Model::real2& v2 )                                { return Model::real2(v1.c[0] / v2.c[0], v1.c[1] / v2.c[1]);            }
-inline Model::real2 operator *( Model::real t, const Model::real2& v )                                          { return Model::real2(t*v.c[0], t*v.c[1]);                              }
-inline Model::real2 operator /( Model::real2 v, Model::real t )                                                 { return Model::real2(v.c[0]/t, v.c[1]/t);                              }
-inline Model::real2 operator *( const Model::real2& v, Model::real t )                                          { return Model::real2(t*v.c[0], t*v.c[1]);                              }
+inline Model::real2  operator +( const Model::real2& v1, const Model::real2& v2 )                               { return Model::real2(v1.c[0] + v2.c[0], v1.c[1] + v2.c[1]);            }
+inline Model::real2  operator -( const Model::real2& v1, const Model::real2& v2 )                               { return Model::real2(v1.c[0] - v2.c[0], v1.c[1] - v2.c[1]);            }
+inline Model::real2  operator *( const Model::real2& v1, const Model::real2& v2 )                               { return Model::real2(v1.c[0] * v2.c[0], v1.c[1] * v2.c[1]);            }
+inline Model::real2  operator /( const Model::real2& v1, const Model::real2& v2 )                               { return Model::real2(v1.c[0] / v2.c[0], v1.c[1] / v2.c[1]);            }
+inline Model::real2  operator *( Model::real t, const Model::real2& v )                                         { return Model::real2(t*v.c[0], t*v.c[1]);                              }
+inline Model::real2  operator /( Model::real2 v, Model::real t )                                                { return Model::real2(v.c[0]/t, v.c[1]/t);                              }
+inline Model::real2  operator *( const Model::real2& v, Model::real t )                                         { return Model::real2(t*v.c[0], t*v.c[1]);                              }
 
-inline Model::real2 sqr( const Model::real2& v )                                                                { return Model::real2(::sqr(v.c[0]), ::sqr(v.c[1]));                    }
-inline Model::real  dot( const Model::real2& v0, const Model::real2& v1 )                                       { return v0.dot( v1 );                                                  }
-inline Model::real2 lerp( const Model::real2& v0, const Model::real2& v1, Model::real t )                       { return (Model::real(1.0) - t) * v0 + t * v1;                          }
-inline Model::real2 lerp( const Model::real2 &v0, const Model::real2 &v1, const Model::real2 &vt)               { return (Model::real2(1,1) - vt) * v0 + vt * v1;                       }
+inline Model::real2  min( const Model::real2& v0, const Model::real2& v1 )                                      { return Model::real2(std::min(v0[0], v1[0]), std::min(v0[1], v1[1]));  }
+inline Model::real2  max( const Model::real2& v0, const Model::real2& v1 )                                      { return Model::real2(std::max(v0[0], v1[0]), std::max(v0[1], v1[1]));  }
+inline Model::real2  sqr( const Model::real2& v )                                                               { return Model::real2(::sqr(v.c[0]), ::sqr(v.c[1]));                    }
+inline Model::real   dot( const Model::real2& v0, const Model::real2& v1 )                                      { return v0.dot( v1 );                                                  }
+inline Model::real2  lerp( const Model::real2& v0, const Model::real2& v1, Model::real t )                      { return (Model::real(1.0) - t) * v0 + t * v1;                          }
+inline Model::real2  lerp( const Model::real2 &v0, const Model::real2 &v1, const Model::real2 &vt)              { return (Model::real2(1,1) - vt) * v0 + vt * v1;                       }
 
-inline Model::real3 operator +( const Model::real3& v1, const Model::real3& v2 )                                { return Model::real3(v1.c[0] + v2.c[0], v1.c[1] + v2.c[1], v1.c[2] + v2.c[2]); }
-inline Model::real3 operator -( const Model::real3& v1, const Model::real3& v2 )                                { return Model::real3(v1.c[0] - v2.c[0], v1.c[1] - v2.c[1], v1.c[2] - v2.c[2]); }
-inline Model::real3 operator *( const Model::real3& v1, const Model::real3& v2 )                                { return Model::real3(v1.c[0] * v2.c[0], v1.c[1] * v2.c[1], v1.c[2] * v2.c[2]); }
-inline Model::real3 operator /( const Model::real3& v1, const Model::real3& v2 )                                { return Model::real3(v1.c[0] / v2.c[0], v1.c[1] / v2.c[1], v1.c[2] / v2.c[2]); }
-inline Model::real3 operator *( Model::real t, const Model::real3& v )                                          { return Model::real3(t*v.c[0], t*v.c[1], t*v.c[2]);                    }
-inline Model::real3 operator /( Model::real3 v, Model::real t )                                                 { return Model::real3(v.c[0]/t, v.c[1]/t, v.c[2]/t);                    }
-inline Model::real3 operator *( const Model::real3& v, Model::real t )                                          { return Model::real3(t*v.c[0], t*v.c[1], t*v.c[2]);                    }
+inline Model::real3  operator +( const Model::real3& v1, const Model::real3& v2 )                               { return Model::real3(v1.c[0] + v2.c[0], v1.c[1] + v2.c[1], v1.c[2] + v2.c[2]); }
+inline Model::real3  operator -( const Model::real3& v1, const Model::real3& v2 )                               { return Model::real3(v1.c[0] - v2.c[0], v1.c[1] - v2.c[1], v1.c[2] - v2.c[2]); }
+inline Model::real3  operator *( const Model::real3& v1, const Model::real3& v2 )                               { return Model::real3(v1.c[0] * v2.c[0], v1.c[1] * v2.c[1], v1.c[2] * v2.c[2]); }
+inline Model::real3  operator /( const Model::real3& v1, const Model::real3& v2 )                               { return Model::real3(v1.c[0] / v2.c[0], v1.c[1] / v2.c[1], v1.c[2] / v2.c[2]); }
+inline Model::real3  operator *( Model::real t, const Model::real3& v )                                         { return Model::real3(t*v.c[0], t*v.c[1], t*v.c[2]);                    }
+inline Model::real3  operator /( Model::real3 v, Model::real t )                                                { return Model::real3(v.c[0]/t, v.c[1]/t, v.c[2]/t);                    }
+inline Model::real3  operator *( const Model::real3& v, Model::real t )                                         { return Model::real3(t*v.c[0], t*v.c[1], t*v.c[2]);                    }
 
-inline Model::real3 sqr( const Model::real3& v )                                                                { return Model::real3(::sqr(v.c[0]), ::sqr(v.c[1]), ::sqr(v.c[2]));     }
-inline Model::real  dot( const Model::real3& v0, const Model::real3& v1 )                                       { return v0.dot( v1 );                                                  }
-inline Model::real3 cross( const Model::real3& v0, const Model::real3& v1 )                                     { return v0.cross( v1 );                                                }
-inline Model::real3 lerp( const Model::real3& v0, const Model::real3& v1, Model::real t )                       { return (Model::real(1.0) - t) * v0 + t * v1;                          }
-inline Model::real3 lerp( const Model::real3 &v0, const Model::real3 &v1, const Model::real3 &vt)               { return (Model::real3(1,1,1) - vt) * v0 + vt * v1;                     }
+inline Model::real3  min( const Model::real3& v0, const Model::real3& v1 )                                      { return Model::real3(std::min(v0[0], v1[0]), std::min(v0[1], v1[1]), std::min(v0[2], v1[2])); }
+inline Model::real3  max( const Model::real3& v0, const Model::real3& v1 )                                      { return Model::real3(std::max(v0[0], v1[0]), std::max(v0[1], v1[1]), std::max(v0[2], v1[2])); }
+inline Model::real3  sqr( const Model::real3& v )                                                               { return Model::real3(::sqr(v.c[0]), ::sqr(v.c[1]), ::sqr(v.c[2]));     }
+inline Model::real   dot( const Model::real3& v0, const Model::real3& v1 )                                      { return v0.dot( v1 );                                                  }
+inline Model::real3  cross( const Model::real3& v0, const Model::real3& v1 )                                    { return v0.cross( v1 );                                                }
+inline Model::real3  lerp( const Model::real3& v0, const Model::real3& v1, Model::real t )                      { return (Model::real(1.0) - t) * v0 + t * v1;                          }
+inline Model::real3  lerp( const Model::real3 &v0, const Model::real3 &v1, const Model::real3 &vt)              { return (Model::real3(1,1,1) - vt) * v0 + vt * v1;                     }
 
 inline Model::real3 spherical_to_cartesian( const Model::real3& center, Model::real radius, Model::real theta, Model::real phi ) 
 {
@@ -1598,6 +1602,8 @@ inline Model::real3d operator *( Model::real64 t, const Model::real3d& v )      
 inline Model::real3d operator /( Model::real3d v, Model::real64 t )                                             { return Model::real3d(v.c[0]/t, v.c[1]/t, v.c[2]/t);                   }
 inline Model::real3d operator *( const Model::real3d& v, Model::real64 t )                                      { return Model::real3d(t*v.c[0], t*v.c[1], t*v.c[2]);                   }
 
+inline Model::real3d min( const Model::real3d& v0, const Model::real3d& v1 )                                    { return Model::real3d(std::min(v0[0], v1[0]), std::min(v0[1], v1[1]), std::min(v0[2], v1[2])); }
+inline Model::real3d max( const Model::real3d& v0, const Model::real3d& v1 )                                    { return Model::real3d(std::max(v0[0], v1[0]), std::max(v0[1], v1[1]), std::max(v0[2], v1[2])); }
 inline Model::real3d sqr( const Model::real3d& v )                                                              { return Model::real3d(::sqr(v.c[0]), ::sqr(v.c[1]), ::sqr(v.c[2]));    }
 inline Model::real   dot( const Model::real3d& v0, const Model::real3d& v1 )                                    { return v0.dot( v1 );                                                  }
 inline Model::real3d cross( const Model::real3d& v0, const Model::real3d& v1 )                                  { return v0.cross( v1 );                                                }
@@ -1620,6 +1626,8 @@ inline Model::real4 operator *( Model::real t, const Model::real4& v )          
 inline Model::real4 operator /( Model::real4 v, Model::real t )                                                 { return Model::real4(v.c[0]/t, v.c[1]/t, v.c[2]/t, v.c[3]/t);          }
 inline Model::real4 operator *( const Model::real4& v, Model::real t )                                          { return Model::real4(t*v.c[0], t*v.c[1], t*v.c[2], t*v.c[3]);          }
 
+inline Model::real4 min( const Model::real4& v0, const Model::real4& v1 )                                       { return Model::real4(std::min(v0[0], v1[0]), std::min(v0[1], v1[1]), std::min(v0[2], v1[2]), std::min(v0[3], v1[3])); }
+inline Model::real4 max( const Model::real4& v0, const Model::real4& v1 )                                       { return Model::real4(std::max(v0[0], v1[0]), std::max(v0[1], v1[1]), std::max(v0[2], v1[2]), std::max(v0[3], v1[3])); }
 inline Model::real4 sqr( const Model::real4& v )                                                                { return Model::real4(::sqr(v.c[0]), ::sqr(v.c[1]), ::sqr(v.c[2]), ::sqr(v.c[3])); }
 inline Model::real  dot( const Model::real4& v0, const Model::real4& v1 )                                       { return v0.dot( v1 );                                                  }
 inline Model::real4 lerp( const Model::real4& v0, const Model::real4& v1, Model::real t )                       { return (Model::real(1.0) - t) * v0 + t * v1;                          }

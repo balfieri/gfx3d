@@ -557,12 +557,14 @@ public:
         inline real volume( void ) const        { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
         inline real3 center( void ) const       { return real3( (_min[0]+_max[0]) * 0.5, (_min[1]+_max[1]) * 0.5, (_min[2]+_max[2]) * 0.5 ); }
         inline real3 size( void ) const         { return real3( _max[0]-_min[0], _max[1]-_min[1], _max[2]-_min[2] ); }
-        inline real size_max_rcp( void ) const  { real3 s = size(); return 1.0f / std::max( std::max( s[0], s[1] ), s[2] ); }
+        inline real size_max( void ) const      { real3 s = size(); return std::max( std::max( s[0], s[1] ), s[2] ); }
+        inline real size_max_rcp( void ) const  { return 1.0f / size_max(); }
         inline real half_area( void ) const     { real3 s = size(); return s[0]*s[1] + s[1]*s[2] + s[2]*s[0]; }
         inline real area( void ) const          { return half_area() * 2.0f; }
         bool encloses( const real3& p ) const;
         bool encloses( const AABB& other ) const;
         bool overlaps( const AABB& other ) const;
+        real3 transform_relative( const real3& v ) const;
         AABB transform_relative( const AABB& other ) const;
         bool hit( const real3& origin, const real3& direction, const real3& direction_inv, real& tmin, real& tmax ) const; 
     };
@@ -592,7 +594,8 @@ public:
         inline real64 volume(void) const         { return (_max[2]-_min[2])*(_max[1]-_min[1])*(_max[0]-_min[0]); }
         inline real3d center( void ) const       { return real3d( (_min[0]+_max[0]) * 0.5, (_min[1]+_max[1]) * 0.5, (_min[2]+_max[2]) * 0.5 ); }
         inline real3d size( void ) const         { return real3d( _max[0]-_min[0], _max[1]-_min[1], _max[2]-_min[2] ); }
-        inline real64 size_max_rcp( void ) const { real3d s = size(); return 1.0 / std::max( std::max( s[0], s[1] ), s[2] ); }
+        inline real64 size_max( void ) const     { real3d s = size(); return std::max( std::max( s[0], s[1] ), s[2] ); }
+        inline real64 size_max_rcp( void ) const { return 1.0 / size_max(); }
         inline real64 half_area( void ) const    { real3d s = size(); return s[0]*s[1] + s[1]*s[2] + s[2]*s[0]; }
         inline real64 area( void ) const         { return half_area() * 2.0; }
         bool encloses( const real3d& p ) const;
@@ -600,6 +603,7 @@ public:
         bool encloses( const AABBD& other ) const;
         bool overlaps( const AABBD& other ) const;
         bool overlaps_triangle( const Model::real3d &v0, const Model::real3d &v1, const Model::real3d &v2, Model::real3d * p_ptr=nullptr ) const;
+        real3d transform_relative( const real3d& v ) const;
         AABBD transform_relative( const AABBD& other ) const;
         bool hit( const real3d& origin, const real3d& direction, const real3d& direction_inv, real64& tmin, real64& tmax ) const; 
     };
@@ -6038,11 +6042,16 @@ inline bool Model::AABB::overlaps( const Model::AABB& other ) const
            _max.c[2] >= other._min.c[2];
 }
 
-static inline Model::real3 __transform_relative( Model::real3 v, Model::real3 center, Model::real sizeMaxRcp ) 
+static inline Model::real3 __transform_relative( const Model::real3& v, const Model::real3& center, const Model::real& sizeMaxRcp ) 
 { 
     return Model::real3( (v[0] - center[0]) * sizeMaxRcp + 0.5f, 
                          (v[1] - center[1]) * sizeMaxRcp + 0.5f, 
                          (v[2] - center[2]) * sizeMaxRcp + 0.5f );
+}
+
+inline Model::real3 Model::AABB::transform_relative( const Model::real3& v ) const
+{ 
+    return __transform_relative( v, center(), size_max_rcp() );
 }
 
 inline Model::AABB Model::AABB::transform_relative( const Model::AABB& other ) const
@@ -6604,11 +6613,16 @@ inline bool Model::AABBD::overlaps_triangle( const Model::real3d &v0, const Mode
     return true;
 }
 
-static inline Model::real3d __transform_relative( Model::real3d v, Model::real3d center, Model::real64 sizeMaxRcp ) 
+static inline Model::real3d __transform_relative( const Model::real3d& v, const Model::real3d& center, const Model::real64& sizeMaxRcp ) 
 { 
     return Model::real3d( (v[0] - center[0]) * sizeMaxRcp + 0.5f, 
                           (v[1] - center[1]) * sizeMaxRcp + 0.5f, 
                           (v[2] - center[2]) * sizeMaxRcp + 0.5f );
+}
+
+inline Model::real3d Model::AABBD::transform_relative( const Model::real3d& v ) const
+{ 
+    return __transform_relative( v, center(), size_max_rcp() );
 }
 
 inline Model::AABBD Model::AABBD::transform_relative( const Model::AABBD& other ) const

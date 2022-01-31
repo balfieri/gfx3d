@@ -559,6 +559,7 @@ public:
         inline real3 size( void ) const         { return real3( _max[0]-_min[0], _max[1]-_min[1], _max[2]-_min[2] ); }
         inline real size_max( void ) const      { real3 s = size(); return std::max( std::max( s[0], s[1] ), s[2] ); }
         inline real size_max_rcp( void ) const  { return 1.0f / size_max(); }
+        inline real3 half_diag( void ) const    { return size().divby2(); }
         inline real half_area( void ) const     { real3 s = size(); return s[0]*s[1] + s[1]*s[2] + s[2]*s[0]; }
         inline real area( void ) const          { return half_area() * 2.0f; }
         bool encloses( const real3& p ) const;
@@ -596,6 +597,7 @@ public:
         inline real3d size( void ) const         { return real3d( _max[0]-_min[0], _max[1]-_min[1], _max[2]-_min[2] ); }
         inline real64 size_max( void ) const     { real3d s = size(); return std::max( std::max( s[0], s[1] ), s[2] ); }
         inline real64 size_max_rcp( void ) const { return 1.0 / size_max(); }
+        inline real3d half_diag( void ) const    { return size().divby2(); }
         inline real64 half_area( void ) const    { real3d s = size(); return s[0]*s[1] + s[1]*s[2] + s[2]*s[0]; }
         inline real64 area( void ) const         { return half_area() * 2.0; }
         bool encloses( const real3d& p ) const;

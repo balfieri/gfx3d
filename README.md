@@ -33,5 +33,9 @@ There are some limitations:
 1) It does not implement all .obj features.  In particular, it does not implement curves or ad hoc vertex attributes.
 2) It does not support FBX files, but the graphics world seems to be standardizing on USD, so USD will get added first and we might just skip FBX.
 
+Future features:
+
+1) Add a Rendering.h to do at least traditional rendering of Model.h models in Vulkan/Metal.
+
 Bob Alfieri<br>
 Chapel Hill, NC

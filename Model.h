@@ -1435,22 +1435,35 @@ constexpr Model::real32 PI_DIV_360  = M_PI/360.0;
 //
 //--------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------
-inline Model::real mulby2( const Model::real& x )                                    { return 2.0 * x;                }
-inline Model::real mulby4( const Model::real& x )                                    { return 4.0 * x;                }
-inline Model::real divby2( const Model::real& x )                                    { return 0.5 * x;                }
-inline Model::real divby4( const Model::real& x )                                    { return 0.25 * x;               }
-inline Model::real sqr( const Model::real& x )                                       { return x*x;                    }
-inline Model::real rcp( const Model::real& x )                                       { return 1.0 / x;                }
-inline Model::real rsqrt( const Model::real& x )                                     { return 1.0 / std::sqrt( x );   }
-inline Model::real clamp( const Model::real& x )                                     { return std::fmin(std::fmax(x, 0.0), 1.0);} 
-inline Model::real clamp( const Model::real& x, const Model::real& min, const Model::real& max )   { return std::fmin(std::fmax(x, min), max);} 
-inline Model::real lerp( const Model::real& x, const Model::real& y, const Model::real& t )        { return (1.0 - t)*x + t*y;      }
-inline Model::real expc( double b, const Model::real& x )                            { return std::pow( b, x );       }
-inline Model::real hypoth( const Model::real& x, const Model::real& y )              { return std::sqrt( x*x - y*y ); }
-inline Model::real hypoth1( const Model::real& y )                                   { return std::sqrt( 1.0 - y*y ); }
+inline Model::real   mulby2( const Model::real& x )                                  { return 2.0 * x;                }
+inline Model::real64 mulby2( const Model::real64& x )                                { return 2.0 * x;                }
+inline Model::real   mulby4( const Model::real& x )                                  { return 4.0 * x;                }
+inline Model::real64 mulby4( const Model::real64& x )                                { return 4.0 * x;                }
+inline Model::real   divby2( const Model::real& x )                                  { return 0.5 * x;                }
+inline Model::real64 divby2( const Model::real64& x )                                { return 0.5 * x;                }
+inline Model::real   divby4( const Model::real& x )                                  { return 0.25 * x;               }
+inline Model::real64 divby4( const Model::real64& x )                                { return 0.25 * x;               }
+inline Model::real   sqr( const Model::real& x )                                     { return x*x;                    }
+inline Model::real64 sqr( const Model::real64& x )                                   { return x*x;                    }
+inline Model::real   rcp( const Model::real& x )                                     { return 1.0 / x;                }
+inline Model::real64 rcp( const Model::real64& x )                                   { return 1.0 / x;                }
+inline Model::real   rsqrt( const Model::real& x )                                   { return 1.0 / std::sqrt( x );   }
+inline Model::real64 rsqrt( const Model::real64& x )                                 { return 1.0 / std::sqrt( x );   }
+inline Model::real   clamp( const Model::real& x )                                   { return std::fmin(std::fmax(x, 0.0), 1.0);} 
+inline Model::real64 clamp( const Model::real64& x )                                 { return std::fmin(std::fmax(x, 0.0), 1.0);} 
+inline Model::real   clamp( const Model::real& x, const Model::real& min, const Model::real& max )   { return std::fmin(std::fmax(x, min), max);} 
+inline Model::real64 clamp( const Model::real64& x, const Model::real64& min, const Model::real64& max )   { return std::fmin(std::fmax(x, min), max);} 
+inline Model::real   lerp( const Model::real& x, const Model::real& y, const Model::real& t )        { return (1.0 - t)*x + t*y;      }
+inline Model::real64 lerp( const Model::real64& x, const Model::real64& y, const Model::real64& t )  { return (1.0 - t)*x + t*y;      }
+inline Model::real   expc( double b, const Model::real& x )                          { return std::pow( b, x );       }
+inline Model::real64 expc( double b, const Model::real64& x )                        { return std::pow( b, x );       }
+inline Model::real   hypoth( const Model::real& x, const Model::real& y )            { return std::sqrt( x*x - y*y ); }
+inline Model::real64 hypoth( const Model::real64& x, const Model::real64& y )        { return std::sqrt( x*x - y*y ); }
+inline Model::real   hypoth1( const Model::real& y )                                 { return std::sqrt( 1.0 - y*y ); }
+inline Model::real64 hypoth1( const Model::real64& y )                               { return std::sqrt( 1.0 - y*y ); }
 inline void sincos( const Model::real& x, Model::real& si, Model::real& co )         { si = std::sin( x ); co = std::cos( x ); }
 inline void sincos( const Model::real& x, Model::real& si, Model::real& co, const Model::real& r ) { si = r*std::sin( x ); co = r*std::cos( x ); }
-inline void sincos( const Model::real64& x, Model::real64& si, Model::real64& co )         { si = std::sin( x ); co = std::cos( x ); }
+inline void sincos( const Model::real64& x, Model::real64& si, Model::real64& co )   { si = std::sin( x ); co = std::cos( x ); }
 inline void sincos( const Model::real64& x, Model::real64& si, Model::real64& co, const Model::real64& r ) { si = r*std::sin( x ); co = r*std::cos( x ); }
 
 inline static void minmax( const Model::real x0, const Model::real x1, const Model::real x2, Model::real &min, Model::real &max )
@@ -1467,6 +1480,9 @@ inline static void minmax( const Model::real64 x0, const Model::real64 x1, const
 inline Model::real length_2D_line(Model::real x0, Model::real y0, Model::real x1, Model::real y1) {
     return std::sqrt( (x0-x1)*(x0-x1) + (y0-y1)*(y0-y1) );
 }
+inline Model::real64 length_2D_line(Model::real64 x0, Model::real64 y0, Model::real64 x1, Model::real64 y1) {
+    return std::sqrt( (x0-x1)*(x0-x1) + (y0-y1)*(y0-y1) );
+}
 
 inline Model::real area_2D_triangle(Model::real x0, Model::real y0, Model::real x1, Model::real y1, Model::real x2, Model::real y2) {
     Model::real A = length_2D_line(x0,y0,x1,y1);
@@ -1475,7 +1491,13 @@ inline Model::real area_2D_triangle(Model::real x0, Model::real y0, Model::real 
     Model::real S = 0.5*(A+B+C);
     return std::sqrt(S*(S-A)*(S-B)*(S-C));
 }
-
+inline Model::real64 area_2D_triangle(Model::real64 x0, Model::real64 y0, Model::real64 x1, Model::real64 y1, Model::real64 x2, Model::real64 y2) {
+    Model::real64 A = length_2D_line(x0,y0,x1,y1);
+    Model::real64 B = length_2D_line(x0,y0,x2,y2);
+    Model::real64 C = length_2D_line(x2,y2,x1,y1);
+    Model::real64 S = 0.5*(A+B+C);
+    return std::sqrt(S*(S-A)*(S-B)*(S-C));
+}
 
 //--------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------

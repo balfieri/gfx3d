@@ -24,11 +24,11 @@
 // - assertions
 // - common data types from Model.h
 // - string upper()
-// - raw casting between real and uint32_t
-// - random number generation that works per-thread
+// - raw casting between real and uint32_t, or real64 and uint64_t
+// - random number generation that works per-thread and is easily implementable in HW
 // - bit twiddling
-// - multi-threading
-// - regular expression utilities
+// - multi-threading 
+// - regular expressions
 //
 #ifndef SYSH
 #define SYSH
@@ -132,7 +132,7 @@ inline std::string upper( std::string s )
 }
 
 //--------------------------------------------------------- 
-// Raw Type Casting Between real and uint32_t
+// Raw Type Casting Between real and uint32_t, or real64 and uint64_t.
 //--------------------------------------------------------- 
 inline real bits_to_real( uint32_t u ) 
 { 
@@ -144,6 +144,20 @@ inline real bits_to_real( uint32_t u )
 inline uint32_t real_to_bits( real r )
 { 
     uint32_t u; 
+    memcpy( &u, &r, sizeof(u) ); 
+    return u; 
+}
+
+inline real64 bits64_to_real64( uint64_t u ) 
+{ 
+    real64 f; 
+    memcpy( &f, &u, sizeof(f) ); 
+    return f; 
+}
+
+inline uint64_t real64_to_bits64( real64 r )
+{ 
+    uint64_t u; 
     memcpy( &u, &r, sizeof(u) ); 
     return u; 
 }

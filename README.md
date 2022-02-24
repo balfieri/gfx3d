@@ -25,7 +25,7 @@ This has been tested on macOS and Linux.  It should work in any UNIX-like enviro
 
 Refer to Model.h for further instructions on usage.
 
-There is an optional header called sys.h that #includes Model.h and provides some additional shorthands and utility functions which are highlighted at the top fo the file. 
+There is an optional header called sys.h that #includes Model.h and provides some additional shorthands and utility functions which are highlighted at the top of the file. 
 If you decide to use this, you can just #include sys.h in your program rather than Model.h.
 
 This is all open-source.  Refer to the LICENSE.md for licensing details.  We inline two well-known public-domain files, stb_image.h and
@@ -38,8 +38,8 @@ There are some limitations:
 
 Future features:
 
-1) Generalize the Object class to subsume Instance and to provide a scene graph support (i.e., hierarchical objects).
-2) Add a Rendering.h to do at least traditional rendering of Model.h models in Vulkan/Metal.
+1) Generalize the Object class to subsume Instance and to provide a hierarchical scene graph support.
+2) Add a Rendering.h to do at least traditional rendering of Model.h models in Vulkan/Metal, but keep most of the mechanism in Model.h.
 
 Bob Alfieri<br>
 Chapel Hill, NC

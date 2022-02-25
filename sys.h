@@ -273,6 +273,28 @@ inline void bit_assign( uint32_t& bits, uint32_t b, bool val )
     }
 }
 
+inline bool bit_is_zero( uint32_t bits, uint32_t b )
+{
+    return !((bits >> b) & 1);
+}
+
+inline bool bit_is_one( uint32_t bits, uint32_t b )
+{
+    return (bits >> b) & 1;
+}
+
+inline uint32_t bits_insert( uint32_t bits, uint32_t new_bits, uint32_t offset, uint32_t len )
+{
+    uint32_t mask = ~(0xffffffff << len) << offset;
+    bits &= ~mask;
+    return bits | (new_bits << offset);
+}
+
+inline uint32_t bits_extract( uint32_t bits, uint32_t offset, uint32_t len )
+{
+    return (bits >> offset) & ((1 << len)-1);
+}
+
 inline uint32_t bits_lt( uint32_t b )
 {
     b = std::min( b, 32u );
@@ -313,16 +335,6 @@ inline uint32_t bits_ge( uint32_t b )
         r |= 1 << i;
     }
     return r;
-}
-
-inline uint32_t bit_is_one( uint32_t bits, uint32_t b )
-{
-    return (bits >> b) & 1;
-}
-
-inline uint32_t bit_is_zero( uint32_t bits, uint32_t b )
-{
-    return !((bits >> b) & 1);
 }
 
 inline uint32_t bits_rotate_left( uint32_t bits, uint32_t shift )
@@ -424,18 +436,6 @@ inline uint32_t bits_find_nth_one_before_with_wrap( uint32_t bits, uint32_t star
         } while( !bit_is_one( bits, i ) ); 
     }
     return i;
-}
-
-inline uint32_t bits_extract( uint32_t bits, uint32_t offset, uint32_t len )
-{
-    return (bits >> offset) & ((1 << len)-1);
-}
-
-inline uint32_t bits_insert( uint32_t bits, uint32_t new_bits, uint32_t offset, uint32_t len )
-{
-    uint32_t mask = ~(0xffffffff << len) << offset;
-    bits &= ~mask;
-    return bits | (new_bits << offset);
 }
 
 //--------------------------------------------------------- 

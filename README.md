@@ -20,7 +20,7 @@ A model may optionally instance one or more other submodels, each with a per-ins
 
 Errors do not raise exceptions.  Instead the constructor sets is_good to false and sets error_msg to a useful string.  So the caller should check is_good in the newly created Model before proceeding to use the object.
 
-This has been tested on macOS and Linux.  It should work in any UNIX-like environment including Cygwin. It requires the -std=c++17 
+This has been tested on macOS, Linux, and Cygwin. It should work in any UNIX-like environment. It requires the -std=c++17 
 (or later) compiler switch.
 
 Refer to Model.h for further instructions on usage.

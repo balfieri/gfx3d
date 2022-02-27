@@ -5551,7 +5551,7 @@ inline Model::Matrix Model::Matrix::make_frustum( real left, real right, real bo
 
 inline Model::Matrix Model::Matrix::make_perspective( real vfov, real aspect, real near, real far )
 {
-    real bottom = -near * std::tanf( vfov * PI_DIV_360 );
+    real bottom = -near * std::tan( vfov * PI_DIV_360 );
     real top    = -bottom;
     real left   = aspect * bottom;
     real right  = -left;

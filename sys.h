@@ -61,8 +61,8 @@ static std::mutex __debug_mutex;          // to avoid garble with multiple threa
 #define dout   if (__debug) std::cout
 #define rtdout if (__rt_debug || __debug) std::cout
 #define wassert(expr) if (!(expr)) std::cout << "WARNING: not true: " << #expr << "\n";
-#define eassert(expr) if (!(expr)) std::cout << "ERROR: not true: " << #expr << "\n";
 #define dassert(expr, msg) { if ( !(expr) ) die( msg ); }
+#define eassert(expr) dassert( expr, "not true: " + std::string(#expr) )
 
 // expose/rename types and constants from Model.h
 //
@@ -488,12 +488,27 @@ inline uint32_t thread_hardware_thread_cnt( void )
 
 const uint32_t THREAD_CNT_MAX = 100;
 
+using tid_t = pthread_t;
+
+inline void thread_create( tid_t& tid, void *(*fn)(void *), void * arg, size_t stack_size=1024*1024 ) // run with big stack size by default 
+{
+    pthread_attr_t attr;
+    pthread_attr_init( &attr );
+    pthread_attr_setstacksize( &attr, stack_size );
+    dassert( pthread_create( &tid, &attr, fn, arg ) == 0, "pthread_create() failed" );
+}
+
+inline void thread_join( tid_t tid, void** value_ptr=nullptr )
+{
+    dassert( pthread_join( tid, value_ptr ) == 0, "pthread_join() failed" );
+}
+
 struct ThreadInfo {
-    pthread_t ptid;
+    tid_t    ptid;
     uint32_t tid;
     uint32_t thread_cnt;
-    void (*fn)(uint32_t, uint32_t, void *);
-    void * arg;
+    void    (*fn)(uint32_t, uint32_t, void *);
+    void *    arg;
 };
 
 void * thread_prestart( void * arg ) 
@@ -516,16 +531,13 @@ void thread_parallelize( uint32_t thread_cnt, void (*fn)(uint32_t, uint32_t, voi
     // to ensure we never have that kind of memory-trashing problem.
     //--------------------------------------------------------- 
     ThreadInfo * threads = new ThreadInfo[thread_cnt];
-    pthread_attr_t attr;
-    pthread_attr_init( &attr );
-    pthread_attr_setstacksize( &attr, 1024*1024 );
     for( uint32_t i = 1; i < thread_cnt; i++ )
     {
         threads[i].tid = i;
         threads[i].thread_cnt = thread_cnt;
         threads[i].fn = fn;
         threads[i].arg = arg;
-        pthread_create( &threads[i].ptid, &attr, thread_prestart, &threads[i] );
+        thread_create( threads[i].ptid, thread_prestart, &threads[i] );
     }
 
     //--------------------------------------------------------- 
@@ -538,7 +550,7 @@ void thread_parallelize( uint32_t thread_cnt, void (*fn)(uint32_t, uint32_t, voi
     //--------------------------------------------------------- 
     for( uint32_t i = 1; i < thread_cnt; i++ )
     {
-        pthread_join( threads[i].ptid, nullptr );
+        thread_join( threads[i].ptid );
     }
 
     delete[] threads;

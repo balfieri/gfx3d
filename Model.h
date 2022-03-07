@@ -1234,38 +1234,39 @@ public:
     // file utilities
     static void dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ); 
     static bool file_exists( std::string file_name );
-    bool file_read( std::string file_name, char *& start, char *& end );                        // sucks in entire file
+    bool file_read( std::string file_name, char *& start, char *& end );                // sucks in entire file
+    bool file_read( std::string file_name, const char *& start, const char *& end );    
     void file_write( std::string file_name, const unsigned char * data, uint64_t byte_cnt );
 
     // parsing utilities for files sucked into memory
     uint line_num;
-    bool skip_whitespace_to_eol( char *& xxx, char *& xxx_end );  // on this line only
-    bool skip_whitespace( char *& xxx, char *& xxx_end );
-    bool skip_to_eol( char *& xxx, char *& xxx_end );
-    bool skip_through_eol( char *& xxx, char *& xxx_end );
-    bool eol( char *& xxx, char *& xxx_end );
-    bool expect_char( char ch, char *& xxx, char* xxx_end, bool skip_whitespace_first=false );
-    bool expect_eol( char *& xxx, char*& xxx_end );
-    bool expect_cmd( const char * s, char *& xxx, char *& xxx_end );
-    bool parse_string( std::string& s, char *& xxx, char *& xxx_end );
-    bool parse_string_i( uint& s, char *& xxx, char *& xxx_end );
-    bool parse_name( char *& name, char *& xxx, char *& xxx_end );
-    bool parse_id( std::string& id, char *& xxx, char *& xxx_end );
-    bool parse_id_i( uint& id_i, char *& xxx, char *& xxx_end );
-    bool parse_option_name( std::string& option_name, char *& xxx, char *& xxx_end );
-    bool parse_real3( real3& r3, char *& xxx, char *& xxx_end, bool has_brackets=false );
-    bool parse_real2( real2& r2, char *& xxx, char *& xxx_end, bool has_brackets=false );
-    bool parse_real( real& r, char *& xxx, char *& xxx_end, bool skip_whitespace_first=false );
-    bool parse_real64( real64& r, char *& xxx, char *& xxx_end, bool skip_whitespace_first=false );
-    bool parse_int( _int& i, char *& xxx, char *& xxx_end );
-    bool parse_int64( _int64& i, char *& xxx, char *& xxx_end );
-    bool parse_uint( uint& u, char *& xxx, char *& xxx_end, uint base=10 );
-    bool parse_uint64( uint64& u, char *& xxx, char *& xxx_end, uint base=10 );
-    bool parse_bool( bool& b, char *& xxx, char *& xxx_end );
-    std::string surrounding_lines( char *& xxx, char *& xxx_end );
+    bool skip_whitespace_to_eol( const char *& xxx, const char * xxx_end );  // on this line only
+    bool skip_whitespace( const char *& xxx, const char * xxx_end );
+    bool skip_to_eol( const char *& xxx, const char * xxx_end );
+    bool skip_through_eol( const char *& xxx, const char * xxx_end );
+    bool eol( const char *& xxx, const char * xxx_end );
+    bool expect_char( char ch, const char *& xxx, const char * xxx_end, bool skip_whitespace_first=false );
+    bool expect_eol( const char *& xxx, const char * xxx_end );
+    bool expect_cmd( const char * s, const char *& xxx, const char * xxx_end );
+    bool parse_string( std::string& s, const char *& xxx, const char * xxx_end );
+    bool parse_string_i( uint& s, const char *& xxx, const char * xxx_end );
+    bool parse_name( const char *& name, const char *& xxx, const char * xxx_end );
+    bool parse_id( std::string& id, const char *& xxx, const char * xxx_end );
+    bool parse_id_i( uint& id_i, const char *& xxx, const char * xxx_end );
+    bool parse_option_name( std::string& option_name, const char *& xxx, const char * xxx_end );
+    bool parse_real3( real3& r3, const char *& xxx, const char * xxx_end, bool has_brackets=false );
+    bool parse_real2( real2& r2, const char *& xxx, const char * xxx_end, bool has_brackets=false );
+    bool parse_real( real& r, const char *& xxx, const char * xxx_end, bool skip_whitespace_first=false );
+    bool parse_real64( real64& r, const char *& xxx, const char * xxx_end, bool skip_whitespace_first=false );
+    bool parse_int( _int& i, const char *& xxx, const char * xxx_end );
+    bool parse_int64( _int64& i, const char *& xxx, const char * xxx_end );
+    bool parse_uint( uint& u, const char *& xxx, const char * xxx_end, uint base=10 );
+    bool parse_uint64( uint64& u, const char *& xxx, const char * xxx_end, uint base=10 );
+    bool parse_bool( bool& b, const char *& xxx, const char * xxx_end );
+    std::string surrounding_lines( const char *& xxx, const char * xxx_end );
 
     // structs
-    char *              mapped_region;      // != nullptr means the whole file was sucked in by read_uncompressed()
+    const char *        mapped_region;      // != nullptr means the whole file was sucked in by read_uncompressed()
     Header *            hdr;
     Header *            max;                // holds max lengths of currently allocated arrays 
 
@@ -1366,21 +1367,21 @@ private:
         CMD_MAP_REFL
     } mtl_cmd_t;
             
-    char * fsc_start;
-    char * fsc_end;
-    char * fsc;
-    char * obj_start;
-    char * obj_end;
-    char * obj;
-    char * mtl_start;
-    char * mtl_end;
-    char * mtl;
-    char * gph_start;
-    char * gph_end;
-    char * gph;
-    char * nvdb_start;
-    char * nvdb_end;
-    char * nvdb;
+    const char * fsc_start;
+    const char * fsc_end;
+    const char * fsc;
+    const char * obj_start;
+    const char * obj_end;
+    const char * obj;
+    const char * mtl_start;
+    const char * mtl_end;
+    const char * mtl;
+    const char * gph_start;
+    const char * gph_end;
+    const char * gph;
+    const char * nvdb_start;
+    const char * nvdb_end;
+    const char * nvdb;
 
     const uint64_t **   volume_to_emissive;             // information about emissive voxels
 
@@ -1392,15 +1393,15 @@ private:
     bool load_nvdb( std::string nvdb_file, std::string dir_name, std::string base_name, std::string ext_name );
 
     bool parse_obj_cmd( obj_cmd_t& cmd );
-    bool parse_mtl_cmd( mtl_cmd_t& cmd, char *& mtl, char *& mtl_end );
-    bool parse_gph_real( uint& r_i, char *& gph, char *& gph_end );
-    bool parse_gph_real3( uint& r3_i, char *& gph, char *& gph_end );
-    bool parse_gph_str( uint& s_i, char *& gph, char *& gph_end );
-    bool parse_gph_id( uint& id_i, char *& gph, char *& gph_end );
-    bool parse_gph_op_lookahead( uint& s_i, char *& gph, char *& gph_end );
-    bool parse_gph_op( uint& op_i, char *& gph, char *& gph_end );
-    bool parse_gph_term( uint& term_i, char *& gph, char *& gph_end );
-    bool parse_gph_expr( uint& expr_i, char *& gph, char *& gph_end, uint curr_prec=0 );
+    bool parse_mtl_cmd( mtl_cmd_t& cmd, const char *& mtl, const char * mtl_end );
+    bool parse_gph_real( uint& r_i, const char *& gph, const char * gph_end );
+    bool parse_gph_real3( uint& r3_i, const char *& gph, const char * gph_end );
+    bool parse_gph_str( uint& s_i, const char *& gph, const char * gph_end );
+    bool parse_gph_id( uint& id_i, const char *& gph, const char * gph_end );
+    bool parse_gph_op_lookahead( uint& s_i, const char *& gph, const char * gph_end );
+    bool parse_gph_op( uint& op_i, const char *& gph, const char * gph_end );
+    bool parse_gph_term( uint& term_i, const char *& gph, const char * gph_end );
+    bool parse_gph_expr( uint& expr_i, const char *& gph, const char * gph_end, uint curr_prec=0 );
 
     // BVH builder
     uint bvh_qsplit( BVH_NODE_KIND kind, uint poly_i, uint n, real pivot, uint axis );
@@ -2070,14 +2071,15 @@ bool Model::file_read( std::string file_path, char *& start, char *& end )
     size_t size = file_stat.st_size;
 
     // this large read should behave like an mmap() inside the o/s kernel and be as fast
-    start = aligned_alloc<char>( size );
-    if ( start == nullptr ) {
+    char * _start = aligned_alloc<char>( size );
+    if ( _start == nullptr ) {
         close( fd );
         rtn_assert( 0, "could not read file " + std::string(fname) + " - malloc() error: " + strerror( errno ) );
     }
+    start = _start;
     end = start + size;
 
-    char * addr = start;
+    char * addr = _start;
     while( size != 0 ) 
     {
         size_t _this_size = 1024*1024*1024;
@@ -2091,6 +2093,16 @@ bool Model::file_read( std::string file_path, char *& start, char *& end )
     }
     close( fd );
     return true;
+}
+
+bool Model::file_read( std::string file_path, const char *& start, const char *& end )
+{
+    char * _start;
+    char * _end;
+    bool ret = file_read( file_path, _start, _end );
+    start = _start;
+    end = _end;
+    return ret;
 }
 
 void Model::file_write( std::string file_path, const unsigned char * data, uint64_t byte_cnt )
@@ -3969,9 +3981,9 @@ bool Model::load_obj( std::string obj_file, std::string dir_name )
     //------------------------------------------------------------
     // Parse .obj file contents
     //------------------------------------------------------------
-    char *      mtllib = nullptr;
-    char *      obj_name = nullptr;
-    char *      name;
+    const char *mtllib = nullptr;
+    const char *obj_name = nullptr;
+    const char *name;
     std::string mtl_name;
     Material *  material = nullptr;
     uint        mtl_i = uint(-1);
@@ -4182,8 +4194,8 @@ bool Model::load_mtl( std::string mtl_file, std::string dir_name, bool replacing
     uint orig_mtl_cnt = hdr->mtl_cnt;
     if ( replacing ) hdr->mtl_cnt = 0;
 
-    char * mtl_name = nullptr;
-    char * tex_name = nullptr;
+    const char * mtl_name = nullptr;
+    const char * tex_name = nullptr;
 
     uint        mtl_i;
     Material *  material = nullptr;
@@ -8346,7 +8358,7 @@ inline bool Model::BVH_Node::hit( const Model * model, const Model::real3& origi
 //
 //--------------------------------------------------------------------------------------
 //--------------------------------------------------------------------------------------
-inline bool Model::skip_whitespace( char *& xxx, char *& xxx_end )
+inline bool Model::skip_whitespace( const char *& xxx, const char * xxx_end )
 {
     bool in_comment = false;
     for( ;; )
@@ -8361,7 +8373,7 @@ inline bool Model::skip_whitespace( char *& xxx, char *& xxx_end )
             if ( ch == '\n' && xxx != mtl ) line_num++;
             if ( Model::debug ) {
                 std::string line = "";
-                for( char * ccc = xxx+1; ccc != xxx_end && *ccc != '\n' && *ccc != '\r'; ccc++ )
+                for( const char * ccc = xxx+1; ccc != xxx_end && *ccc != '\n' && *ccc != '\r'; ccc++ )
                 {
                     line += std::string( 1, *ccc );
                 }
@@ -8374,7 +8386,7 @@ inline bool Model::skip_whitespace( char *& xxx, char *& xxx_end )
     return true;
 }
 
-inline bool Model::skip_whitespace_to_eol( char *& xxx, char *& xxx_end )
+inline bool Model::skip_whitespace_to_eol( const char *& xxx, const char * xxx_end )
 {
     bool in_comment = false;
     for( ;; )
@@ -8394,7 +8406,7 @@ inline bool Model::skip_whitespace_to_eol( char *& xxx, char *& xxx_end )
     return true;
 }
 
-inline bool Model::skip_to_eol( char *& xxx, char *& xxx_end )
+inline bool Model::skip_to_eol( const char *& xxx, const char * xxx_end )
 {
     if ( !eol( xxx, xxx_end ) ) {
         while( xxx != xxx_end )
@@ -8407,7 +8419,7 @@ inline bool Model::skip_to_eol( char *& xxx, char *& xxx_end )
     return true;
 }
 
-inline bool Model::skip_through_eol( char *& xxx, char *& xxx_end )
+inline bool Model::skip_through_eol( const char *& xxx, const char * xxx_end )
 {
     while( !eol( xxx, xxx_end ) ) 
     {
@@ -8416,7 +8428,7 @@ inline bool Model::skip_through_eol( char *& xxx, char *& xxx_end )
     return true;
 }
 
-inline bool Model::eol( char *& xxx, char *& xxx_end )
+inline bool Model::eol( const char *& xxx, const char * xxx_end )
 {
     skip_whitespace_to_eol( xxx, xxx_end );
 
@@ -8433,7 +8445,7 @@ inline bool Model::eol( char *& xxx, char *& xxx_end )
     }
 }
 
-inline bool Model::expect_char( char ch, char *& xxx, char* xxx_end, bool skip_whitespace_first )
+inline bool Model::expect_char( char ch, const char *& xxx, const char * xxx_end, bool skip_whitespace_first )
 {
     if ( skip_whitespace_first ) skip_whitespace( xxx, xxx_end );
     rtn_assert( xxx != xxx_end, "premature end of file" );
@@ -8442,7 +8454,7 @@ inline bool Model::expect_char( char ch, char *& xxx, char* xxx_end, bool skip_w
     return true;
 }
 
-inline bool Model::expect_eol( char *& xxx, char *& xxx_end )
+inline bool Model::expect_eol( const char *& xxx, const char * xxx_end )
 {
     if ( xxx != xxx_end ) {
         rtn_assert( *xxx == '\n' || *xxx == '\r', "not at eol" );
@@ -8451,7 +8463,7 @@ inline bool Model::expect_eol( char *& xxx, char *& xxx_end )
     return true;
 }
 
-inline bool Model::expect_cmd( const char * s, char *& xxx, char *& xxx_end )
+inline bool Model::expect_cmd( const char * s, const char *& xxx, const char * xxx_end )
 {
     char s_ch1 = '!';
     while( xxx != xxx_end ) 
@@ -8480,7 +8492,7 @@ inline bool Model::expect_cmd( const char * s, char *& xxx, char *& xxx_end )
     return s_ch1 == '\0';
 }
 
-inline bool Model::parse_string( std::string& s, char *& xxx, char *& xxx_end )
+inline bool Model::parse_string( std::string& s, const char *& xxx, const char * xxx_end )
 {
     if ( !expect_char( '"', xxx, xxx_end, true ) ) return false;
     s = "";
@@ -8496,7 +8508,7 @@ inline bool Model::parse_string( std::string& s, char *& xxx, char *& xxx_end )
     }
 }
 
-inline bool Model::parse_string_i( uint& s_i, char *& xxx, char *& xxx_end )
+inline bool Model::parse_string_i( uint& s_i, const char *& xxx, const char * xxx_end )
 {
     std::string s;
     if ( !parse_string( s, xxx, xxx_end ) ) return false;
@@ -8505,11 +8517,12 @@ inline bool Model::parse_string_i( uint& s_i, char *& xxx, char *& xxx_end )
     return true;
 }
 
-inline bool Model::parse_name( char *& name, char *& xxx, char *& xxx_end )
+inline bool Model::parse_name( const char *& name, const char *& xxx, const char * xxx_end )
 {
     bool vld = false;
     perhaps_realloc( strings, hdr->char_cnt, max->char_cnt, 1024 );
-    name = &strings[hdr->char_cnt];
+    char * _name = &strings[hdr->char_cnt];
+    name = _name;
 
     while( xxx != xxx_end && (*xxx == ' ' || *xxx == '\t') ) xxx++;  // skip leading spaces
 
@@ -8520,16 +8533,16 @@ inline bool Model::parse_name( char *& name, char *& xxx, char *& xxx_end )
         if ( ch == '\n' || ch == '\r' ) break;
 
         rtn_assert( len < 1024, "string is larger than 1024 characters" );
-        name[len++] = ch;
+        _name[len++] = ch;
         vld = true;
         xxx++;
     }
 
     if ( vld ) {
-        name[len] = '\0';
+        _name[len] = '\0';
         hdr->char_cnt += len+1;
         char * ptr;
-        for( ptr = &name[len-1]; ptr != name; ptr-- )
+        for( ptr = &_name[len-1]; ptr != _name; ptr-- )
         {
             // skip trailing spaces
             if ( *ptr != ' ' && *ptr != '\t' ) break;
@@ -8542,7 +8555,7 @@ inline bool Model::parse_name( char *& name, char *& xxx, char *& xxx_end )
     rtn_assert( 0, "could not parse name: " + surrounding_lines( xxx, xxx_end ) );
 }
 
-inline bool Model::parse_id( std::string& id, char *& xxx, char *& xxx_end )
+inline bool Model::parse_id( std::string& id, const char *& xxx, const char * xxx_end )
 {
     skip_whitespace( xxx, xxx_end );
 
@@ -8559,7 +8572,7 @@ inline bool Model::parse_id( std::string& id, char *& xxx, char *& xxx_end )
     return true;
 }
 
-inline bool Model::parse_id_i( uint& id_i, char *& xxx, char *& xxx_end )
+inline bool Model::parse_id_i( uint& id_i, const char *& xxx, const char * xxx_end )
 {
     std::string id;
     if ( !parse_id( id, xxx, xxx_end ) ) return false;
@@ -8573,7 +8586,7 @@ inline bool Model::parse_id_i( uint& id_i, char *& xxx, char *& xxx_end )
     return true;
 }
 
-inline bool Model::parse_option_name( std::string& option_name, char *& xxx, char *& xxx_end )
+inline bool Model::parse_option_name( std::string& option_name, const char *& xxx, const char * xxx_end )
 {
     while( xxx != xxx_end && (*xxx == ' ' || *xxx == '\t') ) xxx++;  // skip leading spaces
     if ( xxx == xxx_end or *xxx != '-' ) return false;
@@ -8664,7 +8677,7 @@ inline bool Model::parse_obj_cmd( obj_cmd_t& cmd )
     }
 }
 
-inline bool Model::parse_mtl_cmd( mtl_cmd_t& cmd, char *& mtl, char *& mtl_end )
+inline bool Model::parse_mtl_cmd( mtl_cmd_t& cmd, const char *& mtl, const char * mtl_end )
 {
     rtn_assert( mtl != mtl_end, "no .mtl command" );
 
@@ -8868,7 +8881,7 @@ inline bool Model::parse_mtl_cmd( mtl_cmd_t& cmd, char *& mtl, char *& mtl_end )
     }
 }
 
-inline bool Model::parse_gph_real( uint& r_i, char *& gph, char *& gph_end )
+inline bool Model::parse_gph_real( uint& r_i, const char *& gph, const char * gph_end )
 {
     real r;
     if ( !parse_real( r, gph, gph_end, true ) ) return false;
@@ -8880,7 +8893,7 @@ inline bool Model::parse_gph_real( uint& r_i, char *& gph, char *& gph_end )
     return true;
 }
 
-inline bool Model::parse_gph_real3( uint& r3_i, char *& gph, char *& gph_end )
+inline bool Model::parse_gph_real3( uint& r3_i, const char *& gph, const char * gph_end )
 {
     real3 r3;
     if ( !parse_real3( r3, gph, gph_end, true ) ) return false;
@@ -8892,7 +8905,7 @@ inline bool Model::parse_gph_real3( uint& r3_i, char *& gph, char *& gph_end )
     return true;
 }
 
-inline bool Model::parse_gph_str( uint& s_i, char *& gph, char *& gph_end )
+inline bool Model::parse_gph_str( uint& s_i, const char *& gph, const char * gph_end )
 {
     uint str_i;
     if ( !parse_string_i( str_i, gph, gph_end ) ) return false;
@@ -8904,7 +8917,7 @@ inline bool Model::parse_gph_str( uint& s_i, char *& gph, char *& gph_end )
     return true;
 }
 
-inline bool Model::parse_gph_id( uint& id_i, char *& gph, char *& gph_end )
+inline bool Model::parse_gph_id( uint& id_i, const char *& gph, const char * gph_end )
 {
     uint s_i;
     if ( !parse_id_i( s_i, gph, gph_end ) ) return false;
@@ -8916,7 +8929,7 @@ inline bool Model::parse_gph_id( uint& id_i, char *& gph, char *& gph_end )
     return true;
 }
 
-inline bool Model::parse_gph_op_lookahead( uint& s_i, char *& gph, char *& gph_end )
+inline bool Model::parse_gph_op_lookahead( uint& s_i, const char *& gph, const char * gph_end )
 {
     skip_whitespace( gph, gph_end );
     if ( gph == gph_end ) return false;
@@ -8944,7 +8957,7 @@ inline bool Model::parse_gph_op_lookahead( uint& s_i, char *& gph, char *& gph_e
     return true;
 }
 
-inline bool Model::parse_gph_op( uint& op_i, char *& gph, char *& gph_end )
+inline bool Model::parse_gph_op( uint& op_i, const char *& gph, const char * gph_end )
 {
     uint s_i;
     if ( !parse_gph_op_lookahead( s_i, gph, gph_end ) ) return false;
@@ -8957,7 +8970,7 @@ inline bool Model::parse_gph_op( uint& op_i, char *& gph, char *& gph_end )
     return true;
 }
 
-bool Model::parse_gph_term( uint& term_i, char *& gph, char *& gph_end )
+bool Model::parse_gph_term( uint& term_i, const char *& gph, const char * gph_end )
 {
     skip_whitespace( gph, gph_end );
     char ch = *gph;
@@ -9026,7 +9039,7 @@ bool Model::parse_gph_term( uint& term_i, char *& gph, char *& gph_end )
     return true;
 }
 
-inline bool Model::parse_gph_expr( uint& expr_i, char *& gph, char *& gph_end, uint curr_prec )
+inline bool Model::parse_gph_expr( uint& expr_i, const char *& gph, const char * gph_end, uint curr_prec )
 {
     //-------------------------------------------------------------------
     // Parse one term
@@ -9087,7 +9100,7 @@ inline bool Model::parse_gph_expr( uint& expr_i, char *& gph, char *& gph_end, u
     return true;
 }
 
-inline bool Model::parse_real3( Model::real3& r3, char *& xxx, char *& xxx_end, bool has_brackets )
+inline bool Model::parse_real3( Model::real3& r3, const char *& xxx, const char * xxx_end, bool has_brackets )
 {
     return (!has_brackets || expect_char( '[', xxx, xxx_end, true )) &&
            parse_real( r3.c[0], xxx, xxx_end, has_brackets ) && 
@@ -9098,7 +9111,7 @@ inline bool Model::parse_real3( Model::real3& r3, char *& xxx, char *& xxx_end, 
            (!has_brackets || expect_char( ']', xxx, xxx_end, true ));
 }
 
-inline bool Model::parse_real2( Model::real2& r2, char *& xxx, char *& xxx_end, bool has_brackets )
+inline bool Model::parse_real2( Model::real2& r2, const char *& xxx, const char * xxx_end, bool has_brackets )
 {
     return (!has_brackets || expect_char( '[', xxx, xxx_end, true )) &&
            parse_real( r2.c[0], xxx, xxx_end, has_brackets ) && 
@@ -9107,7 +9120,7 @@ inline bool Model::parse_real2( Model::real2& r2, char *& xxx, char *& xxx_end, 
            (!has_brackets || expect_char( ']', xxx, xxx_end, true ));
 }
 
-inline bool Model::parse_real( Model::real& r, char *& xxx, char *& xxx_end, bool skip_whitespace_first ) 
+inline bool Model::parse_real( Model::real& r, const char *& xxx, const char * xxx_end, bool skip_whitespace_first ) 
 {
     Model::real64 r64;
     if ( !parse_real64( r64, xxx, xxx_end, skip_whitespace_first ) ) return false;
@@ -9115,7 +9128,7 @@ inline bool Model::parse_real( Model::real& r, char *& xxx, char *& xxx_end, boo
     return true;
 }
 
-inline bool Model::parse_real64( Model::real64& r64, char *& xxx, char *& xxx_end, bool skip_whitespace_first )
+inline bool Model::parse_real64( Model::real64& r64, const char *& xxx, const char * xxx_end, bool skip_whitespace_first )
 {
     if ( skip_whitespace_first ) skip_whitespace( xxx, xxx_end );   // can span lines unlike below
     std::string s = "";
@@ -9175,7 +9188,7 @@ inline bool Model::parse_real64( Model::real64& r64, char *& xxx, char *& xxx_en
     return true;
 }
 
-inline bool Model::parse_int64( _int64& i, char *& xxx, char *& xxx_end )
+inline bool Model::parse_int64( _int64& i, const char *& xxx, const char * xxx_end )
 {
     bool vld = false;
     i = 0;
@@ -9204,7 +9217,7 @@ inline bool Model::parse_int64( _int64& i, char *& xxx, char *& xxx_end )
     return true;
 }
 
-inline bool Model::parse_int( _int& i, char *& xxx, char *& xxx_end )
+inline bool Model::parse_int( _int& i, const char *& xxx, const char * xxx_end )
 {
     _int64 i64;
     bool r = parse_int64( i64, xxx, xxx_end );
@@ -9212,7 +9225,7 @@ inline bool Model::parse_int( _int& i, char *& xxx, char *& xxx_end )
     return r;
 }
 
-inline bool Model::parse_uint64( uint64& u, char *& xxx, char *& xxx_end, uint base )
+inline bool Model::parse_uint64( uint64& u, const char *& xxx, const char * xxx_end, uint base )
 {
     bool vld = false;
     u = 0;
@@ -9255,7 +9268,7 @@ inline bool Model::parse_uint64( uint64& u, char *& xxx, char *& xxx_end, uint b
     return true;
 }
 
-inline bool Model::parse_uint( uint& u, char *& xxx, char *& xxx_end, uint base )
+inline bool Model::parse_uint( uint& u, const char *& xxx, const char * xxx_end, uint base )
 {
     uint64 u64;
     bool r = parse_uint64( u64, xxx, xxx_end, base );
@@ -9263,7 +9276,7 @@ inline bool Model::parse_uint( uint& u, char *& xxx, char *& xxx_end, uint base 
     return r;
 }
 
-inline bool Model::parse_bool( bool& b, char *& xxx, char *& xxx_end )
+inline bool Model::parse_bool( bool& b, const char *& xxx, const char * xxx_end )
 {
     std::string id;
     if ( !parse_id( id , xxx, xxx_end ) ) return false;
@@ -9271,7 +9284,7 @@ inline bool Model::parse_bool( bool& b, char *& xxx, char *& xxx_end )
     return true;
 }
 
-std::string Model::surrounding_lines( char *& xxx, char *& xxx_end )
+std::string Model::surrounding_lines( const char *& xxx, const char * xxx_end )
 {
     uint eol_cnt = 0;
     std::string s = "";

@@ -89,7 +89,7 @@
 //     1) Allocate large virtual memory 1D arrays for materials, texels, positions, normals, vertexes, polygons.
 //        These are allocated on a page boundary to make uncompressed writes faster.
 //        These arrays are dynamically resized.
-//     2) Read entire .obj file into memory (the o/s should effectively make this work like an mmap).
+//     2) Read entire .obj file into memory (uses mmap()).
 //     3) Parse .obj file using custom parser that goes character-by-character and does its own number conversions. 
 //     4) Add elements to 1D arrays.  Load any .mtl file encounted in .obj file.  
 //     5) Optionally generate mipmap textures.  
@@ -97,7 +97,7 @@
 //     7) Optionally generate BVH tree.
 //     8) Write to  uncompressed file is fast because all structures are aligned on a page boundary in mem and in file.
 //     9) Read from uncompressed file is fast because all structures are aligned on a page boundary in mem and in file.
-//        The O/S will do the equivalent of an mmap() for each array.
+//        (and uses mmap()).
 //
 // To Do:
 //
@@ -132,6 +132,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <math.h>
@@ -1234,7 +1235,7 @@ public:
     // file utilities
     static void dissect_path( std::string path, std::string& dir_name, std::string& base_name, std::string& ext_name ); 
     static bool file_exists( std::string file_name );
-    bool file_read( std::string file_name, char *& start, char *& end );                // sucks in entire file
+    bool file_read( std::string file_name, char *& start, char *& end, bool is_read_only=true );  // sucks in entire file
     bool file_read( std::string file_name, const char *& start, const char *& end );    
     void file_write( std::string file_name, const unsigned char * data, uint64_t byte_cnt );
 
@@ -1266,7 +1267,8 @@ public:
     std::string surrounding_lines( const char *& xxx, const char * xxx_end );
 
     // structs
-    const char *        mapped_region;      // != nullptr means the whole file was sucked in by read_uncompressed()
+    void *              mapped_region;      // != nullptr means the whole file was sucked in by read_uncompressed()
+    size_t              mapped_region_len;  
     Header *            hdr;
     Header *            max;                // holds max lengths of currently allocated arrays 
 
@@ -2055,7 +2057,7 @@ bool Model::file_exists( std::string file_path )
     return stat( file_path.c_str(), &ss ) == 0;
 }
 
-bool Model::file_read( std::string file_path, char *& start, char *& end )
+bool Model::file_read( std::string file_path, char *& start, char *& end, bool is_read_only )
 {
     const char * fname = file_path.c_str();
     int fd = open( fname, O_RDONLY );
@@ -2070,28 +2072,13 @@ bool Model::file_read( std::string file_path, char *& start, char *& end )
     }
     size_t size = file_stat.st_size;
 
-    // this large read should behave like an mmap() inside the o/s kernel and be as fast
-    char * _start = aligned_alloc<char>( size );
-    if ( _start == nullptr ) {
-        close( fd );
-        rtn_assert( 0, "could not read file " + std::string(fname) + " - malloc() error: " + strerror( errno ) );
-    }
-    start = _start;
+    // let mmap() choose an addr and make the region read-only or read/write
+    int prot = PROT_READ | (is_read_only ? 0 : PROT_WRITE);
+    int flags = MAP_FILE | (is_read_only ? MAP_SHARED : MAP_PRIVATE);
+    void * addr = mmap( 0, size, prot, flags, fd, 0 );
+    rtn_assert( addr != MAP_FAILED, "file_read() mmap() call failed" );
+    start = reinterpret_cast<char *>( addr );
     end = start + size;
-
-    char * addr = _start;
-    while( size != 0 ) 
-    {
-        size_t _this_size = 1024*1024*1024;
-        if ( size < _this_size ) _this_size = size;
-        if ( ::read( fd, addr, _this_size ) <= 0 ) {
-            close( fd );
-            rtn_assert( 0, "could not read() file " + std::string(fname) + " - read error: " + strerror( errno ) );
-        }
-        size -= _this_size;
-        addr += _this_size;
-    }
-    close( fd );
     return true;
 }
 
@@ -2099,7 +2086,7 @@ bool Model::file_read( std::string file_path, const char *& start, const char *&
 {
     char * _start;
     char * _end;
-    bool ret = file_read( file_path, _start, _end );
+    bool ret = file_read( file_path, _start, _end, true );
     start = _start;
     end = _end;
     return ret;
@@ -2148,6 +2135,7 @@ Model::Model( std::string                top_file,
     is_good = false;
     error_msg = "<unknown error>";
     mapped_region = nullptr;
+    mapped_region_len = 0;
     fsc = nullptr;
     obj = nullptr;
     line_num = 1;
@@ -2534,7 +2522,7 @@ Model::Model( std::string model_path, bool is_compressed )
 Model::~Model()
 {
     if ( mapped_region != nullptr ) {
-        delete mapped_region;
+        munmap( mapped_region, mapped_region_len );
         mapped_region = nullptr;
     } else {
         delete strings;
@@ -3106,8 +3094,9 @@ bool Model::read_uncompressed( std::string model_path )
 {
     char * start;
     char * end;
-    if ( !file_read( model_path, start, end ) ) return false;
+    if ( !file_read( model_path, start, end, false ) ) return false; // still some code that modifies data, so need read/write
     mapped_region = start;
+    mapped_region_len = end - start;
 
     //------------------------------------------------------------
     // Write out header than individual arrays.

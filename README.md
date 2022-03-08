@@ -18,8 +18,6 @@ Textures are not mipmapped by default, but Model can also generate mipmaps.  The
 
 A model may optionally instance one or more other submodels, each with a per-instance 4x4 matrix transformation.  This instancing is done within a top-level (NVidia Falcor) .fscene file which Model.h knows how to parse.  The .fscene format supports other global scene information such as sky boxes, background, ambient, tone mapping, cameras, and user-inserted light sources.  A submodel may also instance lower-level submodels.
 
-Errors do not raise exceptions.  Instead the constructor sets is_good to false and sets error_msg to a useful string.  So the caller should check is_good in the newly created Model before proceeding to use the object.
-
 This has been tested on macOS, Linux, and Cygwin. It should work in any UNIX-like environment. It requires the -std=c++17 
 (or later) compiler switch.
 

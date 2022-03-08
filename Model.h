@@ -18,17 +18,38 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 // 
+//
 // Model.h - 3D model loading with one .h file
 //
 // We inline these two well-known public-domain headers at the end of this file 
 // so you still need only include Model.h (and you should not include those separately beforehand):
 //
-// stb_image.h     - v2.06 - public domain image loader - http://nothings.org/stb_image.h
+// https://github.com/nothings/stb (MIT license)
+//
+// stb_image.h     - v2.06 - public domain image loader 
 //                           no warranty implied; use at your own risk
 //
-// stb_image_write - v0.98 - public domain - http://nothings.org/stb/stb_image_write.h
+// stb_image_write - v0.98 - public domain image writer
 //                           writes out PNG/BMP/TGA images to C stdio - Sean Barrett 2010
 //                           no warranty implied; use at your own risk
+//
+// Copyright (c) 2017 Sean Barrett
+// Permission is hereby granted, free of charge, to any person obtaining a copy of
+// this software and associated documentation files (the "Software"), to deal in
+// the Software without restriction, including without limitation the rights to
+// use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+// of the Software, and to permit persons to whom the Software is furnished to do
+// so, subject to the following conditions:
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
 //
 // How to Model.h:
 //
@@ -60,7 +81,7 @@
 //        the number of texels in each level, so you'll need to compute those on the fly as you
 //        try to obtain the starting offset for a given level.
 //
-//     4) If you want Model to generate compressed textures for you, it will use ARM's astcenc to encode
+//     4) If you want Model to generate compressed textures for you, it will use ARM's astcenc program to encode
 //        the textures using ASTC which is a modern, high-quality compression format that is often 10-20x smaller than uncompressed.
 //        You should pass in the original (ideally uncompressed) file name, e.g., image1.png, so that we can encode using the best
 //        version of the image.  Model will create files in the same directory as image1.png named 
@@ -97,7 +118,7 @@
 //     7) Optionally generate BVH tree.
 //     8) Write to  uncompressed file is fast because all structures are aligned on a page boundary in mem and in file.
 //     9) Read from uncompressed file is fast because all structures are aligned on a page boundary in mem and in file.
-//        (and uses mmap()).
+//        (and uses mmap() system call).
 //
 // To Do:
 //
@@ -11083,6 +11104,44 @@ uint Model::Texture::ASTC_Header::byte_cnt( void ) const
 }
 
 /*
+   This software is available under 2 licenses -- choose whichever you prefer.
+   ------------------------------------------------------------------------------
+   ALTERNATIVE A - MIT License
+   Copyright (c) 2017 Sean Barrett
+   Permission is hereby granted, free of charge, to any person obtaining a copy of
+   this software and associated documentation files (the "Software"), to deal in
+   the Software without restriction, including without limitation the rights to
+   use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+   of the Software, and to permit persons to whom the Software is furnished to do
+   so, subject to the following conditions:
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+   ------------------------------------------------------------------------------
+   ALTERNATIVE B - Public Domain (www.unlicense.org)
+   This is free and unencumbered software released into the public domain.
+   Anyone is free to copy, modify, publish, use, compile, sell, or distribute this
+   software, either in source code form or as a compiled binary, for any purpose,
+   commercial or non-commercial, and by any means.
+   In jurisdictions that recognize copyright laws, the author or authors of this
+   software dedicate any and all copyright interest in the software to the public
+   domain. We make this dedication for the benefit of the public at large and to
+   the detriment of our heirs and successors. We intend this dedication to be an
+   overt act of relinquishment in perpetuity of all present and future rights to
+   this software under copyright law.
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+   ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+   WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
    stb_image.h - v2.06 - public domain image loader - http://nothings.org/stb_image.h
                        no warranty implied; use at your own risk
 

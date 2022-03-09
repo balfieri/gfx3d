@@ -665,32 +665,64 @@ void socket_addr_info_free( socket_addr_info_t * info )
     freeaddrinfo( info );
 }
 
-socket_addr_info_t * socket_addr_info_udp_broadcast_alloc( uint32_t port )
+// ip_addr == "" ===> broadcast
+socket_addr_info_t * socket_addr_info_udp_alloc( std::string ip_addr, uint32_t port, bool is_ipv4=true )
 {
-    struct sockaddr_in * addr_in = new struct sockaddr_in;
-    addr_in->sin_family      = AF_INET;
-    addr_in->sin_port        = htons( port );
-    addr_in->sin_addr.s_addr = INADDR_ANY;
-    memset( addr_in->sin_zero, 0, sizeof(addr_in->sin_zero) );
+    uint32_t family = is_ipv4 ? AF_INET : AF_INET6;
+    socket_addr_t * addr;
+    socket_addrlen_t addr_len;
+    if ( family == AF_INET ) {
+        struct sockaddr_in * addr_in = new struct sockaddr_in;
+        addr                     = reinterpret_cast<struct sockaddr *>( addr_in );
+        addr_len                 = sizeof( struct sockaddr_in );
+        addr_in->sin_family      = family;
+        addr_in->sin_port        = htons( port );
+        if ( ip_addr == "" ) {
+            addr_in->sin_addr.s_addr = INADDR_ANY;
+        } else {
+            inet_pton( family, ip_addr.c_str(), &addr_in->sin_addr );
+        }
+        memset( addr_in->sin_zero, 0, sizeof(addr_in->sin_zero) );
+    } else {
+        struct sockaddr_in6 * addr_in = new struct sockaddr_in6;
+        addr                     = reinterpret_cast<struct sockaddr *>( addr_in );
+        addr_len                 = sizeof( struct sockaddr_in6 );
+        addr_in->sin6_len        = addr_len;
+        addr_in->sin6_family     = AF_INET6;
+        addr_in->sin6_flowinfo   = 0;
+        addr_in->sin6_family     = family;
+        addr_in->sin6_port       = htons( port );
+        if ( ip_addr == "" ) {
+            addr_in->sin6_addr   = in6addr_any;
+        } else {
+            inet_pton( family, ip_addr.c_str(), &addr_in->sin6_addr );
+        }
+    }
 
     char canonname[1] = "";
     socket_addr_info_t * info = new socket_addr_info_t;
     info->ai_flags     = 0;
-    info->ai_family    = AF_INET;
+    info->ai_family    = family;
     info->ai_socktype  = SOCK_DGRAM;
     info->ai_protocol  = 0;
-    info->ai_addr      = reinterpret_cast<struct sockaddr *>( addr_in );
-    info->ai_addrlen   = sizeof( struct sockaddr_in );
+    info->ai_addr      = addr;
+    info->ai_addrlen   = addr_len;
     info->ai_canonname = canonname;
     info->ai_next      = nullptr;
 
     return info;
 }
 
-void socket_addr_info_udp_broadcast_free( socket_addr_info_t * info )
+void socket_addr_info_udp_free( socket_addr_info_t * info )
 {
-    struct sockaddr_in * addr_in = reinterpret_cast<struct sockaddr_in *>( info->ai_addr );
-    delete addr_in;
+    if ( info->ai_family == AF_INET ) {
+        struct sockaddr_in * addr_in = reinterpret_cast<struct sockaddr_in *>( info->ai_addr );
+        delete addr_in;
+    } else {
+        dassert( info->ai_family == AF_INET6, "ai_family is not AF_INET or AF_INET6" );
+        struct sockaddr_in6 * addr_in = reinterpret_cast<struct sockaddr_in6 *>( info->ai_addr );
+        delete addr_in;
+    }
     info->ai_addr = nullptr;
     delete info;
 }
@@ -704,8 +736,20 @@ void udp_socket_create( socket_id_t& sid, socket_addr_t& local_addr, socket_addr
         if ( sid < 0 ) continue;
 
         int ret;
-        struct sockaddr_in * addr_in = reinterpret_cast<struct sockaddr_in *>( info->ai_addr );
-        if ( addr_in->sin_addr.s_addr == INADDR_ANY ) {
+        bool is_broadcast;
+        if ( info->ai_family == AF_INET ) {
+            struct sockaddr_in  * addr_in  = reinterpret_cast<struct sockaddr_in  *>( info->ai_addr );
+            is_broadcast = addr_in->sin_addr.s_addr == INADDR_ANY;
+        } else {
+            dassert( info->ai_family == AF_INET6, "ai_family is not AF_INET or AF_INET6" );
+            struct sockaddr_in6 * addr_in6 = reinterpret_cast<struct sockaddr_in6 *>( info->ai_addr );
+            is_broadcast = true;
+            for( uint32_t i = 0; i < 16; i++ )
+            {
+                is_broadcast &= addr_in6->sin6_addr.s6_addr[i] == in6addr_any.s6_addr[i];
+            }
+        }
+        if ( is_broadcast ) {
             // This is required for broadcast setup.
             // See: https://www.cs.ubbcluj.ro/~dadi/compnet/labs/lab3/udp-broadcast.html
             int so_broadcast = 1;
@@ -730,18 +774,18 @@ void udp_socket_create( socket_id_t& sid, socket_addr_t& local_addr, socket_addr
     die( "udp_socket_create() could not find any bindable socketaddr errno=" + errno_str() );
 }
 
-void udp_socket_create( socket_id_t& sid, socket_addr_t& local_addr, socket_addrlen_t& local_addr_len, std::string ip_addr, uint32_t port, bool non_blocking=true )
+void udp_socket_create_unicast( socket_id_t& sid, socket_addr_t& local_addr, socket_addrlen_t& local_addr_len, std::string ip_addr, uint32_t port, bool non_blocking=true, bool is_ipv4=true )
 {
-    socket_addr_info_t * info = socket_addr_info_alloc( ip_addr, port );
+    socket_addr_info_t * info = socket_addr_info_udp_alloc( ip_addr, port, is_ipv4 );
     udp_socket_create( sid, local_addr, local_addr_len, info, non_blocking );
-    socket_addr_info_free( info );
+    socket_addr_info_udp_free( info );
 }
 
-void udp_socket_create_broadcast( socket_id_t& sid, socket_addr_t& local_addr, socket_addrlen_t& local_addr_len, uint32_t port, bool non_blocking=true )
+void udp_socket_create_broadcast( socket_id_t& sid, socket_addr_t& local_addr, socket_addrlen_t& local_addr_len, uint32_t port, bool non_blocking=true, bool is_ipv4=true )
 {
-    socket_addr_info_t * info = socket_addr_info_udp_broadcast_alloc( port );
+    socket_addr_info_t * info = socket_addr_info_udp_alloc( "", port, is_ipv4 );
     udp_socket_create( sid, local_addr, local_addr_len, info, non_blocking );
-    socket_addr_info_udp_broadcast_free( info );
+    socket_addr_info_udp_free( info );
 }
 
 void udp_socket_destroy( socket_id_t sid )
@@ -749,14 +793,31 @@ void udp_socket_destroy( socket_id_t sid )
     close( sid );
 }
 
-void udp_socket_recvfrom( size_t& byte_cnt, socket_id_t sid, void * buffer, size_t buffer_len, socket_addr_t& remote_addr, socket_addrlen_t& remote_addr_len )
+void udp_socket_recvfrom( size_t& byte_cnt, socket_id_t sid, void * buffer, size_t buffer_len, socket_addr_t& remote_addr, socket_addrlen_t& remote_addr_len, std::string * remote_ip_addr_ptr=nullptr )
 {
+    remote_addr_len = sizeof( socket_addr_t );
     int ret = recvfrom( sid, buffer, buffer_len, 0, &remote_addr, &remote_addr_len );
     if ( ret < 0 ) {
         dassert( errno == EAGAIN || errno == EWOULDBLOCK, "recvfrom() failed for udp_socket_recvfrom() errno=" + errno_str() );
         byte_cnt = 0;
     } else {
         byte_cnt = ret;
+        if ( remote_ip_addr_ptr != nullptr ) {
+            // return string form of remote IPv4 or IPv6 address
+            void * ip_addr;
+            if ( remote_addr.sa_family == AF_INET ) {
+                struct sockaddr_in * addr_in = reinterpret_cast<struct sockaddr_in *>( &remote_addr );
+                ip_addr = &addr_in->sin_addr;
+            } else {
+                dassert( remote_addr.sa_family == AF_INET6, "remote_addr.sa_family is not AF_INET or AF_INET6, got " + std::to_string(remote_addr.sa_family) );
+                struct sockaddr_in6 * addr_in6 = reinterpret_cast<struct sockaddr_in6 *>( &remote_addr );
+                ip_addr = &addr_in6->sin6_addr;
+            }
+            char ip_addr_cs[INET6_ADDRSTRLEN];
+            const char * ret = inet_ntop( remote_addr.sa_family, ip_addr, ip_addr_cs, sizeof(ip_addr_cs) );
+            dassert( ret != nullptr, "inet_ntop() failed errno=" << errno_str() );
+            *remote_ip_addr_ptr = ip_addr_cs;
+        }
     }
 }
 

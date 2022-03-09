@@ -20,13 +20,14 @@
 // 
 // sys.h - system dependencies and utilities
 //
-// This header provides the following misc types and functions:
+// This header provides misc types and functions for:
 // - assertions
 // - common data types from Model.h
-// - string upper()
+// - strings
 // - raw casting between real and uint32_t, or real64 and uint64_t
-// - random number generation that works per-thread and is easily implementable in HW
+// - random number generation that is per-thread (and easily implementable in HW)
 // - bit twiddling
+// - date and time
 // - multi-threading 
 // - regular expressions
 // - networking

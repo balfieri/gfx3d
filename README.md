@@ -14,7 +14,7 @@ the latter of which can be loaded instantaneously without translation.
 
 The implementation allocates contiguous arrays (instances, objects, polygons, vertexes, positions, normals, texcoords, materials, textures, texels, strings, volumes, volume_grids, voxels) that contain no pointers, only indices into other arrays. This means that the arrays can be copied to a GPU without editing and moved around. They can also be stored directly to a binary file without translationghdr structure holds the lengths of the arrays.
 
-Textures are not mipmapped by default, but Model can also generate mipmaps. The texels are stored in RGB8, RGBA8, L8, LA8, or ASTC (compressed) formats.
+Textures are not mipmapped by default, but Model can also generate mipmaps. The texels are stored in RGB8, RGBA8, L8, LA8, or ASTC (compressed) formats. For ASTC encoding, the "astcenc" program must be installed and found on your PATH (see https://github.com/ARM-software/astc-encoder). Model.h implements its own ASTC decoding and does not rely on any external programs (e.g., astcdec) or source code.
 
 A model may optionally instance one or more other submodels, each with a per-instance 4x4 matrix transformation. This instancing is often done within a top-level (NVidia Falcor) .fscene file which Model.h knows how to parse. The .fscene format supports other global scene information such as sky boxes, background, ambient, tone mapping, cameras, and user-inserted light sourcesgsubmodel may also instance lower-level submodels.
 
@@ -37,6 +37,8 @@ Future features:
 
 1) Generalize the Object class to subsume Instance and to provide hierarchical scene graph support.
 2) Add a Rendering.h to do at least traditional rendering of Model.h models in modern Vulkan/Metal, but keep most of the mechanism in Model.h, particularly memory management.
+3) Add support for USD.
+4) Add support for curves, patches, hair, etc. 
 
 Bob Alfieri<br>
 Chapel Hill, NC

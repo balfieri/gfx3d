@@ -98,12 +98,17 @@
 //        an option or, for now, you can do your own texture filtering outside of Model and just be sure to name 
 //        your files image1.astc, image1.1.astc, etc. so that Model will see them and not regenerate them.
 //
+//        As mentioned in the README.md, ASTC encode relies on the "astcenc" program being installed on your
+//        system and visible on your PATH. This file does its own ASTC decode and does not rely on any external
+//        programs (e.g., astcdec) or any external source code.
+//
 //     5) If you want Model to generate a BVH tree for you, add Model::BVH_TREE::BINARY as the third argument
 //        to the Model() constructor in (1) to get a binary BVH tree.  QUAD and OCT trees are not
 //        currently supported.
 //
 //        Note: BVH building reorders the polygons, so any polygon offsets in an Object structure will be garbage.
-//              Most apps don't use the objects[] so this is not normally a problem.
+//              Most apps don't use the objects[] so this is not normally a problem. In any case, this will be fixed soon
+//              in prepartion for hierarchical scene graphs which will make a lot of use of objects.
 //
 // How it works:
 //
@@ -119,21 +124,6 @@
 //     8) Write to  uncompressed file is fast because all structures are aligned on a page boundary in mem and in file.
 //     9) Read from uncompressed file is fast because all structures are aligned on a page boundary in mem and in file.
 //        (and uses mmap() system call).
-//
-// To Do:
-//
-//     0) Add some example programs to illustrate and test features.
-//        This is always the best way for someone new to come up to speed.
-//     1) ASTC texture decompression needs a lot more testing against ARM's reference model.
-//     2) Support the .fbx binary and text formats.
-//     3) Perhaps support other formats such as UE4 and MAX.
-//     4) Test against more complex models, such as Disney Moana and Disney Cloud open-source models.
-//     5) Add support for curves, patches, hair, etc.
-//     6) Add a simple ray-tracing renderer as a separate file for an example and test.
-//     7) We have a generic material shading graph parser, but it doesn't check semantics 
-//        (that's proprietary). The semantic checking could be made more generic.
-//        Graph execution would still need to be part of a renderer and we could give an
-//        example of how to do it in the ray-tracing renderer.
 //
 #ifndef _Model_h
 #define _Model_h

@@ -29,6 +29,7 @@
 // - bit twiddling
 // - multi-threading 
 // - regular expressions
+// - networking
 //
 #ifndef SYSH
 #define SYSH
@@ -49,6 +50,9 @@
 #include <algorithm>
 #include <pthread.h>
 #include <time.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netdb.h>
 
 static float uniform( void );  // temporary
 #include "Model.h"
@@ -194,6 +198,11 @@ inline uint32_t rand_bits( void )
     m_w = 18000 * (m_w & 65535) + (m_w >> 16);
     uint32_t bits = (m_z << 16) + m_w;
     return bits;
+}
+
+inline uint64_t rand_bits64( void )
+{
+    return (uint64_t( rand_bits() ) << 32) | (uint64_t( rand_bits() ) << 0);
 }
 
 inline real uniform( void )
@@ -618,6 +627,148 @@ inline std::string indent_str(uint32_t cnt) {
     std::string s = "";
     for (uint32_t i=0; i < cnt; i++) s += " ";
     return s;
+}
+
+//--------------------------------------------------------- 
+// Networking Utility Functions
+//
+// Work with both IPv4 or IPv6.
+//--------------------------------------------------------- 
+
+inline std::string errno_str( void )
+{
+    char s[256];
+    strerror_r( errno, s, sizeof(s) );
+    return std::to_string( errno ) + " (" + s + ")";
+}
+
+using socket_id_t = int;
+using socket_addr_info_t = struct addrinfo;
+using socket_addr_t = struct sockaddr;
+using socket_addrlen_t = socklen_t;
+
+socket_addr_info_t * socket_addr_info_alloc( std::string ip_addr, uint32_t port )
+{
+    struct addrinfo hints;
+    memset( &hints, 0, sizeof(hints) );
+    hints.ai_family = AF_UNSPEC; // can use IPv4 or IPv6
+    hints.ai_socktype = SOCK_DGRAM;
+    std::string service = std::to_string( port );
+    socket_addr_info_t * addr_info_ptr;
+    int ret = getaddrinfo( ip_addr.c_str(), service.c_str(), &hints, &addr_info_ptr );
+    dassert( ret == 0, "getaddrinfo() failed for socket_addr_create()" );
+    return addr_info_ptr;
+}
+
+void socket_addr_info_free( socket_addr_info_t * info )
+{
+    freeaddrinfo( info );
+}
+
+socket_addr_info_t * socket_addr_info_udp_broadcast_alloc( uint32_t port )
+{
+    struct sockaddr_in * addr_in = new struct sockaddr_in;
+    addr_in->sin_family      = AF_INET;
+    addr_in->sin_port        = htons( port );
+    addr_in->sin_addr.s_addr = INADDR_ANY;
+    memset( addr_in->sin_zero, 0, sizeof(addr_in->sin_zero) );
+
+    char canonname[1] = "";
+    socket_addr_info_t * info = new socket_addr_info_t;
+    info->ai_flags     = 0;
+    info->ai_family    = AF_INET;
+    info->ai_socktype  = SOCK_DGRAM;
+    info->ai_protocol  = 0;
+    info->ai_addr      = reinterpret_cast<struct sockaddr *>( addr_in );
+    info->ai_addrlen   = sizeof( struct sockaddr_in );
+    info->ai_canonname = canonname;
+    info->ai_next      = nullptr;
+
+    return info;
+}
+
+void socket_addr_info_udp_broadcast_free( socket_addr_info_t * info )
+{
+    struct sockaddr_in * addr_in = reinterpret_cast<struct sockaddr_in *>( info->ai_addr );
+    delete addr_in;
+    info->ai_addr = nullptr;
+    delete info;
+}
+
+void udp_socket_create( socket_id_t& sid, socket_addr_t& local_addr, socket_addrlen_t& local_addr_len, const socket_addr_info_t * local_addr_info, bool non_blocking=true )
+{
+    // try each possible local addr in the list
+    for( const socket_addr_info_t * info = local_addr_info; info != nullptr; info = info->ai_next )
+    {
+        sid = socket( info->ai_family, info->ai_socktype, info->ai_protocol );
+        if ( sid < 0 ) continue;
+
+        int ret;
+        struct sockaddr_in * addr_in = reinterpret_cast<struct sockaddr_in *>( info->ai_addr );
+        if ( addr_in->sin_addr.s_addr == INADDR_ANY ) {
+            // This is required for broadcast setup.
+            // See: https://www.cs.ubbcluj.ro/~dadi/compnet/labs/lab3/udp-broadcast.html
+            int so_broadcast = 1;
+            ret = setsockopt( sid, SOL_SOCKET, SO_BROADCAST, &so_broadcast, sizeof(so_broadcast) );
+            dassert( ret == 0, "setsockopt() failed for udp_socket_create() with broadcast addr errno=" + errno_str() );
+        }
+
+        ret = bind( sid, info->ai_addr, info->ai_addrlen );
+        if ( ret < 0 ) {
+            close( sid );
+            continue;
+        }
+
+        local_addr     = *local_addr_info->ai_addr; 
+        local_addr_len = local_addr_info->ai_addrlen;
+        if ( non_blocking ) {
+            ret = fcntl( sid, F_SETFL, fcntl( sid, F_GETFL ) | O_NONBLOCK );
+            dassert( ret == 0, "fcntl() failed for udp_socket_create() errno=" + errno_str() );
+        }
+        return; 
+    }
+    die( "udp_socket_create() could not find any bindable socketaddr errno=" + errno_str() );
+}
+
+void udp_socket_create( socket_id_t& sid, socket_addr_t& local_addr, socket_addrlen_t& local_addr_len, std::string ip_addr, uint32_t port, bool non_blocking=true )
+{
+    socket_addr_info_t * info = socket_addr_info_alloc( ip_addr, port );
+    udp_socket_create( sid, local_addr, local_addr_len, info, non_blocking );
+    socket_addr_info_free( info );
+}
+
+void udp_socket_create_broadcast( socket_id_t& sid, socket_addr_t& local_addr, socket_addrlen_t& local_addr_len, uint32_t port, bool non_blocking=true )
+{
+    socket_addr_info_t * info = socket_addr_info_udp_broadcast_alloc( port );
+    udp_socket_create( sid, local_addr, local_addr_len, info, non_blocking );
+    socket_addr_info_udp_broadcast_free( info );
+}
+
+void udp_socket_destroy( socket_id_t sid )
+{
+    close( sid );
+}
+
+void udp_socket_recvfrom( size_t& byte_cnt, socket_id_t sid, void * buffer, size_t buffer_len, socket_addr_t& remote_addr, socket_addrlen_t& remote_addr_len )
+{
+    int ret = recvfrom( sid, buffer, buffer_len, 0, &remote_addr, &remote_addr_len );
+    if ( ret < 0 ) {
+        dassert( errno == EAGAIN || errno == EWOULDBLOCK, "recvfrom() failed for udp_socket_recvfrom() errno=" + errno_str() );
+        byte_cnt = 0;
+    } else {
+        byte_cnt = ret;
+    }
+}
+
+void udp_socket_sendto( size_t& byte_cnt, socket_id_t sid, void * buffer, size_t buffer_len, const socket_addr_t& local_addr, size_t local_addr_len )
+{
+    int ret = sendto( sid, buffer, buffer_len, 0, &local_addr, local_addr_len );
+    if ( ret < 0 ) {
+        dassert( errno == EAGAIN || errno == EWOULDBLOCK, "sendto() failed for udp_socket_sendto() errno=" + errno_str() );
+        byte_cnt = 0;
+    } else {
+        byte_cnt = ret;
+    }
 }
 
 #endif

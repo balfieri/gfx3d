@@ -676,6 +676,7 @@ socket_addr_info_t * socket_addr_info_udp_alloc( std::string ip_addr, uint32_t p
         struct sockaddr_in * addr_in = new struct sockaddr_in;
         addr                     = reinterpret_cast<struct sockaddr *>( addr_in );
         addr_len                 = sizeof( struct sockaddr_in );
+        addr_in->sin_len         = addr_len;
         addr_in->sin_family      = family;
         addr_in->sin_port        = htons( port );
         if ( ip_addr == "" ) {
@@ -799,7 +800,7 @@ void udp_socket_recvfrom( size_t& byte_cnt, socket_id_t sid, void * buffer, size
     remote_addr_len = sizeof( socket_addr_t );
     int ret = recvfrom( sid, buffer, buffer_len, 0, &remote_addr, &remote_addr_len );
     if ( ret < 0 ) {
-        dassert( errno == EAGAIN || errno == EWOULDBLOCK, "recvfrom() failed for udp_socket_recvfrom() errno=" + errno_str() );
+        dassert( errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS, "recvfrom() failed for udp_socket_recvfrom() errno=" + errno_str() );
         byte_cnt = 0;
     } else {
         byte_cnt = ret;
@@ -826,7 +827,7 @@ void udp_socket_sendto( size_t& byte_cnt, socket_id_t sid, void * buffer, size_t
 {
     int ret = sendto( sid, buffer, buffer_len, 0, &local_addr, local_addr_len );
     if ( ret < 0 ) {
-        dassert( errno == EAGAIN || errno == EWOULDBLOCK, "sendto() failed for udp_socket_sendto() errno=" + errno_str() );
+        dassert( errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS, "sendto() failed for udp_socket_sendto() errno=" + errno_str() );
         byte_cnt = 0;
     } else {
         byte_cnt = ret;

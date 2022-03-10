@@ -537,8 +537,6 @@ void thread_parallelize( uint32_t thread_cnt, void (*fn)(uint32_t, uint32_t, voi
     }
     //--------------------------------------------------------- 
     // Start other threads (if any).
-    // We use Pthreads directly so that we can get a large stack (1 MB)
-    // to ensure we never have that kind of memory-trashing problem.
     //--------------------------------------------------------- 
     ThreadInfo * threads = new ThreadInfo[thread_cnt];
     for( uint32_t i = 1; i < thread_cnt; i++ )

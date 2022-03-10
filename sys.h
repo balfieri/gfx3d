@@ -648,6 +648,63 @@ using socket_addr_info_t = struct addrinfo;
 using socket_addr_t = struct sockaddr;
 using socket_addrlen_t = socklen_t;
 
+std::string socket_addr_ip_addr_get( const socket_addr_t& addr )
+{
+    const void * ip_addr_encoded;
+    if ( addr.sa_family == AF_INET ) {
+        const struct sockaddr_in * addr_in = reinterpret_cast<const struct sockaddr_in *>( &addr );
+        ip_addr_encoded = &addr_in->sin_addr;
+    } else {
+        dassert( addr.sa_family == AF_INET6, "addr.sa_family is not AF_INET or AF_INET6, got " + std::to_string(addr.sa_family) );
+        const struct sockaddr_in6 * addr_in6 = reinterpret_cast<const struct sockaddr_in6 *>( &addr );
+        ip_addr_encoded = &addr_in6->sin6_addr;
+    }
+    char ip_addr_cs[INET6_ADDRSTRLEN];
+    const char * ret = inet_ntop( addr.sa_family, ip_addr_encoded, ip_addr_cs, sizeof(ip_addr_cs) );
+    dassert( ret != nullptr, "inet_ntop() failed errno=" << errno_str() );
+    return ip_addr_cs;
+}
+
+void socket_addr_ip_addr_set( socket_addr_t& addr, std::string ip_addr )
+{
+    void * ip_addr_encoded;
+    if ( addr.sa_family == AF_INET ) {
+        struct sockaddr_in * addr_in = reinterpret_cast<struct sockaddr_in *>( &addr );
+        ip_addr_encoded = &addr_in->sin_addr;
+    } else {
+        dassert( addr.sa_family == AF_INET6, "addr.sa_family is not AF_INET or AF_INET6, got " + std::to_string(addr.sa_family) );
+        struct sockaddr_in6 * addr_in6 = reinterpret_cast<struct sockaddr_in6 *>( &addr );
+        ip_addr_encoded = &addr_in6->sin6_addr;
+    }
+    inet_pton( addr.sa_family, ip_addr.c_str(), ip_addr_encoded );
+}
+
+uint32_t socket_addr_port_get( const socket_addr_t& addr )
+{
+    uint32_t port;
+    if ( addr.sa_family == AF_INET ) {
+        const struct sockaddr_in * addr_in = reinterpret_cast<const struct sockaddr_in *>( &addr );
+        port = ntohs( addr_in->sin_port );
+    } else {
+        dassert( addr.sa_family == AF_INET6, "addr.sa_family is not AF_INET or AF_INET6, got " + std::to_string(addr.sa_family) );
+        const struct sockaddr_in6 * addr_in6 = reinterpret_cast<const struct sockaddr_in6 *>( &addr );
+        port = ntohs( addr_in6->sin6_port );
+    }
+    return port;
+}
+
+void socket_addr_port_set( socket_addr_t& addr, uint32_t port )
+{
+    if ( addr.sa_family == AF_INET ) {
+        struct sockaddr_in * addr_in = reinterpret_cast<struct sockaddr_in *>( &addr );
+        addr_in->sin_port = htons( port );
+    } else {
+        dassert( addr.sa_family == AF_INET6, "addr.sa_family is not AF_INET or AF_INET6, got " + std::to_string(addr.sa_family) );
+        struct sockaddr_in6 * addr_in6 = reinterpret_cast<struct sockaddr_in6 *>( &addr );
+        addr_in6->sin6_port = htons( port );
+    }
+}
+
 socket_addr_info_t * socket_addr_info_alloc( std::string ip_addr, uint32_t port )
 {
     struct addrinfo hints;
@@ -795,7 +852,7 @@ void udp_socket_destroy( socket_id_t sid )
     close( sid );
 }
 
-void udp_socket_recvfrom( size_t& byte_cnt, socket_id_t sid, void * buffer, size_t buffer_len, socket_addr_t& remote_addr, socket_addrlen_t& remote_addr_len, std::string * remote_ip_addr_ptr=nullptr )
+void udp_socket_recvfrom( size_t& byte_cnt, socket_id_t sid, void * buffer, size_t buffer_len, socket_addr_t& remote_addr, socket_addrlen_t& remote_addr_len )
 {
     remote_addr_len = sizeof( socket_addr_t );
     int ret = recvfrom( sid, buffer, buffer_len, 0, &remote_addr, &remote_addr_len );
@@ -804,28 +861,12 @@ void udp_socket_recvfrom( size_t& byte_cnt, socket_id_t sid, void * buffer, size
         byte_cnt = 0;
     } else {
         byte_cnt = ret;
-        if ( remote_ip_addr_ptr != nullptr ) {
-            // return string form of remote IPv4 or IPv6 address
-            void * ip_addr;
-            if ( remote_addr.sa_family == AF_INET ) {
-                struct sockaddr_in * addr_in = reinterpret_cast<struct sockaddr_in *>( &remote_addr );
-                ip_addr = &addr_in->sin_addr;
-            } else {
-                dassert( remote_addr.sa_family == AF_INET6, "remote_addr.sa_family is not AF_INET or AF_INET6, got " + std::to_string(remote_addr.sa_family) );
-                struct sockaddr_in6 * addr_in6 = reinterpret_cast<struct sockaddr_in6 *>( &remote_addr );
-                ip_addr = &addr_in6->sin6_addr;
-            }
-            char ip_addr_cs[INET6_ADDRSTRLEN];
-            const char * ret = inet_ntop( remote_addr.sa_family, ip_addr, ip_addr_cs, sizeof(ip_addr_cs) );
-            dassert( ret != nullptr, "inet_ntop() failed errno=" << errno_str() );
-            *remote_ip_addr_ptr = ip_addr_cs;
-        }
     }
 }
 
-void udp_socket_sendto( size_t& byte_cnt, socket_id_t sid, void * buffer, size_t buffer_len, const socket_addr_t& local_addr, size_t local_addr_len )
+void udp_socket_sendto( size_t& byte_cnt, socket_id_t sid, void * buffer, size_t buffer_len, const socket_addr_t& remote_addr, size_t remote_addr_len )
 {
-    int ret = sendto( sid, buffer, buffer_len, 0, &local_addr, local_addr_len );
+    int ret = sendto( sid, buffer, buffer_len, 0, &remote_addr, remote_addr_len );
     if ( ret < 0 ) {
         dassert( errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS, "sendto() failed for udp_socket_sendto() errno=" + errno_str() );
         byte_cnt = 0;

@@ -2086,13 +2086,18 @@ bool Model::file_read( std::string file_path, char *& start, char *& end, bool i
     }
     size_t size = file_stat.st_size;
 
-    // let mmap() choose an addr and make the region read-only or read/write
-    int prot = PROT_READ | (is_read_only ? 0 : PROT_WRITE);
-    int flags = MAP_FILE | (is_read_only ? MAP_SHARED : MAP_PRIVATE);
-    void * addr = mmap( 0, size, prot, flags, fd, 0 );
-    rtn_assert( addr != MAP_FAILED, "file_read() mmap() call failed" );
-    start = reinterpret_cast<char *>( addr );
-    end = start + size;
+    if ( size != 0 ) {
+        // let mmap() choose an addr and make the region read-only or read/write
+        int prot = PROT_READ | (is_read_only ? 0 : PROT_WRITE);
+        int flags = MAP_FILE | (is_read_only ? MAP_SHARED : MAP_PRIVATE);
+        void * addr = mmap( 0, size, prot, flags, fd, 0 );
+        rtn_assert( addr != MAP_FAILED, "file_read() mmap() call failed - error: " + std::string( strerror( errno ) ) );
+        start = reinterpret_cast<char *>( addr );
+        end = start + size;
+    } else {
+        start = 0;
+        end = start;
+    }
     return true;
 }
 

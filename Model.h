@@ -9221,7 +9221,7 @@ inline bool Model::parse_int64( _int64& i, const char *& xxx, const char * xxx_e
     }
 
     if ( is_neg ) i = -i;
-    rtn_assert( vld, "unable to parse int" + surrounding_lines( xxx, xxx_end ) );
+    rtn_assert( vld, "unable to parse int " + surrounding_lines( xxx, xxx_end ) );
     return true;
 }
 
@@ -9272,7 +9272,7 @@ inline bool Model::parse_uint64( uint64& u, const char *& xxx, const char * xxx_
         vld = true;
     }
 
-    rtn_assert( vld, "unable to parse uint64" + surrounding_lines( xxx, xxx_end ) );
+    rtn_assert( vld, "unable to parse uint64 " + surrounding_lines( xxx, xxx_end ) );
     return true;
 }
 

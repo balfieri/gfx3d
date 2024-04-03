@@ -136,6 +136,20 @@ inline std::string upper( std::string s )
     return r;
 }
 
+inline std::string hex8( uint32_t u )
+{
+    char cs[32];
+    snprintf( cs, sizeof(cs), "0x%08x", u );
+    return cs;
+}
+
+inline std::string hex16( uint64_t u )
+{
+    char cs[32];
+    snprintf( cs, sizeof(cs), "0x%016llx", u );
+    return cs;
+}
+
 //--------------------------------------------------------- 
 // Raw Type Casting Between real and uint32_t, or real64 and uint64_t.
 //--------------------------------------------------------- 

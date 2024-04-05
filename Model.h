@@ -432,28 +432,28 @@ public:
         inline real2    clamped( void ) const;
     };
 
-    class int3      
+    class integer3   // avoid name clash with CUDA int3
     {
     public:
         _int   c[3];
         
-        inline int3( void )                                         { c[0] = 0;  c[1] = 0;  c[2] = 0;  }
-        inline int3( _int c0, _int c1, _int c2 )                    { c[0] = c0; c[1] = c1; c[2] = c2; }
+        inline integer3( void )                                          { c[0] = 0;  c[1] = 0;  c[2] = 0;  }
+        inline integer3( _int c0, _int c1, _int c2 )                     { c[0] = c0; c[1] = c1; c[2] = c2; }
 
         inline _int x() const { return c[0]; }
         inline _int y() const { return c[1]; }
         inline _int z() const { return c[2]; }
 
-        inline const int3&  operator+() const                       { return *this; }
-        inline int3         operator-() const                       { return int3(-c[0], -c[1], -c[2]); }
-        inline _int         operator[](int i) const                 { return c[i]; }
-        inline _int&        operator[](int i)                       { return c[i]; };
-        inline bool         operator == ( const int3 &v2 ) const    { return c[0] == v2[0] && c[1] == v2[1] && c[2] == v2[2]; }
-        inline bool         operator != ( const int3 &v2 ) const    { return c[0] != v2[0] || c[1] != v2[1] || c[2] != v2[2]; }
-        inline int3&        operator += ( const int3 &v2 )          { c[0] += v2[0]; c[1] += v2[1]; c[2] += v2[2]; return *this; }
-        inline int3&        operator -= ( const int3 &v2 )          { c[0] -= v2[0]; c[1] -= v2[1]; c[2] -= v2[2]; return *this; }
-        inline void         operator <<= ( int s )                  { c[0] <<= s; c[1] <<= s; c[2] <<= s; }
-        inline void         operator >>= ( int s )                  { c[0] >>= s; c[1] >>= s; c[2] >>= s; }
+        inline const integer3& operator+() const                          { return *this; }
+        inline integer3        operator-() const                          { return integer3(-c[0], -c[1], -c[2]); }
+        inline _int            operator[](int i) const                    { return c[i]; }
+        inline _int&           operator[](int i)                          { return c[i]; };
+        inline bool            operator == ( const integer3 &v2 ) const   { return c[0] == v2[0] && c[1] == v2[1] && c[2] == v2[2]; }
+        inline bool            operator != ( const integer3 &v2 ) const   { return c[0] != v2[0] || c[1] != v2[1] || c[2] != v2[2]; }
+        inline integer3&       operator += ( const integer3 &v2 )         { c[0] += v2[0]; c[1] += v2[1]; c[2] += v2[2]; return *this; }
+        inline integer3&       operator -= ( const integer3 &v2 )         { c[0] -= v2[0]; c[1] -= v2[1]; c[2] -= v2[2]; return *this; }
+        inline void            operator <<= ( int s )                     { c[0] <<= s; c[1] <<= s; c[2] <<= s; }
+        inline void            operator >>= ( int s )                     { c[0] >>= s; c[1] >>= s; c[2] >>= s; }
     };
 
     class Header                            // header (of future binary file)
@@ -657,16 +657,16 @@ public:
 
         inline AABBI( void ) {}
         inline AABBI( const _int p[] );             // init with one point
-        inline AABBI( const int3& p ) : AABBI( p.c ) {}
+        inline AABBI( const integer3& p ) : AABBI( p.c ) {}
         inline AABBI( const _int p0[], const _int p1[] );
         inline AABBI( const _int p0[], const _int p1[], const _int p2[] );
         void expand( const AABBI& other );
         void expand( const _int p[] );
-        void expand( const int3& p )             { expand( p.c ); }
+        void expand( const integer3& p )         { expand( p.c ); }
         inline bool   is_empty(void) const       { return (_max[2]-_min[2]) <= 0 || (_max[1]-_min[1]) <= 0 || (_max[0]-_min[0]) <= 0; }
         inline uint64 volume(void) const         { return uint64(_max[2]-_min[2]+1)*uint64(_max[1]-_min[1]+1)*uint64(_max[0]-_min[0]+1); }
         bool encloses( const _int p[] ) const;
-        bool encloses( const int3& p ) const     { return encloses( p.c ); }
+        bool encloses( const integer3& p ) const { return encloses( p.c ); }
         bool encloses( _int x, _int y, _int z ) const;
         bool overlaps( const AABBI& other ) const;
         bool overlaps_internally( const AABBI& other ) const;
@@ -1788,7 +1788,7 @@ inline std::string str( const Model::real2& v )
     return "[" + str(v.c[0]) + "," + str(v.c[1]) + "]";
 }
 
-inline std::string str( const Model::int3& v )
+inline std::string str( const Model::integer3& v )
 {
     return "[" + str(v.c[0]) + "," + str(v.c[1]) + "," + str(v.c[2]) + "]";
 }
@@ -1811,7 +1811,7 @@ inline std::ostream& operator << ( std::ostream& os, const Model::real2& v )
     return os;
 }
 
-inline std::ostream& operator << ( std::ostream& os, const Model::int3& v ) 
+inline std::ostream& operator << ( std::ostream& os, const Model::integer3& v ) 
 {
     os << str( v );
     return os;

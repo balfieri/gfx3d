@@ -32,6 +32,10 @@
 // - regular expressions
 // - networking
 //
+// At some point, this header will provide macros and functions that allow
+// code launch on CPU or GPU (CUDA) with limited functionality
+// (e.g., very few intra-warp features supported).
+//
 #ifndef SYSH
 #define SYSH
 
@@ -69,7 +73,8 @@ static std::mutex __debug_mutex;          // to avoid garble with multiple threa
 #define dassert(expr, msg) { if ( !(expr) ) die( msg ); }
 #define eassert(expr) dassert( expr, "not true: " + std::string(#expr) )
 
-// expose/rename types and constants from Model.h
+// Expose/rename types and constants from Model.h.
+// These names were chosen to avoid conflicts with those found in CUDA, etc.
 //
 using int128_t = __int128_t;
 using uint128_t = __uint128_t;
@@ -91,7 +96,7 @@ using real3d = Model::real3d;
 using vec3d  = Model::real3d;
 using real4  = Model::real4;
 using vec4   = Model::real4;
-using int3   = Model::int3;
+using integer3 = Model::integer3;
 using AABB   = Model::AABB;
 using aabb   = Model::AABB;
 using AABBD  = Model::AABBD;

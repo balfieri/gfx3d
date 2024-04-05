@@ -432,6 +432,30 @@ public:
         inline real2    clamped( void ) const;
     };
 
+    class int3      
+    {
+    public:
+        _int   c[3];
+        
+        inline int3( void )                                         { c[0] = 0;  c[1] = 0;  c[2] = 0;  }
+        inline int3( _int c0, _int c1, _int c2 )                    { c[0] = c0; c[1] = c1; c[2] = c2; }
+
+        inline _int x() const { return c[0]; }
+        inline _int y() const { return c[1]; }
+        inline _int z() const { return c[2]; }
+
+        inline const int3&  operator+() const                       { return *this; }
+        inline int3         operator-() const                       { return int3(-c[0], -c[1], -c[2]); }
+        inline _int         operator[](int i) const                 { return c[i]; }
+        inline _int&        operator[](int i)                       { return c[i]; };
+        inline bool         operator == ( const int3 &v2 ) const    { return c[0] == v2[0] && c[1] == v2[1] && c[2] == v2[2]; }
+        inline bool         operator != ( const int3 &v2 ) const    { return c[0] != v2[0] || c[1] != v2[1] || c[2] != v2[2]; }
+        inline int3&        operator += ( const int3 &v2 )          { c[0] += v2[0]; c[1] += v2[1]; c[2] += v2[2]; return *this; }
+        inline int3&        operator -= ( const int3 &v2 )          { c[0] -= v2[0]; c[1] -= v2[1]; c[2] -= v2[2]; return *this; }
+        inline void         operator <<= ( int s )                  { c[0] <<= s; c[1] <<= s; c[2] <<= s; }
+        inline void         operator >>= ( int s )                  { c[0] >>= s; c[1] >>= s; c[2] >>= s; }
+    };
+
     class Header                            // header (of future binary file)
     {
     public:
@@ -633,13 +657,19 @@ public:
 
         inline AABBI( void ) {}
         inline AABBI( const _int p[] );             // init with one point
+        inline AABBI( const int3& p ) : AABBI( p.c ) {}
         inline AABBI( const _int p0[], const _int p1[] );
         inline AABBI( const _int p0[], const _int p1[], const _int p2[] );
+        void expand( const AABBI& other );
         void expand( const _int p[] );
+        void expand( const int3& p )             { expand( p.c ); }
         inline bool   is_empty(void) const       { return (_max[2]-_min[2]) <= 0 || (_max[1]-_min[1]) <= 0 || (_max[0]-_min[0]) <= 0; }
         inline uint64 volume(void) const         { return uint64(_max[2]-_min[2]+1)*uint64(_max[1]-_min[1]+1)*uint64(_max[0]-_min[0]+1); }
         bool encloses( const _int p[] ) const;
+        bool encloses( const int3& p ) const     { return encloses( p.c ); }
         bool encloses( _int x, _int y, _int z ) const;
+        bool overlaps( const AABBI& other ) const;
+        bool overlaps_internally( const AABBI& other ) const;
     };
 
     class AABBU64                           // axis aligned bounding box with uint64
@@ -1743,12 +1773,22 @@ inline std::string str( Model::real64 r )
     return s.str();
 }
 
-inline std::string str( Model::real3 v ) 
+inline std::string str( const Model::real3& v ) 
 {
     return "[" + str(v.c[0]) + "," + str(v.c[1]) + "," + str(v.c[2]) + "]";
 }
 
-inline std::string str( Model::real3d v ) 
+inline std::string str( const Model::real3d& v ) 
+{
+    return "[" + str(v.c[0]) + "," + str(v.c[1]) + "," + str(v.c[2]) + "]";
+}
+
+inline std::string str( const Model::real2& v ) 
+{
+    return "[" + str(v.c[0]) + "," + str(v.c[1]) + "]";
+}
+
+inline std::string str( const Model::int3& v )
 {
     return "[" + str(v.c[0]) + "," + str(v.c[1]) + "," + str(v.c[2]) + "]";
 }
@@ -1767,7 +1807,13 @@ inline std::ostream& operator << ( std::ostream& os, const Model::real3d& v )
 
 inline std::ostream& operator << ( std::ostream& os, const Model::real2& v ) 
 {
-    os << "[" << v.c[0] << "," << v.c[1] << "]";
+    os << str( v );
+    return os;
+}
+
+inline std::ostream& operator << ( std::ostream& os, const Model::int3& v ) 
+{
+    os << str( v );
     return os;
 }
 
@@ -6727,6 +6773,15 @@ inline Model::AABBI::AABBI( const Model::_int p0[], const _int p1[], const _int 
     expand( p2 );
 }  
 
+inline void Model::AABBI::expand( const Model::AABBI& other )
+{
+    for( uint i = 0; i < 3; i++ )
+    {
+        if ( other._min[i] < _min[i] ) _min[i] = other._min[i];
+        if ( other._max[i] > _max[i] ) _max[i] = other._max[i];
+    }
+}
+
 inline void Model::AABBI::expand( const Model::_int p[] ) 
 {
     if ( p[0] < _min[0] ) _min[0] = p[0];
@@ -6751,6 +6806,28 @@ inline bool Model::AABBI::encloses( Model::_int x, Model::_int y, Model::_int z 
 {
     const _int p[3] = { x, y, z };
     return encloses( p );
+}
+
+inline bool Model::AABBI::overlaps( const Model::AABBI& other ) const 
+{
+    return _min[0] <= other._max[0] &&
+           _min[1] <= other._max[1] &&
+           _min[2] <= other._max[2] &&
+           _max[0] >= other._min[0] &&
+           _max[1] >= other._min[1] &&
+           _max[2] >= other._min[2];
+}
+
+inline bool Model::AABBI::overlaps_internally( const Model::AABBI& other ) const 
+{
+    // this routine assumes that overlaps() already returned true
+    //
+    return _min[0] < other._max[0] ||
+           _min[1] < other._max[1] ||
+           _min[2] < other._max[2] ||
+           _max[0] > other._min[0] ||
+           _max[1] > other._min[1] ||
+           _max[2] > other._min[2];
 }
 
 inline Model::AABBU64::AABBU64( const Model::uint64 p[] )

@@ -663,13 +663,13 @@ public:
         void expand( const AABBI& other );
         void expand( const _int p[] );
         void expand( const integer3& p )         { expand( p.c ); }
+        void intersect( const AABBI& other );
         inline bool   is_empty(void) const       { return (_max[2]-_min[2]) <= 0 || (_max[1]-_min[1]) <= 0 || (_max[0]-_min[0]) <= 0; }
         inline uint64 volume(void) const         { return uint64(_max[2]-_min[2]+1)*uint64(_max[1]-_min[1]+1)*uint64(_max[0]-_min[0]+1); }
         bool encloses( const _int p[] ) const;
         bool encloses( const integer3& p ) const { return encloses( p.c ); }
         bool encloses( _int x, _int y, _int z ) const;
         bool overlaps( const AABBI& other ) const;
-        bool overlaps_internally( const AABBI& other ) const;
     };
 
     class AABBU64                           // axis aligned bounding box with uint64
@@ -6792,6 +6792,15 @@ inline void Model::AABBI::expand( const Model::_int p[] )
     if ( p[2] > _max[2] ) _max[2] = p[2];
 }
 
+inline void Model::AABBI::intersect( const Model::AABBI& other )
+{
+    for( uint i = 0; i < 3; i++ )
+    {
+        if ( other._min[i] > _min[i] ) _min[i] = other._min[i];
+        if ( other._max[i] < _max[i] ) _max[i] = other._max[i];
+    }
+}
+
 inline bool Model::AABBI::encloses( const Model::_int p[] ) const
 {
     return _min[0] <= p[0] &&
@@ -6816,18 +6825,6 @@ inline bool Model::AABBI::overlaps( const Model::AABBI& other ) const
            _max[0] >= other._min[0] &&
            _max[1] >= other._min[1] &&
            _max[2] >= other._min[2];
-}
-
-inline bool Model::AABBI::overlaps_internally( const Model::AABBI& other ) const 
-{
-    // this routine assumes that overlaps() already returned true
-    //
-    return _min[0] < other._max[0] ||
-           _min[1] < other._max[1] ||
-           _min[2] < other._max[2] ||
-           _max[0] > other._min[0] ||
-           _max[1] > other._min[1] ||
-           _max[2] > other._min[2];
 }
 
 inline Model::AABBU64::AABBU64( const Model::uint64 p[] )

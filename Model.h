@@ -1254,6 +1254,7 @@ public:
     inline uint make_polygon( uint vtx_cnt, const real3 p[], const real3 n[], const real2 uv[], uint mtl_i=uint(-1) );  // positions, normals, texcoords
     inline uint make_polygon( uint vtx_cnt, const real3 p[], uint mtl_i=uint(-1) );                                     // position, use surface normal, fudge texcoords
     inline uint make_sphere( const real3& center, real radius, uint nlong, uint nlat, uint mtl_i=uint(-1) );            // center, radius, long+lat divisions
+    inline uint make_box( const real3 front[4], const real3 back[4], const uint mtl_i[6] );                             // front and back face vertices (CCW from bottom-left as looking from front)
     inline uint make_box( const real3 front[4], const real3 back[4], uint mtl_i=uint(-1) );                             // front and back face vertices (CCW from bottom-left as looking from front)
     inline uint make_aabox( const AABB& box, uint mtl_i=uint(-1) );                                                     // axis-aligned box (simpler case)
     inline uint make_skybox( const real3& center, real radius, const real3& up, uint nlong, uint nlat, uint mtl_i=uint(-1) ); // center, radius, up vector, long+lat divisions
@@ -2893,7 +2894,7 @@ inline uint Model::make_sphere( const real3& center, real radius, uint nlong, ui
     return first_poly_i;
 }
 
-inline uint Model::make_box( const real3 front[4], const real3 back[4], uint mtl_i )
+inline uint Model::make_box( const real3 front[4], const real3 back[4], const uint mtl_i[] )
 {
     //------------------------------------------------------------
     // We assume that front[0] aligns with back[0] as the bottom-left for each (as viewed from the front).
@@ -2902,20 +2903,26 @@ inline uint Model::make_box( const real3 front[4], const real3 back[4], uint mtl
     //------------------------------------------------------------
     uint first_poly_i = hdr->poly_cnt;
 
-    const real3 tri0[3]  = { front[0], front[1], front[2] }; make_polygon( 3, tri0,  mtl_i );    // front
-    const real3 tri1[3]  = { front[0], front[2], front[3] }; make_polygon( 3, tri1,  mtl_i );    // front
-    const real3 tri2[3]  = { back[1],  back[0],  back[3]  }; make_polygon( 3, tri2,  mtl_i );    // back  
-    const real3 tri3[3]  = { back[1],  back[3],  back[2]  }; make_polygon( 3, tri3,  mtl_i );    // back  
-    const real3 tri4[3]  = { front[3], front[2], back[2]  }; make_polygon( 3, tri4,  mtl_i );    // top
-    const real3 tri5[3]  = { front[3], back[2],  back[3]  }; make_polygon( 3, tri5,  mtl_i );    // top
-    const real3 tri6[3]  = { back[0],  back[1],  front[1] }; make_polygon( 3, tri6,  mtl_i );    // bottom
-    const real3 tri7[3]  = { back[0],  front[1], front[0] }; make_polygon( 3, tri7,  mtl_i );    // bottom 
-    const real3 tri8[3]  = { back[0],  front[0], front[3] }; make_polygon( 3, tri8,  mtl_i );    // left
-    const real3 tri9[3]  = { back[0],  front[3], back[3]  }; make_polygon( 3, tri9,  mtl_i );    // left
-    const real3 tri10[3] = { front[1], back[1],  back[2]  }; make_polygon( 3, tri10, mtl_i );    // right
-    const real3 tri11[3] = { front[1], back[2],  front[2] }; make_polygon( 3, tri11, mtl_i );    // right
+    const real3 tri0[3]  = { front[0], front[1], front[2] }; make_polygon( 3, tri0,  mtl_i[0] );    // front
+    const real3 tri1[3]  = { front[0], front[2], front[3] }; make_polygon( 3, tri1,  mtl_i[0] );    // front
+    const real3 tri2[3]  = { back[1],  back[0],  back[3]  }; make_polygon( 3, tri2,  mtl_i[1] );    // back  
+    const real3 tri3[3]  = { back[1],  back[3],  back[2]  }; make_polygon( 3, tri3,  mtl_i[1] );    // back  
+    const real3 tri4[3]  = { front[3], front[2], back[2]  }; make_polygon( 3, tri4,  mtl_i[2] );    // top
+    const real3 tri5[3]  = { front[3], back[2],  back[3]  }; make_polygon( 3, tri5,  mtl_i[2] );    // top
+    const real3 tri6[3]  = { back[0],  back[1],  front[1] }; make_polygon( 3, tri6,  mtl_i[3] );    // bottom
+    const real3 tri7[3]  = { back[0],  front[1], front[0] }; make_polygon( 3, tri7,  mtl_i[3] );    // bottom 
+    const real3 tri8[3]  = { back[0],  front[0], front[3] }; make_polygon( 3, tri8,  mtl_i[4] );    // left
+    const real3 tri9[3]  = { back[0],  front[3], back[3]  }; make_polygon( 3, tri9,  mtl_i[4] );    // left
+    const real3 tri10[3] = { front[1], back[1],  back[2]  }; make_polygon( 3, tri10, mtl_i[5] );    // right
+    const real3 tri11[3] = { front[1], back[2],  front[2] }; make_polygon( 3, tri11, mtl_i[5] );    // right
 
     return first_poly_i;
+}
+
+inline uint Model::make_box( const real3 front[4], const real3 back[4], uint mtl_i )
+{
+    const uint _mtl_i[6] = { mtl_i, mtl_i, mtl_i, mtl_i, mtl_i, mtl_i };
+    return make_box( front, back, _mtl_i );
 }
 
 inline uint Model::make_aabox( const AABB& box, uint mtl_i )

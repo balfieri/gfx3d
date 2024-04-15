@@ -246,6 +246,8 @@ public:
     bool write( std::string file_path, bool is_compressed ); 
     bool replace_materials( std::string mtl_file_path );
 
+    bool export_obj_mtl( std::string file_path_prefix );
+
     // start of main structures
     static const uint VERSION = 0xB0BA1f0a; // current version 
 
@@ -2675,6 +2677,141 @@ bool Model::replace_materials( std::string mtl_file_path )
     return load_mtl( mtl_file_path, "", true );
 }
 
+bool Model::export_obj_mtl( std::string file_path_prefix ) 
+{
+    // .MTL
+    std::string mtl_file_path = file_path_prefix + ".mtl";
+    std::ofstream mtl_file;
+    mtl_file.open( mtl_file_path );
+    if ( !mtl_file ) return false;
+
+    mtl_file << "# AUTOMATICALLY GENERATED - DO NOT EDIT OR CHECK IN\n";
+    mtl_file << "#\n";
+    mtl_file << "# " << mtl_file_path << "\n";
+    mtl_file << "#\n";
+    for( uint mtl_i = 0; mtl_i < hdr->mtl_cnt; mtl_i++ )
+    {
+        const Material& mtl = materials[mtl_i];
+        mtl_file << "newmtl " << &strings[mtl.name_i] << "\n";
+        if ( mtl.Ka[0] != real(1) || mtl.Ka[1] != real(1) || mtl.Ka[2] != real(1) ) {
+            mtl_file << "Ka " << mtl.Ka[0] << " " << mtl.Ka[1] << " " << mtl.Ka[2] << "\n";
+        }
+        if ( mtl.Kd[0] != real(1) || mtl.Kd[1] != real(1) || mtl.Kd[2] != real(1) ) {
+            mtl_file << "Kd " << mtl.Kd[0] << " " << mtl.Kd[1] << " " << mtl.Kd[2] << "\n";
+        }
+        if ( mtl.Ke[0] != real(0) || mtl.Ke[1] != real(0) || mtl.Ke[2] != real(0) ) {
+            mtl_file << "Ke " << mtl.Ke[0] << " " << mtl.Ke[1] << " " << mtl.Ke[2] << "\n";
+        }
+        if ( mtl.Ks[0] != real(0) || mtl.Ks[1] != real(0) || mtl.Ks[2] != real(0) ) {
+            mtl_file << "Ks " << mtl.Ks[0] << " " << mtl.Ks[1] << " " << mtl.Ks[2] << "\n";
+        }
+        if ( mtl.Tf[0] != real(1) || mtl.Tf[1] != real(1) || mtl.Tf[2] != real(1) ) {
+            mtl_file << "Tf " << mtl.Tf[0] << " " << mtl.Tf[1] << " " << mtl.Tf[2] << "\n";
+        }
+        if ( mtl.Tr != real(0) ){
+            mtl_file << "Tr " << mtl.Tr << "\n";
+        }
+        if ( mtl.Ns != real(0) ){
+            mtl_file << "Ns " << mtl.Ns << "\n";
+        }
+        if ( mtl.Ni != real(1) ){
+            mtl_file << "Ni " << mtl.Ni << "\n";
+        }
+        if ( mtl.d != real(1) ){
+            mtl_file << "d " << mtl.d << "\n";
+        }
+        if ( mtl.illum != real(2) ){
+            mtl_file << "illum " << mtl.illum  << "\n";
+        }
+    
+        if ( mtl.map_Ka_i != uint(-1) || 
+             mtl.map_Kd_i != uint(-1) ||
+             mtl.map_Ke_i != uint(-1) ||
+             mtl.map_Ks_i != uint(-1) ||
+             mtl.map_Ns_i != uint(-1) ||
+             mtl.map_d_i  != uint(-1) ||
+             mtl.map_Bump_i != uint(-1) ||
+             mtl.map_refl_i != uint(-1) ) {
+            die( "export_obj_mtl() cannot export textures yet - need to upgrade it" );
+        }
+        
+        mtl_file << "\n";
+    }
+
+    mtl_file.close();
+
+    // .OBJ
+    std::string obj_file_path = file_path_prefix + ".obj";
+    std::ofstream obj_file;
+    obj_file.open( obj_file_path );
+    if ( !obj_file ) return false;
+
+    obj_file << "# AUTOMATICALLY GENERATED - DO NOT EDIT OR CHECK IN\n";
+    obj_file << "#\n";
+    obj_file << "# " << obj_file_path << "\n";
+    obj_file << "#\n";
+    obj_file << "mtllib " << mtl_file_path << "\n";
+
+    obj_file << "\n";
+    obj_file << "# v - positions\n";
+    for( uint pos_i = 0; pos_i < hdr->pos_cnt; pos_i++ ) 
+    {
+        const real3& pos = positions[pos_i];
+        obj_file << "v " << pos[0] << " " << pos[1] << " " << pos[2] << "\n";
+    }
+
+    obj_file << "\n";
+    obj_file << "# vn - normals\n";
+    for( uint norm_i = 0; norm_i < hdr->norm_cnt; norm_i++ ) 
+    {
+        const real3& norm = normals[norm_i];
+        obj_file << "vn " << norm[0] << " " << norm[1] << " " << norm[2] << "\n";
+    }
+
+    obj_file << "\n";
+    obj_file << "# vt - texcoords\n";
+    for( uint texcoord_i = 0; texcoord_i < hdr->texcoord_cnt; texcoord_i++ ) 
+    {
+        const real2& texcoord = texcoords[texcoord_i];
+        obj_file << "vt " << texcoord[0] << " " << texcoord[1] << "\n";
+    }
+
+    obj_file << "\n";
+    obj_file << "# f - polygons \n";
+    uint mtl_i = uint(-1);
+    for( uint poly_i = 0; poly_i < hdr->poly_cnt; poly_i++ ) 
+    {
+        const Polygon& poly = polygons[poly_i];
+        if ( poly.mtl_i != mtl_i ) {
+            mtl_i = poly.mtl_i;
+            if ( mtl_i == uint(-1) ) {
+                obj_file << "usemtl null\n";
+            } else {
+                std::string mtl_name = &strings[materials[mtl_i].name_i];
+                obj_file << "usermtl " << mtl_name << "\n";
+            }
+        }
+        obj_file << "f";
+        for( uint i = 0; i < poly.vtx_cnt; i++ )
+        {
+            const Vertex& vtx = vertexes[poly.vtx_i+i];
+            obj_file << " " << vtx.v_i << "/";
+            if ( vtx.vn_i != uint(-1) ) {
+                obj_file << vtx.vn_i;
+            }
+            obj_file << "/";
+            if ( vtx.vt_i != uint(-1) ) {
+                obj_file << vtx.vt_i;
+            }
+        }
+        obj_file << "\n";
+    }
+
+    obj_file.close();
+
+    return true;
+}
+
 // returns array of T on a page boundary
 template<typename T>
 T * Model::aligned_alloc( Model::uint64 cnt )
@@ -2774,15 +2911,17 @@ inline uint Model::make_material( std::string name, real3 Ka, real3 Kd, real3 Ke
 inline uint Model::make_emissive_material( std::string name, real3 Ke, uint map_Ke_i, real d )
 {
     real3 zero3( 0.0, 0.0, 0.0 );
+    real3 one3(  1.0, 1.0, 1.0 );
     uint  no_map = uint(-1);
-    return make_material( name, zero3, zero3, Ke, zero3, zero3, 0.0, 0.0, 0.0, d, 0.0, no_map, no_map, map_Ke_i, no_map, no_map, no_map, no_map, no_map );                         
+    return make_material( name, one3, zero3, Ke, zero3, one3, 0.0, 0.0, 0.0, d, 2.0, no_map, no_map, map_Ke_i, no_map, no_map, no_map, no_map, no_map );                         
 }
 
 inline uint Model::make_diffuse_material( std::string name, real3 Kd, uint map_Kd_i, real d, uint map_d_i ) 
 {
     real3 zero3( 0.0, 0.0, 0.0 );
+    real3 one3(  1.0, 1.0, 1.0 );
     uint  no_map = uint(-1);
-    return make_material( name, zero3, Kd, zero3, zero3, zero3, 0.0, 0.0, 0.0, d, 0.0, no_map, map_Kd_i, no_map, no_map, no_map, map_d_i, no_map, no_map );                         
+    return make_material( name, one3, Kd, zero3, zero3, one3, 0.0, 0.0, 1.0, d, 2.0, no_map, map_Kd_i, no_map, no_map, no_map, map_d_i, no_map, no_map );                         
 }
 
 inline uint Model::make_vertex( const real3& p, const real3& n, const real2& uv ) 

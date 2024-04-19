@@ -2754,7 +2754,7 @@ bool Model::export_obj_mtl( std::string file_path_prefix )
 
     obj_file << "\n";
     obj_file << "# v - positions\n";
-    for( uint pos_i = 0; pos_i < hdr->pos_cnt; pos_i++ ) 
+    for( uint pos_i = 1; pos_i < hdr->pos_cnt; pos_i++ ) 
     {
         const real3& pos = positions[pos_i];
         obj_file << "v " << pos[0] << " " << pos[1] << " " << pos[2] << "\n";
@@ -2762,7 +2762,7 @@ bool Model::export_obj_mtl( std::string file_path_prefix )
 
     obj_file << "\n";
     obj_file << "# vn - normals\n";
-    for( uint norm_i = 0; norm_i < hdr->norm_cnt; norm_i++ ) 
+    for( uint norm_i = 1; norm_i < hdr->norm_cnt; norm_i++ ) 
     {
         const real3& norm = normals[norm_i];
         obj_file << "vn " << norm[0] << " " << norm[1] << " " << norm[2] << "\n";
@@ -2770,7 +2770,7 @@ bool Model::export_obj_mtl( std::string file_path_prefix )
 
     obj_file << "\n";
     obj_file << "# vt - texcoords\n";
-    for( uint texcoord_i = 0; texcoord_i < hdr->texcoord_cnt; texcoord_i++ ) 
+    for( uint texcoord_i = 1; texcoord_i < hdr->texcoord_cnt; texcoord_i++ ) 
     {
         const real2& texcoord = texcoords[texcoord_i];
         obj_file << "vt " << texcoord[0] << " " << texcoord[1] << "\n";
@@ -2788,7 +2788,7 @@ bool Model::export_obj_mtl( std::string file_path_prefix )
                 obj_file << "usemtl null\n";
             } else {
                 std::string mtl_name = &strings[materials[mtl_i].name_i];
-                obj_file << "usermtl " << mtl_name << "\n";
+                obj_file << "usemtl " << mtl_name << "\n";
             }
         }
         obj_file << "f";
@@ -2950,7 +2950,9 @@ inline uint Model::make_polygon( uint vtx_cnt, const real3 p[], const real3 n[],
     poly->vtx_cnt = vtx_cnt;
     poly->vtx_i = hdr->vtx_cnt;
     poly->mtl_i = mtl_i;
-    poly->normal = (p[1] - p[0]).cross( p[2] - p[0] );
+    real3 edge01 = p[1] - p[0];
+    real3 edge02 = p[2] - p[0];
+    poly->normal = edge01.cross( edge02 );
     real len = poly->normal.length();
     poly->area = ::divby2(len);                       // correct only for triangles
     poly->normal /= len;
@@ -5362,9 +5364,9 @@ inline Model::real64 Model::real3d::dot( const Model::real3d &v2 ) const
 
 inline Model::real3d Model::real3d::cross( const Model::real3d &v2 ) const
 {
-    return real3d( (c[1]*v2.c[2]   - c[2]*v2.c[1]),
-                  (-(c[0]*v2.c[2] - c[2]*v2.c[0])),
-                  (c[0]*v2.c[1]   - c[1]*v2.c[0]) );
+    return real3d( c[1]*v2.c[2] - c[2]*v2.c[1],
+                   c[2]*v2.c[0] - c[0]*v2.c[2],
+                   c[0]*v2.c[1] - c[1]*v2.c[0] );
 }
 
 inline Model::real64 Model::real3d::length( void ) const
@@ -5497,9 +5499,9 @@ inline Model::real Model::real3::dot( const Model::real3 &v2 ) const
 
 inline Model::real3 Model::real3::cross( const Model::real3 &v2 ) const
 {
-    return real3( (c[1]*v2.c[2]   - c[2]*v2.c[1]),
-                  (-(c[0]*v2.c[2] - c[2]*v2.c[0])),
-                  (c[0]*v2.c[1]   - c[1]*v2.c[0]) );
+    return real3( c[1]*v2.c[2] - c[2]*v2.c[1],
+                  c[2]*v2.c[0] - c[0]*v2.c[2],
+                  c[0]*v2.c[1] - c[1]*v2.c[0] );
 }
 
 inline Model::real Model::real3::length( void ) const
@@ -8599,14 +8601,6 @@ inline bool Model::skip_whitespace( const char *& xxx, const char * xxx_end )
 
         if ( ch == '\n' || ch == '\r' ) {
             if ( ch == '\n' && xxx != mtl ) line_num++;
-            if ( Model::debug ) {
-                std::string line = "";
-                for( const char * ccc = xxx+1; ccc != xxx_end && *ccc != '\n' && *ccc != '\r'; ccc++ )
-                {
-                    line += std::string( 1, *ccc );
-                }
-                mdout << "PARSING: " << line << "\n";
-            }
             in_comment = false;
         }
         xxx++;

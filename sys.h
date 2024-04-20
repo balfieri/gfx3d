@@ -39,6 +39,9 @@
 #ifndef SYSH
 #define SYSH
 
+//--------------------------------------------------------- 
+// Common Includes
+//--------------------------------------------------------- 
 #include <math.h>
 #include <cmath>
 #include <stdlib.h>
@@ -59,10 +62,9 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
-static float uniform( void );  // temporary
-#include "Model.h"
-
-// debug
+//--------------------------------------------------------- 
+// Debug
+//--------------------------------------------------------- 
 static bool __debug = false;
 static bool __rt_debug = false;
 static std::mutex __debug_mutex;          // to avoid garble with multiple threads
@@ -73,9 +75,13 @@ static std::mutex __debug_mutex;          // to avoid garble with multiple threa
 #define dassert(expr, msg) { if ( !(expr) ) die( msg ); }
 #define eassert(expr) dassert( expr, "not true: " + std::string(#expr) )
 
-// Expose/rename types and constants from Model.h.
-// These names were chosen to avoid conflicts with those found in CUDA, etc.
-//
+//--------------------------------------------------------- 
+// Model.h
+//--------------------------------------------------------- 
+static float uniform( void );  // temporary
+#include "Model.h"
+
+// Expose/rename types and constants from Model.h. Avoid conflicts with CUDA, etc.
 using int128_t = __int128_t;
 using uint128_t = __uint128_t;
 using real   = Model::real;
@@ -506,87 +512,6 @@ inline void sleep_until_clock_time( real64 until )
 }
 
 //--------------------------------------------------------- 
-// Multi-Threading
-//--------------------------------------------------------- 
-inline uint32_t thread_hardware_core_cnt( void )
-{
-    return std::thread::hardware_concurrency() / 2;
-}
-
-inline uint32_t thread_hardware_thread_cnt( void )
-{
-    return std::thread::hardware_concurrency();
-}
-
-const uint32_t THREAD_CNT_MAX = 100;
-
-using tid_t = pthread_t;
-
-inline void thread_create( tid_t& tid, void *(*fn)(void *), void * arg, size_t stack_size=1024*1024 ) // run with big stack size by default 
-{
-    pthread_attr_t attr;
-    pthread_attr_init( &attr );
-    pthread_attr_setstacksize( &attr, stack_size );
-    dassert( pthread_create( &tid, &attr, fn, arg ) == 0, "pthread_create() failed" );
-}
-
-inline void thread_join( tid_t tid, void** value_ptr=nullptr )
-{
-    dassert( pthread_join( tid, value_ptr ) == 0, "pthread_join() failed" );
-}
-
-struct ThreadInfo {
-    tid_t    ptid;
-    uint32_t tid;
-    uint32_t thread_cnt;
-    void    (*fn)(uint32_t, uint32_t, void *);
-    void *    arg;
-};
-
-void * thread_prestart( void * arg ) 
-{
-    ThreadInfo * info = reinterpret_cast<ThreadInfo *>( arg );
-    info->fn( info->tid, info->thread_cnt, info->arg );
-    return nullptr;
-}
-
-void thread_parallelize( uint32_t thread_cnt, void (*fn)(uint32_t, uint32_t, void *), void * arg )
-{
-    if ( thread_cnt == 0 ) thread_cnt = thread_hardware_thread_cnt();
-    if ( thread_cnt > THREAD_CNT_MAX ) {
-        std::cout << " max number of threads is " << THREAD_CNT_MAX << "\n";
-        exit(1);
-    }
-    //--------------------------------------------------------- 
-    // Start other threads (if any).
-    //--------------------------------------------------------- 
-    ThreadInfo * threads = new ThreadInfo[thread_cnt];
-    for( uint32_t i = 1; i < thread_cnt; i++ )
-    {
-        threads[i].tid = i;
-        threads[i].thread_cnt = thread_cnt;
-        threads[i].fn = fn;
-        threads[i].arg = arg;
-        thread_create( threads[i].ptid, thread_prestart, &threads[i] );
-    }
-
-    //--------------------------------------------------------- 
-    // Call the function ourselves with tid=0.
-    //--------------------------------------------------------- 
-    (*fn)( 0, thread_cnt, arg );
-
-    //--------------------------------------------------------- 
-    // Wait for other threads to finish.
-    //--------------------------------------------------------- 
-    for( uint32_t i = 1; i < thread_cnt; i++ )
-    {
-        thread_join( threads[i].ptid );
-    }
-
-    delete[] threads;
-}
-
-//--------------------------------------------------------- 
 // Regular Expression Utility Functions
 //--------------------------------------------------------- 
 inline std::regex regex(std::string re, std::string options="") {
@@ -651,9 +576,7 @@ inline std::string indent_str(uint32_t cnt) {
 }
 
 //--------------------------------------------------------- 
-// Networking Utility Functions
-//
-// Work with both IPv4 or IPv6.
+// Networking Utility Functions (for both IPv4 and IPv6).
 //--------------------------------------------------------- 
 
 inline std::string errno_str( void )
@@ -893,6 +816,87 @@ void udp_socket_sendto( size_t& byte_cnt, socket_id_t sid, void * buffer, size_t
     } else {
         byte_cnt = ret;
     }
+}
+
+//--------------------------------------------------------- 
+// Coarse Multi-Threading
+//--------------------------------------------------------- 
+inline uint32_t thread_hardware_core_cnt( void )
+{
+    return std::thread::hardware_concurrency() / 2;
+}
+
+inline uint32_t thread_hardware_thread_cnt( void )
+{
+    return std::thread::hardware_concurrency();
+}
+
+const uint32_t THREAD_CNT_MAX = 100;
+
+using tid_t = pthread_t;
+
+inline void thread_create( tid_t& tid, void *(*fn)(void *), void * arg, size_t stack_size=1024*1024 ) // run with big stack size by default 
+{
+    pthread_attr_t attr;
+    pthread_attr_init( &attr );
+    pthread_attr_setstacksize( &attr, stack_size );
+    dassert( pthread_create( &tid, &attr, fn, arg ) == 0, "pthread_create() failed" );
+}
+
+inline void thread_join( tid_t tid, void** value_ptr=nullptr )
+{
+    dassert( pthread_join( tid, value_ptr ) == 0, "pthread_join() failed" );
+}
+
+struct ThreadInfo {
+    tid_t    ptid;
+    uint32_t tid;
+    uint32_t thread_cnt;
+    void    (*fn)(uint32_t, uint32_t, void *);
+    void *    arg;
+};
+
+void * thread_prestart( void * arg ) 
+{
+    ThreadInfo * info = reinterpret_cast<ThreadInfo *>( arg );
+    info->fn( info->tid, info->thread_cnt, info->arg );
+    return nullptr;
+}
+
+void thread_parallelize( uint32_t thread_cnt, void (*fn)(uint32_t, uint32_t, void *), void * arg )
+{
+    if ( thread_cnt == 0 ) thread_cnt = thread_hardware_thread_cnt();
+    if ( thread_cnt > THREAD_CNT_MAX ) {
+        std::cout << " max number of threads is " << THREAD_CNT_MAX << "\n";
+        exit(1);
+    }
+    //--------------------------------------------------------- 
+    // Start other threads (if any).
+    //--------------------------------------------------------- 
+    ThreadInfo * threads = new ThreadInfo[thread_cnt];
+    for( uint32_t i = 1; i < thread_cnt; i++ )
+    {
+        threads[i].tid = i;
+        threads[i].thread_cnt = thread_cnt;
+        threads[i].fn = fn;
+        threads[i].arg = arg;
+        thread_create( threads[i].ptid, thread_prestart, &threads[i] );
+    }
+
+    //--------------------------------------------------------- 
+    // Call the function ourselves with tid=0.
+    //--------------------------------------------------------- 
+    (*fn)( 0, thread_cnt, arg );
+
+    //--------------------------------------------------------- 
+    // Wait for other threads to finish.
+    //--------------------------------------------------------- 
+    for( uint32_t i = 1; i < thread_cnt; i++ )
+    {
+        thread_join( threads[i].ptid );
+    }
+
+    delete[] threads;
 }
 
 #endif

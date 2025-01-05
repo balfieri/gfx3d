@@ -28,9 +28,10 @@
 // - random number generation that is per-thread (and easily implementable in HW)
 // - bit twiddling
 // - date and time
-// - multi-threading 
 // - regular expressions
 // - networking
+// - subprocesses
+// - multi-threading 
 //
 // At some point, this header will provide macros and functions that allow
 // code launch on CPU or GPU (CUDA) with limited functionality
@@ -45,6 +46,7 @@
 #include <math.h>
 #include <cmath>
 #include <stdlib.h>
+#include <stdio.h>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -162,6 +164,16 @@ inline std::string hex16( uint64_t u )
     char cs[32];
     snprintf( cs, sizeof(cs), "0x%016llx", u );
     return cs;
+}
+
+inline void split( std::string s, std::vector<std::string>& v )
+{
+    std::istringstream iss( s );
+    std::string ss;
+
+    while ( iss >> ss ) {
+        v.push_back( ss );
+    }
 }
 
 //--------------------------------------------------------- 
@@ -815,6 +827,34 @@ void udp_socket_sendto( size_t& byte_cnt, socket_id_t sid, void * buffer, size_t
         byte_cnt = 0;
     } else {
         byte_cnt = ret;
+    }
+}
+
+//--------------------------------------------------------- 
+// Subprocesses
+//--------------------------------------------------------- 
+static bool cmd_en = true;
+
+std::string cmd( std::string c, bool echo=true, bool echo_stdout=false, bool can_die=true )
+{
+    if ( echo ) std::cout << c << "\n"; 
+    if ( cmd_en ) {
+        c += " 2>&1";
+        FILE* pipe = popen( c.c_str(), "r" );
+        if ( !pipe ) {
+            if ( can_die ) die( "command failed: " + c );
+            return "";
+        } else {
+            std::string s = "";
+            char buffer[128];
+            while( fgets( buffer, sizeof(buffer), pipe ) != NULL ) {
+                s += buffer;
+            }
+            if ( echo_stdout ) std::cout << s;
+            return s;
+        }
+    } else {
+        return "";
     }
 }
 
